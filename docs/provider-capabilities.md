@@ -8,8 +8,8 @@ may be advertised as `supported` (§18.1).
 Legend — `support`: native | emulated | unsupported | unknown;
 `verification`: configured | documented | smoke_tested | failed.
 
-Interface facts for codex/claude-code/cursor/zcode are transcribed from the
-Fusion repository (C:\projects\fusion, MIT) per ADR-0002 — facts only, no
+Interface facts for codex/claude-code/cursor/zcode/antigravity are transcribed from the
+Fusion repository (C:\projects\fusion, MIT) and local CLI research per ADR-0002 — facts only, no
 auto-retry/fresh-session fallback/PTY machinery ported.
 
 ## Mock provider (deterministic, no inference)
@@ -66,6 +66,17 @@ auto-retry/fresh-session fallback/PTY machinery ported.
 | model selection | unknown | configured | CLI-owned via ~/.zcode/cli/config.json; no `--model` flag |
 | prompt size | limited | documented | argv transport capped at 6000 chars (INPUT_LIMIT) — ENAMETOOLONG open question |
 | app-server NDJSON bus | unsupported | configured | phase-2 per study; not implemented |
+
+## antigravity (adapter 0.1.0, `src/providers/antigravity/`)
+
+| Capability | support | verification | notes |
+|---|---|---|---|
+| headless turn (`agy --dangerously-skip-permissions --output-format stream-json --print-timeout 900s -p <prompt>`) | native | documented | local CLI research + fusion contract; prompt file fallback >2000 chars |
+| resume (`--conversation <id>`) | unknown | documented | argv wired; not exercised headless this milestone |
+| conversation-id capture | opportunistic | documented | scanned from top-level or nested result/step_update fields; empty string when absent |
+| model selection (`--model <id>`) | native | documented | passed verbatim from request or default model |
+| cancellation (taskkill/SIGKILL tree) | native | documented | common headless infra |
+| structured final output | unsupported | documented | text_only |
 
 ## Platforms
 

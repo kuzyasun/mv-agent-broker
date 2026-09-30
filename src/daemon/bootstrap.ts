@@ -26,6 +26,7 @@ import { CursorAdapter } from "../providers/cursor/cursorAdapter.ts";
 import { ClaudeAdapter } from "../providers/claude/claudeAdapter.ts";
 import { CodexAdapter } from "../providers/codex/codexAdapter.ts";
 import { ZcodeAdapter } from "../providers/zcode/zcodeAdapter.ts";
+import { AntigravityAdapter } from "../providers/antigravity/antigravityAdapter.ts";
 
 export interface DaemonEnv {
   /** Canonical state directory (registry + blobs + inputs + slots). */
@@ -38,6 +39,7 @@ export interface DaemonEnv {
   cursorBinary?: string;
   zcodeBundlePath?: string;
   zcodeNodeBinary?: string;
+  antigravityBinary?: string;
   limits?: Partial<Limits>;
 }
 
@@ -59,6 +61,9 @@ export function buildAdapters(env: DaemonEnv): Map<string, ProviderAdapter> {
   if (env.cursorBinary) adapters.set("cursor", new CursorAdapter({ binary: env.cursorBinary }));
   if (env.zcodeBundlePath) {
     adapters.set("zcode", new ZcodeAdapter({ bundlePath: env.zcodeBundlePath, nodeBinary: env.zcodeNodeBinary }));
+  }
+  if (env.antigravityBinary) {
+    adapters.set("antigravity", new AntigravityAdapter({ binary: env.antigravityBinary }));
   }
   return adapters;
 }
@@ -110,5 +115,6 @@ export function daemonEnvFromProcess(procEnv: NodeJS.ProcessEnv): DaemonEnv {
     cursorBinary: procEnv.AB_CURSOR_BIN,
     zcodeBundlePath: procEnv.AB_ZCODE_BUNDLE,
     zcodeNodeBinary: procEnv.AB_ZCODE_NODE,
+    antigravityBinary: procEnv.AB_ANTIGRAVITY_BIN,
   };
 }
