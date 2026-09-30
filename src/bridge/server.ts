@@ -20,7 +20,7 @@ export interface McpToolDef {
 
 export interface McpToolContext {
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
-  listTools(): McpToolDef[];
+  listTools(): McpToolDef[] | Promise<McpToolDef[]>;
 }
 
 function formatErrorPayload(err: unknown): Record<string, unknown> {
@@ -85,7 +85,7 @@ export async function handleJsonRpcLine(
       };
 
     case "tools/list":
-      return { jsonrpc: "2.0", id: req.id, result: { tools: ctx.listTools() } };
+      return { jsonrpc: "2.0", id: req.id, result: { tools: await ctx.listTools() } };
 
     case "tools/call": {
       const p = req.params as Record<string, unknown> | undefined;
