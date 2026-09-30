@@ -2,7 +2,7 @@
 // node --experimental-transform-types scripts/dogfood.mjs <task.json>
 // Task: {name, provider, model, effort, write_scope, goal, checks?, review?}.
 // review: {provider, model, effort, goal}. Results stay private in .state.
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,8 +26,24 @@ if (process.argv[2] === '--serve') {
   const reviewFrom = task.review_from ? JSON.parse(readFileSync(task.review_from, 'utf8')) : null;
   if (reviewFrom) cpSync(path.join(path.dirname(task.review_from), 'state'), state, { recursive: true });
   mkdirSync(runtime, { recursive: true });
-  cpSync(path.join(repo, 'src'), path.join(runtime, 'src'), { recursive: true });
-  cpSync(path.join(repo, 'package.json'), path.join(runtime, 'package.json'));
+  // Broker runtime comes only from the last accepted Git commit. Writer source
+  // stays in the working tree; dirty/untracked implementation cannot enter the
+  // daemon that supervises it. Pin once, before copying any files.
+  const gitOptions = { cwd: repo, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, maxBuffer: 16 * 1024 * 1024 };
+  const runtimeCommit = execFileSync('git', ['rev-parse', '--verify', '--end-of-options', `${task.runtime_ref ?? 'HEAD'}^{commit}`], gitOptions).toString('utf8').trim();
+  const runtimeTree = execFileSync('git', ['ls-tree', '-rz', runtimeCommit, '--', 'src', 'package.json'], gitOptions).toString('utf8');
+  let runtimeFiles = 0;
+  for (const entry of runtimeTree.split('\0').filter(Boolean)) {
+    const match = /^(100644|100755) blob ([a-f0-9]+)\t(.+)$/s.exec(entry);
+    if (!match) throw new Error('Stable runtime requires regular Git-tracked source files.');
+    const [, , oid, filename] = match;
+    const target = path.resolve(runtime, filename);
+    if (!target.startsWith(runtime + path.sep) || (filename !== 'package.json' && !filename.startsWith('src/'))) throw new Error('Invalid stable runtime path.');
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, execFileSync('git', ['cat-file', 'blob', oid], gitOptions));
+    runtimeFiles++;
+  }
+  if (!runtimeFiles || !runtimeTree.includes('\tpackage.json\0')) throw new Error('Stable runtime is incomplete.');
   const { openRegistryDb } = await import(pathToFileURL(path.join(runtime, 'src/storage/db.ts')).href);
   const registry = await import(pathToFileURL(path.join(runtime, 'src/storage/repo.ts')).href);
   const { coverageContractHash } = await import(pathToFileURL(path.join(runtime, 'src/workspaces/coverage.ts')).href);
@@ -56,7 +72,7 @@ if (process.argv[2] === '--serve') {
   let daemonLog = ''; daemon.stderr.on('data', chunk => { daemonLog += chunk; });
   let bridge; let bridgeClosed; let bridgeLog = ''; let buffer = ''; let nextId = 1;
   const pending = new Map(); const sessions = [];
-  const evidence = { name: task.name, runtime, source: repo, startedAt: new Date().toISOString(), status: 'running', turns: [], routes: [task, task.review].filter(Boolean).map(({ provider, model, effort }) => ({ provider, model, effort })) };
+  const evidence = { name: task.name, runtime, runtimeCommit, runtimeFiles, source: repo, startedAt: new Date().toISOString(), status: 'running', turns: [], routes: [task, task.review].filter(Boolean).map(({ provider, model, effort }) => ({ provider, model, effort })) };
   const save = () => writeFileSync(path.join(root, 'evidence.private.json'), JSON.stringify(evidence, null, 2));
   const rpc = (method, params = {}) => new Promise((resolve, reject) => {
     const id = nextId++;

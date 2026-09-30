@@ -21,9 +21,13 @@ fallback. Usage and subscription quota accounting remain unknown.
 
 ## Frozen broker execution
 
-The opt-in [dogfood client](../scripts/dogfood.mjs) copies `src/` and
-`package.json` into a private frozen runtime under `.state/dogfood/`. It starts
-a separate daemon and stdio MCP bridge and drives the public API from Node.
+The opt-in [dogfood client](../scripts/dogfood.mjs) extracts Git-tracked `src/`
+and `package.json` from the last accepted commit into a private frozen runtime
+under `.state/dogfood/`. `runtime_ref` defaults to `HEAD`; pass an explicit last
+verified commit when HEAD is not an accepted checkpoint. The resolved immutable
+commit and copied file count are recorded as `runtimeCommit`/`runtimeFiles` in
+private evidence. Dirty/untracked source is never copied into the broker runtime.
+It starts a separate daemon and stdio MCP bridge and drives the public API from Node.
 Native workers edit the actual repository. Reviewers receive an isolated
 target snapshot with required baseline/target diff inputs. Changing source
 does not replace the active broker executable midway through a turn.
@@ -34,6 +38,12 @@ node --experimental-transform-types scripts/dogfood.mjs .state/tasks/package.jso
 
 Task JSON contains `name`, `provider`, `model`, optional `effort`,
 `write_scope`, `goal`, optional `checks`, and `deadline_ms` (default 900000).
+Optional `runtime_ref` pins the accepted broker commit independently of the
+working tree being implemented and reviewed.
+The isolation rehearsal on 2026-10-01 used commit `d7d01b3`: a mock MCP turn
+completed successfully using 47 committed runtime files. A temporary dirty
+source marker and an untracked source file were both excluded; the frozen file
+matched its Git blob byte for byte. The rehearsal consumed no native quota.
 An optional `review` route starts an independent review of the completed
 worker snapshots. `review_from` points to a private successful worker evidence
 file for a standalone review. `review_current: true` captures current integrated
