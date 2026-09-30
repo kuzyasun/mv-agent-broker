@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+coverage/
+.state/
