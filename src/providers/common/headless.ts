@@ -107,17 +107,25 @@ export function prepareCommand(binary: string, args: string[]): { command: strin
 
 function buildEnv(spec: HeadlessSpawnSpec): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
+  // A spread of process.env is an ordinary case-sensitive object. Windows
+  // commonly supplies Path rather than PATH; preserve native key semantics.
+  const inherited = (key: string): string | undefined => {
+    if (Object.hasOwn(spec.inheritEnv, key)) return spec.inheritEnv[key];
+    if (process.platform !== "win32") return undefined;
+    const actual = Object.keys(spec.inheritEnv).find(name => name.toUpperCase() === key.toUpperCase());
+    return actual === undefined ? undefined : spec.inheritEnv[actual];
+  };
   for (const key of spec.envAllowlist) {
-    const value = spec.inheritEnv[key];
+    const value = inherited(key);
     if (value !== undefined) env[key] = value;
   }
   // Always keep the process tree findable.
-  env.PATH = spec.inheritEnv.PATH ?? "";
+  env.PATH = inherited("PATH") ?? "";
   if (process.platform === "win32") {
-    env.SystemRoot = spec.inheritEnv.SystemRoot ?? "C:\\Windows";
+    env.SystemRoot = inherited("SystemRoot") ?? "C:\\Windows";
     // PowerShell needs PATHEXT even for native .exe calls inside a .ps1 shim.
-    env.PATHEXT = spec.inheritEnv.PATHEXT ?? ".COM;.EXE;.BAT;.CMD";
-    if (spec.inheritEnv.ComSpec) env.ComSpec = spec.inheritEnv.ComSpec;
+    env.PATHEXT = inherited("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD";
+    if (inherited("ComSpec")) env.ComSpec = inherited("ComSpec");
   }
   return env;
 }

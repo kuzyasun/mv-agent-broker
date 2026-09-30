@@ -64,7 +64,7 @@ User startup hooks can run, although broker hook/permission integration is
 unwired. Worker writes, reviewer enforcement and live tool cancellation remain
 unverified. Native rate-limit status was allowed; quota rejection was not tested.
 
-## cursor (adapter 0.2.0, `src/providers/cursor/`)
+## cursor (adapter 0.2.1; model/resume smoke on 0.2.0, `src/providers/cursor/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
@@ -79,7 +79,11 @@ unverified. Native rate-limit status was allowed; quota rejection was not tested
 | quota-error classification | unknown | configured | four successful requests; quota exhaustion not observed; startup timeout no longer mislabeled RATE_LIMITED |
 | structured final output | unsupported | documented | text_only |
 
-## zcode (adapter 0.2.0, `src/providers/zcode/`) — standalone JSON (ADR-0002 amendment)
+Cursor auto ask-mode review delivered its final report through MCP on adapter
+0.2.1 ([checkpoint](native-smoke/2026-10-01-dogfood/report.md)). Read/search-only
+enforcement remains unknown; report delivery does not promote the role profile.
+
+## zcode (adapter 0.2.1; model/resume smoke on 0.2.0, `src/providers/zcode/`) — standalone JSON (ADR-0002 amendment)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
@@ -91,11 +95,18 @@ unverified. Native rate-limit status was allowed; quota rejection was not tested
 | structured agent report | unsupported | documented | native JSON parsed; response prose stays text_only; usage not returned in broker result |
 | app-server NDJSON bus | unsupported | configured | broker integration not implemented; native 0.16.9 protocol/empty-session bootstrap smoke passed, account model selection failed; requires host account/auth contract ([evidence](native-smoke/2026-09-30-zcode-bootstrap/report.md)) |
 
+Individual GLM-5.3/high delivered a static review through MCP on adapter 0.2.1.
+Flash/max development produced a partial regression test but its turn timed
+out; it is not a successful native worker acceptance. Start Plan model creation
+failed on standalone 0.16.9; current adapter rejects that route before dispatch
+without account fallback. [Evidence and limits](native-smoke/2026-10-01-dogfood/report.md),
+[Start Plan research](zcode-start-plan.md).
+
 ## antigravity (adapter 0.1.0, `src/providers/antigravity/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
-| headless turn (`agy --dangerously-skip-permissions --output-format stream-json --print-timeout 900s -p <prompt>`) | native | smoke_tested | Windows, agy 1.2.1, gemini-3.8-flash-low, two short turns over pipes; large prompt fallback unverified |
+| headless turn (`agy --dangerously-skip-permissions --output-format stream-json --print-timeout 900s -p <prompt>`) | native | smoke_tested | Windows, agy 1.2.1, gemini-3.8-flash-low short resume smoke; larger requested Gemini 3.8 Flash/high MCP task exercised temporary prompt-file fallback and produced source changes ([checkpoint](native-smoke/2026-10-01-dogfood/report.md)); general large-input/full-role limits unverified |
 | resume (`--conversation <id>`) | native | smoke_tested | same observed init/result ID in both processes; second prompt omits random marker, response reproduces it |
 | conversation-id capture | native | smoke_tested | init.conversation_id observed; alternate nested-field capture remains parser-level only |
 | model selection (`--model <id>`) | native | smoke_tested | CLI init.model confirms gemini-3.8-flash-low on both turns; other models/effort unverified |

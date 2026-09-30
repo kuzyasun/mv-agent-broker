@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import os from "node:os";
 import path from "node:path";
 import { ZcodeAdapter } from "../../src/providers/zcode/zcodeAdapter.ts";
-import { createZcodePersonalConfig, ZCODE_ACCOUNT_PROVIDER } from "../../src/providers/zcode/nativeConfig.ts";
+import { createZcodePersonalConfig, ZCODE_ACCOUNT_PROVIDER, ZCODE_START_PLAN_PROVIDER } from "../../src/providers/zcode/nativeConfig.ts";
 import { parseZcodeResult } from "../../src/providers/zcode/resultParser.ts";
 import type { AdapterEvent, TurnExecutionRequest } from "../../src/runtime/adapter.ts";
 
@@ -27,8 +27,17 @@ const prompt = args[args.indexOf('--prompt') + 1];
 const resume = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : null;
 const personal = process.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE;
 const config = JSON.parse(fs.readFileSync(personal, 'utf8'));
+const pathProbe = {};
+if (prompt === 'path-probe') {
+  const probe = require('child_process').spawnSync(process.platform === 'win32' ? 'node.exe' : 'node',
+    ['-p', 'process.execPath'], { encoding: 'utf8' });
+  pathProbe.path = process.env.PATH ?? null;
+  pathProbe.nodeLookup = { ok: probe.status === 0 && probe.error === undefined,
+    execPath: probe.status === 0 ? String(probe.stdout).trim() : null };
+}
 const inspection = { args, personal, config, builtin: process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE,
-  cwd: process.cwd(), leaked: process.env.BROKER_TEST_SECRET !== undefined };
+  cwd: process.cwd(), leaked: process.env.BROKER_TEST_SECRET !== undefined,
+  ...pathProbe };
 if (prompt === 'malformed') { console.log('plain text'); process.exit(0); }
 const result = { sessionId: prompt === 'mismatch' ? 'sess_wrong' : resume || 'sess_native',
   response: JSON.stringify(inspection), projection: { status: prompt === 'busy' ? 'running' : 'idle' } };
@@ -83,6 +92,42 @@ describe("ZCode adapter", () => {
     expect(result.native_conversation_ref).toBe("sess_native");
     expect(result.agent_reported?.format_status).toBe("text_only");
   });
+  it("resolves the selected Node directory when Windows supplies a mixed-case Path", async () => {
+    const f = fixture();
+    vi.stubEnv("BROKER_TEST_SECRET", "test-only-secret");
+    const stubbedPath = [path.dirname(process.execPath),
+      process.platform === "win32" ? "C:\\Windows\\System32" : "/usr/bin"].join(path.delimiter);
+    const savedPath = process.env.PATH;
+    if (process.platform === "win32") {
+      // Delete first so the recreated variable keeps the chosen mixed-case
+      // key; an in-place update preserves the casing of the existing entry.
+      vi.stubEnv("PATH", undefined);
+      vi.stubEnv("Path", stubbedPath);
+      expect(Object.keys(process.env).filter((key) => key.toUpperCase() === "PATH")).toEqual(["Path"]);
+    } else {
+      vi.stubEnv("PATH", stubbedPath);
+    }
+    try {
+      const result = await f.adapter.executeTurn(request({ workspace_path: f.root, task_envelope: "path-probe" }), gate(), () => {});
+      const inspection = JSON.parse(result.agent_reported!.summary);
+      expect(inspection.path).toBe(stubbedPath);
+      expect(inspection.leaked).toBe(false);
+      expect(inspection.nodeLookup.ok).toBe(true);
+      if (process.platform === "win32") {
+        expect(inspection.nodeLookup.execPath.toLowerCase()).toBe(process.execPath.toLowerCase());
+      } else {
+        expect(inspection.nodeLookup.execPath).toBe(process.execPath);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      // The Windows unstub replays PATH=original and then Path=delete — the
+      // same underlying variable — so restore the original PATH explicitly.
+      if (process.platform === "win32" && savedPath !== undefined) {
+        delete process.env.PATH;
+        process.env.PATH = savedPath;
+      }
+    }
+  });
   it("passes the exact native resume ID and qualified model/effort", async () => {
     const f = fixture();
     const result = await f.adapter.executeTurn(request({ native_conversation_ref: "sess_resume", requested_model: `${ZCODE_ACCOUNT_PROVIDER}/GLM-5.3`, requested_effort: "high" }), gate(), () => {});
@@ -124,6 +169,17 @@ describe("ZCode adapter", () => {
     config.config.modelConfigRules.builtinProviderModelRules.push({ providerId: ZCODE_ACCOUNT_PROVIDER, modelId: "GLM-5.3-Flash", config: { enabled: false } });
     writeFileSync(f.builtin, JSON.stringify(config));
     expect(() => createZcodePersonalConfig(f.builtin, "GLM-5.3-Flash", "low")).toThrow(/disabled/);
+  });
+  it("rejects Start Plan before dispatch even when present in the shared Desktop catalog", async () => {
+    const f = fixture(); const builtin = JSON.parse(readFileSync(f.builtin, "utf8"));
+    builtin.config.providerConfigRules.providerRules.push({ providerId: ZCODE_START_PLAN_PROVIDER,
+      config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "zai" } } });
+    writeFileSync(f.builtin, JSON.stringify(builtin));
+    const g = gate();
+    await expect(f.adapter.executeTurn(request({ requested_model: `${ZCODE_START_PLAN_PROVIDER}/GLM-5.3-Flash`, requested_effort: "max" }), g, () => {}))
+      .rejects.toMatchObject({ code: "PROVIDER_INCOMPATIBLE", executionStarted: false });
+    expect(g.count()).toBe(0);
+    expect(() => createZcodePersonalConfig(f.builtin, "account:other/GLM-5.3-Flash", "max")).toThrow(/Unsupported/);
   });
   it("wires built-in config override through bootstrap", async () => {
     const { daemonEnvFromProcess, buildAdapters } = await import("../../src/daemon/bootstrap.ts");

@@ -50,7 +50,7 @@ export interface CursorAdapterOptions {
 
 export class CursorAdapter implements ProviderAdapter {
   readonly providerId = "cursor";
-  readonly adapterVersion = "0.2.0";
+  readonly adapterVersion = "0.2.1";
 
   private readonly binary: string;
   private readonly defaultModel: string;
@@ -84,6 +84,8 @@ export class CursorAdapter implements ProviderAdapter {
       throw new BrokerError("SESSION_NOT_RESUMABLE", "Cursor resume requires a nonempty native conversation reference.", { executionStarted: false });
     }
     const args = ["--print", "--output-format", "stream-json", "--model", model, "--trust"];
+    // Plan mode can deliver its report via CreatePlan instead of result text.
+    if (req.role === "reviewer") args.push("--mode", "ask");
     if (req.workspace_path !== null && req.workspace_path !== undefined && req.workspace_path.length > 0) {
       args.push("--workspace", req.workspace_path);
     }

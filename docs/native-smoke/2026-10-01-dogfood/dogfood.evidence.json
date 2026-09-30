@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "scope": "Development checkpoint; no full native role/profile support",
+  "usage": "unknown",
+  "runs": [
+    {
+      "name": "start-plan-attempt",
+      "status": "failed",
+      "started_at": "2026-09-30T20:40:43.264Z",
+      "finished_at": "2026-09-30T20:40:56.289Z",
+      "turns": [
+        {
+          "role": "worker",
+          "provider": "zcode",
+          "requested_model": "account:zai-start-plan/GLM-5.3-Flash",
+          "requested_effort": "max",
+          "session_id": "session-6b3cb5d0a58c594352dc54a8",
+          "turn_id": "turn-e155f4ad9b29bbc9df60f0e7",
+          "state": "FAILED",
+          "native_conversation_ref": null,
+          "baseline_snapshot_id": "snap-7ff4d31d14e14dfe600df71c",
+          "final_snapshot_id": null,
+          "execution_started": true,
+          "termination_reason": "normal",
+          "error_code": "PROVIDER_PROTOCOL_ERROR",
+          "terminal_diagnostics": [
+            {
+              "state": "FAILED",
+              "message": "Error: Model creation failed (traceId: 91a6e418-8847-425d-ac5f-3d015bf98567)\n"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "antigravity-deadlines",
+      "status": "passed",
+      "started_at": "2026-09-30T20:44:46.211Z",
+      "finished_at": "2026-09-30T20:55:04.172Z",
+      "turns": [
+        {
+          "role": "worker",
+          "provider": "antigravity",
+          "requested_model": "gemini-3.8-flash-high",
+          "requested_effort": "high",
+          "session_id": "session-8d1c235868fd73dea7f093d8",
+          "turn_id": "turn-3cfa1ce84aea99861c7b2804",
+          "state": "SUCCEEDED",
+          "native_conversation_ref": "d9304c84-f75d-413a-87c0-6d1b12e6eabb",
+          "baseline_snapshot_id": "snap-0bd0350be712a9e0f02bfbee",
+          "final_snapshot_id": "snap-87e4c938dd980138670d9195",
+          "execution_started": true,
+          "termination_reason": "normal",
+          "error_code": null,
+          "terminal_diagnostics": []
+        }
+      ]
+    },
+    {
+      "name": "cursor-plan-report",
+      "status": "passed",
+      "started_at": "2026-09-30T21:32:56.967Z",
+      "finished_at": "2026-09-30T21:34:23.573Z",
+      "turns": [
+        {
+          "role": "reviewer",
+          "provider": "cursor",
+          "requested_model": "auto",
+          "requested_effort": null,
+          "session_id": "session-92c539937329a5e68437b703",
+          "turn_id": "turn-0cc0e984168e1d453ed70b02",
+          "state": "SUCCEEDED",
+          "native_conversation_ref": "222d5ab0-77f0-405c-9931-daaebf7c7c52",
+          "baseline_snapshot_id": "snap-0bd0350be712a9e0f02bfbee",
+          "final_snapshot_id": null,
+          "execution_started": true,
+          "termination_reason": "normal",
+          "error_code": null,
+          "terminal_diagnostics": []
+        }
+      ]
+    },
+    {
+      "name": "zcode-deadline-corrections",
+      "status": "failed",
+      "started_at": "2026-09-30T21:35:42.526Z",
+      "finished_at": "2026-09-30T21:45:44.433Z",
+      "turns": [
+        {
+          "role": "worker",
+          "provider": "zcode",
+          "requested_model": "account:zai-individual-coding-plan/GLM-5.3-Flash",
+          "requested_effort": "max",
+          "session_id": "session-c84176b8fec1979af6c4de35",
+          "turn_id": "turn-0c969c695baf7001f5b5f51b",
+          "state": "TIMED_OUT",
+          "native_conversation_ref": null,
+          "baseline_snapshot_id": "snap-4bd4e87c32742e0a7d86c21d",
+          "final_snapshot_id": null,
+          "execution_started": true,
+          "termination_reason": "deadline",
+          "error_code": null,
+          "terminal_diagnostics": [
+            {
+              "state": "TIMED_OUT",
+              "message": "ZCode execution interrupted."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "zcode-silent-output-timeout",
+      "status": "failed",
+      "started_at": "2026-09-30T21:55:24.641Z",
+      "finished_at": "2026-09-30T21:57:25.681Z",
+      "turns": [
+        {
+          "role": "worker",
+          "provider": "zcode",
+          "requested_model": "account:zai-individual-coding-plan/GLM-5.3-Flash",
+          "requested_effort": "max",
+          "session_id": "session-9eb254aafb33f213415328e8",
+          "turn_id": "turn-b456e05c783a25d08bf0bf18",
+          "state": "FAILED",
+          "native_conversation_ref": null,
+          "baseline_snapshot_id": "snap-70b77a3dfafbb506cba3c6ee",
+          "final_snapshot_id": null,
+          "execution_started": true,
+          "termination_reason": "normal",
+          "error_code": "PROVIDER_PROTOCOL_ERROR",
+          "terminal_diagnostics": [
+            {
+              "state": "FAILED",
+              "message": "ZCode timed out (first-line)."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cursor-ask-final-review",
+      "status": "passed",
+      "started_at": "2026-09-30T21:58:57.297Z",
+      "finished_at": "2026-09-30T22:02:10.495Z",
+      "turns": [
+        {
+          "role": "worker",
+          "provider": "mock",
+          "requested_model": "mock",
+          "requested_effort": null,
+          "session_id": "session-205a5f2d295ff1bfde88574b",
+          "turn_id": "turn-cfbe80c1518bb481601394a2",
+          "state": "SUCCEEDED",
+          "native_conversation_ref": "mock-native-turn-cfbe80c1518bb481601394a2",
+          "baseline_snapshot_id": "snap-7f46806c9bcf520510b6a701",
+          "final_snapshot_id": "snap-de3fcecf851338451099915d",
+          "execution_started": true,
+          "termination_reason": "normal",
+          "error_code": null,
+          "terminal_diagnostics": [
+            {
+              "state": "SUCCEEDED"
+            }
+          ]
+        },
+        {
+          "role": "reviewer",
+          "provider": "cursor",
+          "requested_model": "auto",
+          "requested_effort": null,
+          "session_id": "session-ed1cba13e771a783c6b188a1",
+          "turn_id": "turn-1556db709a3137f6ca0576a5",
+          "state": "SUCCEEDED",
+          "native_conversation_ref": "6df18d08-dfe4-4544-b1bc-4f83fe737aa1",
+          "baseline_snapshot_id": "snap-0bd0350be712a9e0f02bfbee",
+          "final_snapshot_id": null,
+          "execution_started": true,
+          "termination_reason": "normal",
+          "error_code": null,
+          "terminal_diagnostics": []
+        }
+      ]
+    },
+    {
+      "name": "zcode-partial-regression",
+      "status": "failed",
+      "started_at": "2026-09-30T21:58:57.251Z",
+      "finished_at": "2026-09-30T22:13:59.219Z",
+      "turns": [
+        {
+          "role": "worker",
+          "provider": "zcode",
+          "requested_model": "account:zai-individual-coding-plan/GLM-5.3-Flash",
+          "requested_effort": "max",
+          "session_id": "session-816d8009cbc958cd953d9b2e",
+          "turn_id": "turn-4f3aba9d0644851d76d674aa",
+          "state": "TIMED_OUT",
+          "native_conversation_ref": null,
+          "baseline_snapshot_id": "snap-577ebb256f20ff86122aa790",
+          "final_snapshot_id": null,
+          "execution_started": true,
+          "termination_reason": "deadline",
+          "error_code": null,
+          "terminal_diagnostics": [
+            {
+              "state": "TIMED_OUT",
+              "message": "ZCode timed out (first-line)."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "glm-high-shutdown-review",
+      "status": "passed",
+      "started_at": "2026-09-30T22:16:39.376Z",
+      "finished_at": "2026-09-30T22:18:49.607Z",
+      "turns": [
+        {
+          "role": "worker",
+          "provider": "mock",
+          "requested_model": "mock",
+          "requested_effort": null,
+          "session_id": "session-fa1008a4a336ebf221790d4d",
+          "turn_id": "turn-a1e3fe150c7d5b1ab69c1d93",
+          "state": "SUCCEEDED",
+          "native_conversation_ref": "mock-native-turn-a1e3fe150c7d5b1ab69c1d93",
+          "baseline_snapshot_id": "snap-03ef45d3f0606fa78b9c146f",
+          "final_snapshot_id": "snap-de64e0ca86344660d9b80e8c",
+          "execution_started": true,
+          "termination_reason": "normal",
+          "error_code": null,
+          "terminal_diagnostics": [
+            {
+              "state": "SUCCEEDED"
+            }
+          ]
+        },
+        {
+          "role": "reviewer",
+          "provider": "zcode",
+          "requested_model": "account:zai-individual-coding-plan/GLM-5.3",
+          "requested_effort": "high",
+          "session_id": "session-9af62ed58a1c8282552f2e94",
+          "turn_id": "turn-9daeb0ad61bb928913ff7618",
+          "state": "SUCCEEDED",
+          "native_conversation_ref": "sess_18827998-91fe-499c-88c5-2f1319cb0747",
+          "baseline_snapshot_id": "snap-0bd0350be712a9e0f02bfbee",
+          "final_snapshot_id": null,
+          "execution_started": true,
+          "termination_reason": "normal",
+          "error_code": null,
+          "terminal_diagnostics": [
+            {
+              "state": "SUCCEEDED"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

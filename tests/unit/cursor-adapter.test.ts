@@ -59,6 +59,14 @@ function request(overrides: Partial<TurnExecutionRequest> = {}): TurnExecutionRe
 function gate() { let count = 0; return { acquireDispatchPermission: () => { count++; }, cancellationRequested: () => null, count: () => count }; }
 
 describe("Cursor adapter", () => {
+  it("uses ask mode for reviewer reports and leaves worker mode unchanged", async () => {
+    for (const role of ["worker", "reviewer"] as const) {
+      const result = await fixture().adapter.executeTurn(request({ role }), gate(), () => {});
+      const inspection = JSON.parse(result.agent_reported!.summary);
+      if (role === "reviewer") expect(inspection.args.slice(inspection.args.indexOf("--mode"), inspection.args.indexOf("--mode") + 2)).toEqual(["--mode", "ask"]);
+      else expect(inspection.args).not.toContain("--mode");
+    }
+  });
   it("passes literal stdin, explicit model/workspace and Windows profile without unrelated env", async () => {
     const f = fixture(); const g = gate(); const events: AdapterEvent[] = [];
     vi.stubEnv("BROKER_TEST_SECRET", "test-only-secret");

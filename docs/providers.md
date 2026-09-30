@@ -69,7 +69,7 @@ dispatch; create a new broker session rather than guessing the missing text.
 
 Implementation: [adapter](../src/providers/zcode/zcodeAdapter.ts),
 [launch config](../src/providers/zcode/nativeConfig.ts),
-[JSON parser](../src/providers/zcode/resultParser.ts). Adapter version: `0.2.0`.
+[JSON parser](../src/providers/zcode/resultParser.ts). Adapter version: `0.2.1`.
 
 ### Working installation and authentication
 
@@ -113,6 +113,13 @@ The adapter currently accepts `GLM-5.3` and `GLM-5.3-Flash` for
 `account:zai-individual-coding-plan/GLM-5.3-Flash` can be `requested_model`.
 An explicit model is required. Other model families, API-key providers and
 team/off-peak accounts are outside this adapter route and fail before dispatch.
+
+`account:zai-start-plan/GLM-5.3-Flash` is explicitly rejected with
+`PROVIDER_INCOMPATIBLE` before dispatch. Its presence in the Desktop catalog
+does not supply standalone account authentication. There is no Individual
+fallback. The bounded investigation and host-bridge alternatives are in
+[Start Plan research](zcode-start-plan.md). The current operator development
+route is Individual Flash/max; selected reviews use GLM-5.3/high.
 
 `requested_effort` accepts `low`, `high`, `max`; null explicitly selects
 `low`. This is ZCode's `reasoningLevel`, not a provider-independent translation
@@ -166,11 +173,19 @@ invented and no fresh-session retry occurs. `--continue` is intentionally not
 used because it selects a latest session rather than the broker's exact ID.
 
 Prompts remain argv-based and capped at 6,000 JavaScript characters. There is
-no large-prompt file workaround in this adapter. Startup output timeout is
-120 seconds; inactivity timeout is 300 seconds. JSON is delivered at the end,
+no large-prompt file workaround in this adapter. Output timers use the remaining
+hard-deadline budget, rather than treating two minutes of silence as startup
+failure. The daemon owns hard-deadline cancellation. JSON is delivered at the end,
 so there is no streamed text progress or early session-ID event in this route.
 Native usage counters are retained by smoke tooling, not exposed as broker
 billing/quota accounting.
+
+On Windows, environment lookup preserves case-insensitive `Path`/`PATH`
+semantics even after copying `process.env` into an ordinary object. A lost
+PATH made ZCode Bash unable to resolve Node/npm during the first development
+task. Prefer explicit Node and package-tool paths when briefing native workers;
+Git Bash path syntax differs from PowerShell. A slow quota-consuming task is
+not proof that the toolchain or account route is unavailable.
 
 **Do not use `--prompt /model` as a free catalog query.** On CLI 0.16.9 it
 was forwarded to inference and consumed quota. The corrected local readiness
@@ -198,8 +213,9 @@ The adapter uses `--dangerously-skip-permissions --output-format stream-json
 mapping; the verified model ID was `gemini-3.8-flash-low`.
 
 For prompts over 2,000 characters it writes a temporary prompt file and asks
-agy to open it. This path requires native file-reading behavior and remains
-unverified. Short prompts worked over ordinary pipes on Windows; a PTY was
+agy to open it. A longer Gemini 3.8 Flash/high self-development task exercised
+that path and produced source changes through MCP ([checkpoint](native-smoke/2026-10-01-dogfood/report.md)). Arbitrary large-input and full role profiles
+remain unverified. Short prompts worked over ordinary pipes on Windows; a PTY was
 not needed for the exercised scenario. Startup timeout is 120 seconds and
 inactivity timeout 900 seconds. Permission bypass does not enforce reviewer
 read-only behavior.
@@ -235,6 +251,13 @@ The verified ID is `gpt-5.4-mini-none`; init reports its catalog display name
 `GPT-5.4 Mini None`. Use catalog IDs containing the required effort where
 available; separate `requested_effort` is currently ignored. Parameterized
 model overrides advertised by the CLI are not smoke-tested here.
+
+Adapter 0.2.1 launches reviewers with `--mode ask`. Native `plan` mode put its
+final review into a CreatePlan tool payload, leaving only interim narration in
+the ordinary result. Ask mode delivered a real `auto` review report through MCP.
+This establishes report delivery, not complete reviewer tool/sandbox enforcement.
+See [development evidence](native-smoke/2026-10-01-dogfood/report.md). Existing
+0.2.0 sessions require a new broker session after adapter-version drift.
 
 The parser captures `system/init.session_id` or result identity, assistant/tool
 progress and a final result with explicit boolean `is_error` and string text.

@@ -29,7 +29,7 @@ export interface ZcodeAdapterOptions {
 
 export class ZcodeAdapter implements ProviderAdapter {
   readonly providerId = "zcode";
-  readonly adapterVersion = "0.2.0";
+  readonly adapterVersion = "0.2.1";
   private readonly opts: ZcodeAdapterOptions;
   constructor(opts: ZcodeAdapterOptions) { this.opts = opts; }
 
@@ -70,13 +70,18 @@ export class ZcodeAdapter implements ProviderAdapter {
       checkCancel();
       if (controller.signal.aborted) throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "ZCode cancelled before launch.", { executionStarted: false });
       poll = setInterval(checkCancel, 100);
+      // --json may remain completely silent until the final result. Missing
+      // stdout after two minutes is not startup failure for a coding turn.
+      // The daemon's hard deadline owns cancellation; this timer is a fallback
+      // for adapter callers without a live deadline supervisor.
+      const outputWaitMs = Math.max(1000, req.deadline_at - req.clock.now());
       const result = await runHeadlessCli({
         binary: this.opts.nodeBinary ?? process.execPath, args,
         promptStdin: "", promptArgv: req.task_envelope,
         cwd: req.workspace_path ?? process.cwd(), envAllowlist: ZCODE_ENV_ALLOWLIST,
         inheritEnv: { ...process.env, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtin,
           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personal, ZCODE_LOG_DIR: path.join(tmpDir, "log") },
-        firstLineTimeoutMs: 120_000, inactivityTimeoutMs: 300_000, signal: controller.signal,
+        firstLineTimeoutMs: outputWaitMs, inactivityTimeoutMs: outputWaitMs, signal: controller.signal,
       }, {
         onStdoutLine: (line) => {
           if (outputTooLarge) return;

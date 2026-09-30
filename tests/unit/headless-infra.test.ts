@@ -23,6 +23,15 @@ function spec(overrides: Partial<Parameters<typeof runHeadlessCli>[0]> = {}) {
 }
 
 describe("runHeadlessCli", () => {
+  it.skipIf(process.platform !== "win32")("preserves mixed-case Windows environment keys from a plain object", async () => {
+    const out: string[] = [];
+    await runHeadlessCli(spec({
+      args: ["-e", "console.log(JSON.stringify({path:process.env.PATH,root:process.env.SystemRoot,ext:process.env.PATHEXT,profile:process.env.USERPROFILE,secret:process.env.BROKER_TEST_SECRET}));"],
+      inheritEnv: { Path: "C:\\nvm4w\\nodejs", SYSTEMROOT: process.env.SystemRoot, Pathext: ".EXE;.CMD", UserProfile: "C:\\test-profile", broker_test_secret: "private" },
+      envAllowlist: [...ENV, "USERPROFILE"],
+    }), { onStdoutLine: line => out.push(line), onStderrLine: () => {} });
+    expect(JSON.parse(out[0]!)).toEqual({path:"C:\\nvm4w\\nodejs",root:process.env.SystemRoot,ext:".EXE;.CMD",profile:"C:\\test-profile"});
+  });
   it.skipIf(process.platform !== "win32").each([undefined, ".EXE;.COM;.CMD"])("keeps Windows executable lookup when PATHEXT is %s", async (pathext) => {
     const out: string[] = [];
     await runHeadlessCli(spec({

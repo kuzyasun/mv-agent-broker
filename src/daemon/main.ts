@@ -31,9 +31,7 @@ async function main(): Promise<void> {
       await runStdioBridge(ctx, process.stdin, process.stdout);
     } finally {
       // §4.1/§14: drain in-flight turns before releasing ownership/closing DB.
-      await daemon.core.drain();
-      await daemon.executor.drain();
-      await daemon.lifecycle.shutdown();
+      await daemon.stop();
       daemon.db.close();
     }
   } else if (role === "daemon") {
@@ -56,11 +54,12 @@ async function main(): Promise<void> {
         process.on("SIGTERM", shutdown);
       });
     } finally {
-      await rpcServer.stop();
-      await daemon.core.drain();
-      await daemon.executor.drain();
-      await daemon.lifecycle.shutdown();
-      daemon.db.close();
+      try {
+        await rpcServer.stop();
+      } finally {
+        await daemon.stop();
+        daemon.db.close();
+      }
     }
   } else {
     process.stderr.write(`agent-broker: unknown AB_ROLE '${role}' (expected 'bridge' or 'daemon')\n`);

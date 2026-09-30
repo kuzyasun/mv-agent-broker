@@ -6,8 +6,8 @@
  *
  * Adapter registration policy (ADR-0002): the deterministic mock is always
  * present; native adapters are registered only when the operator provides
- * their environment pin — their capabilities remain `documented`, never
- * `supported`, until the P0 spike is authorized.
+ * their environment pin. Verification is tracked per capability in the
+ * provider matrix; short smoke runs do not establish full role support.
  */
 import path from "node:path";
 import { mkdirSync } from "node:fs";
@@ -15,11 +15,12 @@ import { openRegistryDb, type RegistryDb } from "../storage/db.ts";
 import { openBlobStore, type BlobStore } from "../snapshots/blobs.ts";
 import { openInputViewStore } from "../inputs/views.ts";
 import { openReviewSlotStore } from "../workspaces/slot.ts";
-import { RealClock } from "../shared/clock.ts";
+import { RealClock, type Clock } from "../shared/clock.ts";
 import { DEFAULT_LIMITS, type Limits } from "../shared/api-types.ts";
 import { BrokerCore } from "../core/broker.ts";
 import { TurnExecutor } from "../core/execution.ts";
 import { DaemonLifecycle, acquireStateDirectoryOwnership, type RecoveryReport, type StateDirectoryOwnership } from "./lifecycle.ts";
+import { DeadlineMonitor, validateDeadlinePollInterval } from "./deadlineMonitor.ts";
 import type { ProviderAdapter } from "../runtime/adapter.ts";
 import { MockAdapter } from "../providers/mock/mockAdapter.ts";
 import { CursorAdapter } from "../providers/cursor/cursorAdapter.ts";
@@ -42,6 +43,8 @@ export interface DaemonEnv {
   zcodeBuiltinProviderConfigPath?: string;
   antigravityBinary?: string;
   limits?: Partial<Limits>;
+  clock?: Clock;
+  deadlinePollIntervalMs?: number;
 }
 
 export interface Daemon {
@@ -52,6 +55,10 @@ export interface Daemon {
   lifecycle: DaemonLifecycle;
   recovery: RecoveryReport;
   adapters: Map<string, ProviderAdapter>;
+  deadlineMonitor: DeadlineMonitor;
+  /** Timer-only teardown after drain; use stop() for a live daemon. */
+  stopDeadlineMonitor(): void;
+  stop(): Promise<void>;
 }
 
 export function buildAdapters(env: DaemonEnv): Map<string, ProviderAdapter> {
@@ -70,6 +77,8 @@ export function buildAdapters(env: DaemonEnv): Map<string, ProviderAdapter> {
 }
 
 export async function startDaemon(env: DaemonEnv): Promise<Daemon> {
+  // Reject invalid configuration before acquiring ownership or opening state.
+  const pollIntervalMs = validateDeadlinePollInterval(env.deadlinePollIntervalMs ?? 50);
   // §4.1.1: lifetime-exclusive ownership STRICTLY BEFORE opening the
   // mutable registry — a second daemon must lose the lock before it can
   // open/migrate any state.
@@ -78,7 +87,7 @@ export async function startDaemon(env: DaemonEnv): Promise<Daemon> {
   const ownership: StateDirectoryOwnership = await acquireStateDirectoryOwnership(stateDir);
   const db = openRegistryDb(path.join(stateDir, "registry.sqlite"));
   const blobs = openBlobStore(path.join(stateDir, "blobs"));
-  const clock = new RealClock();
+  const clock = env.clock ?? new RealClock();
   const adapters = buildAdapters(env);
   const limits: Limits = { ...DEFAULT_LIMITS, ...env.limits };
 
@@ -104,10 +113,36 @@ export async function startDaemon(env: DaemonEnv): Promise<Daemon> {
     console.error("Outcome reconciliation failed:", err);
   }
 
-  return { db, blobs, core, executor, lifecycle, recovery, adapters };
+  const deadlineMonitor = new DeadlineMonitor(executor, { intervalMs: pollIntervalMs });
+  deadlineMonitor.start();
+  lifecycle.attachDeadlineMonitor(deadlineMonitor);
+  lifecycle.attachShutdownDrain(() => core.drain());
+
+  const stopDeadlineMonitor = () => {
+    deadlineMonitor.stop();
+  };
+
+  const stop = () => lifecycle.shutdown();
+
+  return {
+    db,
+    blobs,
+    core,
+    executor,
+    lifecycle,
+    recovery,
+    adapters,
+    deadlineMonitor,
+    stopDeadlineMonitor,
+    stop,
+  };
 }
 
 export function daemonEnvFromProcess(procEnv: NodeJS.ProcessEnv): DaemonEnv {
+  const rawInterval = procEnv.AB_DEADLINE_POLL_MS;
+  if (rawInterval !== undefined && !/^\d+$/.test(rawInterval)) {
+    throw new RangeError("AB_DEADLINE_POLL_MS must contain an integer between 5 and 60000.");
+  }
   return {
     stateDir: procEnv.AB_STATE_DIR ?? "./.agent-broker-state",
     coordinatorId: procEnv.AB_COORDINATOR_ID ?? "",
@@ -118,5 +153,6 @@ export function daemonEnvFromProcess(procEnv: NodeJS.ProcessEnv): DaemonEnv {
     zcodeNodeBinary: procEnv.AB_ZCODE_NODE,
     zcodeBuiltinProviderConfigPath: procEnv.AB_ZCODE_BUILTIN_CONFIG,
     antigravityBinary: procEnv.AB_ANTIGRAVITY_BIN,
+    deadlinePollIntervalMs: rawInterval === undefined ? undefined : validateDeadlinePollInterval(Number(rawInterval)),
   };
 }

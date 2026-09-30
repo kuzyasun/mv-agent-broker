@@ -4,6 +4,10 @@ import path from "node:path";
 import { BrokerError } from "../../shared/errors.ts";
 
 export const ZCODE_ACCOUNT_PROVIDER = "account:zai-individual-coding-plan";
+export const ZCODE_START_PLAN_PROVIDER = "account:zai-start-plan";
+const PLAN_MODES = new Map([
+  [ZCODE_ACCOUNT_PROVIDER, "individual-coding-plan"],
+]);
 const VERIFIED_MODEL_FAMILY = new Set(["GLM-5.3", "GLM-5.3-Flash"]);
 const REASONING_LEVELS = new Set(["low", "high", "max"]);
 
@@ -18,9 +22,18 @@ export function resolveZcodeBuiltinPath(bundle: string, override?: string): stri
 }
 
 export function createZcodePersonalConfig(builtinPath: string, model: string, effort: string | null): object {
-  const modelId = model.startsWith(`${ZCODE_ACCOUNT_PROVIDER}/`) ? model.slice(ZCODE_ACCOUNT_PROVIDER.length + 1) : model;
+  // The installed standalone account runtime only provisions Individual.
+  // A catalog entry alone is not a usable account route (native 0.16.9 probe).
+  const slash = model.indexOf("/");
+  const providerId = slash < 0 ? ZCODE_ACCOUNT_PROVIDER : model.slice(0, slash);
+  const modelId = slash < 0 ? model : model.slice(slash + 1);
+  if (providerId === ZCODE_START_PLAN_PROVIDER) {
+    throw new BrokerError("PROVIDER_INCOMPATIBLE", "ZCode 0.16.9 standalone cannot authenticate Start Plan; it requires a Desktop/host account bridge. No Individual fallback.", { executionStarted: false });
+  }
+  const planMode = PLAN_MODES.get(providerId);
+  if (!planMode) throw new BrokerError("MODEL_UNAVAILABLE", "Unsupported ZCode account plan.", { executionStarted: false });
   if (!VERIFIED_MODEL_FAMILY.has(modelId)) {
-    throw new BrokerError("MODEL_UNAVAILABLE", "ZCode standalone currently supports GLM-5.3 and GLM-5.3-Flash on Z.AI Individual Coding Plan.", { executionStarted: false });
+    throw new BrokerError("MODEL_UNAVAILABLE", "ZCode standalone currently supports the GLM-5.3 model family on explicitly selected Z.AI plans.", { executionStarted: false });
   }
   const reasoningLevel = effort ?? "low";
   if (!REASONING_LEVELS.has(reasoningLevel)) {
@@ -39,14 +52,14 @@ export function createZcodePersonalConfig(builtinPath: string, model: string, ef
   if (builtin?.schemaVersion !== 1 || !Array.isArray(providers) || providers.some((provider) => !provider || typeof provider.providerId !== "string")) {
     throw new BrokerError("PROVIDER_INCOMPATIBLE", "Unsupported ZCode built-in provider schema.", { executionStarted: false });
   }
-  const selected = providers.find((provider) => provider.providerId === ZCODE_ACCOUNT_PROVIDER);
+  const selected = providers.find((provider) => provider.providerId === providerId);
   const access = selected?.config?.access;
-  if (access?.type !== "zhipu-account" || access.mode !== "individual-coding-plan" || access.accountType !== "zai" || !Array.isArray(selected?.config?.builtinModelIds) || !selected.config.builtinModelIds.includes(modelId)) {
-    throw new BrokerError("MODEL_UNAVAILABLE", "Requested ZCode model is not in the installed Z.AI individual catalog.", { executionStarted: false });
+  if (access?.type !== "zhipu-account" || access.mode !== planMode || access.accountType !== "zai" || !Array.isArray(selected?.config?.builtinModelIds) || !selected.config.builtinModelIds.includes(modelId)) {
+    throw new BrokerError("MODEL_UNAVAILABLE", "Requested ZCode model is not in the installed selected-plan catalog.", { executionStarted: false });
   }
   const rules = builtin.config?.modelConfigRules?.builtinProviderModelRules;
   if (!Array.isArray(rules)) throw new BrokerError("PROVIDER_INCOMPATIBLE", "Unsupported ZCode model rule schema.", { executionStarted: false });
-  const rule = rules.find((entry) => entry.providerId === ZCODE_ACCOUNT_PROVIDER && entry.modelId === modelId);
+  const rule = rules.find((entry) => entry.providerId === providerId && entry.modelId === modelId);
   if (rule?.config?.enabled === false || selected.config.visibility === "hidden") {
     throw new BrokerError("MODEL_UNAVAILABLE", "Requested ZCode model is disabled in the installed catalog.", { executionStarted: false });
   }
@@ -54,14 +67,14 @@ export function createZcodePersonalConfig(builtinPath: string, model: string, ef
     schemaVersion: 1,
     config: {
       // This private config cannot select another account/model as fallback.
-      providerConfigRules: { providerRules: providers.filter((provider) => provider.providerId !== ZCODE_ACCOUNT_PROVIDER)
+      providerConfigRules: { providerRules: providers.filter((provider) => provider.providerId !== providerId)
         .map((provider) => ({ providerId: provider.providerId, config: { visibility: "hidden" } })) },
       modelConfigRules: {
         providerModelRules: selected.config.builtinModelIds.filter((id) => id !== modelId)
-          .map((id) => ({ providerId: ZCODE_ACCOUNT_PROVIDER, modelId: id, config: { enabled: false } })),
+          .map((id) => ({ providerId, modelId: id, config: { enabled: false } })),
         manualProviderModelRules: [],
       },
-      defaultModelSelection: { providerId: ZCODE_ACCOUNT_PROVIDER, modelId, options: { reasoningLevel } },
+      defaultModelSelection: { providerId, modelId, options: { reasoningLevel } },
     },
   };
 }

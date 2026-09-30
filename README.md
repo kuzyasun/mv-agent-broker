@@ -35,8 +35,9 @@ Known limitations (intentional, fail-closed):
 - `wait_ms` long-poll on `agent_turn_events` is accepted and resolves immediately.
 - Worktree mode does not yet create git worktrees (registered path only).
 - Artifact storage budget beyond the per-capture 256 MiB source cap unenforced.
-- Deadline scanning (`TurnExecutor.scanDeadlines`) is still an explicit API,
-  not a daemon timer.
+- Daemon-owned deadline supervision runs during execution and graceful drain.
+  Polling defaults to 50ms; `AB_DEADLINE_POLL_MS` accepts integers 5..60000.
+  Native descendant quiescence remains a separate acceptance gate.
 - Operator recovery and triage runbook: see docs/recovery-runbook.md.
 
 No capability is `supported` until the native P0 spike passes
@@ -47,6 +48,8 @@ No capability is `supported` until the native P0 spike passes
 Provider setup, authentication, models, resume, Windows caveats and test
 procedures: [provider operations guide](docs/providers.md). Exact verification
 status: [capability matrix](docs/provider-capabilities.md).
+Native self-development, frozen broker runtimes and current remaining work:
+[self-development checkpoint](docs/self-development.md).
 
 ```bash
 npm install

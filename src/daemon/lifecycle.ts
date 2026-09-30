@@ -33,6 +33,7 @@ import {
   updateSessionFields,
   updateTurnFields,
 } from "../storage/repo.ts";
+import type { DeadlineMonitor } from "./deadlineMonitor.ts";
 
 export interface StateDirectoryOwnership {
   readonly directory: string;
@@ -88,11 +89,23 @@ export class DaemonLifecycle {
   private state: DaemonState = "RECOVERING";
   private incarnation = newId(ID_PREFIX.incarnation);
   private ownership: StateDirectoryOwnership | null = null;
+  private deadlineMonitor: DeadlineMonitor | null = null;
+  private drainBeforeShutdown: (() => Promise<void>) | null = null;
+  private shutdownPromise: Promise<void> | null = null;
 
   constructor(
     private readonly db: RegistryDb,
     private readonly clock: Clock,
   ) {}
+
+  attachDeadlineMonitor(monitor: DeadlineMonitor): void {
+    this.deadlineMonitor = monitor;
+  }
+
+  /** Bootstrapped daemons drain accepted work before relinquishing ownership. */
+  attachShutdownDrain(drain: () => Promise<void>): void {
+    this.drainBeforeShutdown = drain;
+  }
 
   get currentState(): DaemonState {
     return this.state;
@@ -343,7 +356,17 @@ export class DaemonLifecycle {
     };
   }
 
-  async shutdown(): Promise<void> {
+  shutdown(): Promise<void> {
+    this.shutdownPromise ??= this.performShutdown().catch(error => {
+      // Keep ownership/supervision on failure, but permit an explicit caller
+      // retry after resolving the drain failure. Never retry automatically.
+      this.shutdownPromise = null;
+      throw error;
+    });
+    return this.shutdownPromise;
+  }
+
+  private async performShutdown(): Promise<void> {
     this.state = "STOPPING";
     setDaemonState(this.db, {
       daemon_state: this.state,
@@ -352,6 +375,11 @@ export class DaemonLifecycle {
       ready_at: null,
       fail_reason: null,
     });
+    // Keep supervision alive during drain. If drain fails, ownership and the
+    // monitor remain held; callers must not close mutable state in that case.
+    await this.drainBeforeShutdown?.();
+    this.deadlineMonitor?.stop();
+    this.deadlineMonitor = null;
     if (this.ownership) {
       await this.ownership.release();
       this.ownership = null;

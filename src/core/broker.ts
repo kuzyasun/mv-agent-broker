@@ -14,6 +14,7 @@ import {
   getAccount,
   getCoordinator,
   getCoverageProfile,
+  getDaemonState,
   getIdempotencyRecord,
   getProject,
   getSession,
@@ -212,6 +213,13 @@ export class BrokerCore {
     return this.clock.now();
   }
 
+  private assertAdmissionOpen(): void {
+    const state = getDaemonState(this.db);
+    if (state && state.daemon_state !== "READY") {
+      throw new BrokerError("DAEMON_NOT_READY", "Daemon is not accepting new sessions or turns.", { executionStarted: false });
+    }
+  }
+
   // ─── spawn (§6.1, §7.3) ───────────────────────────────────────────────────
 
   spawn(coordinatorId: string, req: SpawnRequest): SpawnResponse {
@@ -229,6 +237,7 @@ export class BrokerCore {
     // Fast path (step 2): committed lookup only — an optimization.
     const fast = getIdempotencyRecord(this.db, namespace);
     if (fast) return this.replaySpawn(fast, payloadHash);
+    this.assertAdmissionOpen();
 
     // Step 3: non-authoritative preflight (no inference).
     this.spawnPreflight(req);
@@ -249,6 +258,7 @@ export class BrokerCore {
           sessionId = existing.resolved_id;
           return;
         }
+        this.assertAdmissionOpen();
         this.spawnPreflight(req); // re-run: config may have changed concurrently
 
         const created = this.createProvisioningSession(coordinatorId, req, payloadHash);
@@ -658,6 +668,7 @@ export class BrokerCore {
     if (session0.state === "BLOCKED") {
       throw new BrokerError("SESSION_BLOCKED", session0.block_reason ?? "Session is blocked.");
     }
+    this.assertAdmissionOpen();
     // §7.2 step 3 preflight: expensive filesystem hashing outside the tx.
     this.sendSnapshotPreflight(session0, req);
 
@@ -672,6 +683,7 @@ export class BrokerCore {
 
         this.sendPreflight(req);
         this.sendAdmissionChecks(session, req);
+        this.assertAdmissionOpen();
         // Re-validate immutable snapshot records inside the authoritative
         // boundary (cheap record reads; §9.5 binding rules).
         if ("workspace_precondition" in req) {

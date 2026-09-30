@@ -46,10 +46,16 @@ SELECT pin_id, artifact_id, root_kind, owner_session_id, owner_turn_id FROM arti
 
 ## 4. Daemon restart procedure
 
-1. **Stop / Termination:** Clean shutdown releases `<state_dir>/daemon.lock` and transitions state to `STOPPING`.
+1. **Stop / Termination:** Clean shutdown transitions state to `STOPPING`, rejects new spawn/send admission, drains accepted work with deadline supervision active, then stops the timer and releases `<state_dir>/daemon.lock`. Accepted idempotent requests remain replayable. Use `daemon.stop()` (or the bootstrapped lifecycle shutdown) before closing the database. Concurrent stops share one promise. A failed drain retains ownership and supervision; after resolving the failure an explicit stop retry is allowed. Do not close the database after a rejected stop.
 2. **Crashed Daemon:** A crashed process leaves `daemon.lock`. Starting a new daemon triggers `DAEMON_ALREADY_RUNNING`. Confirm no orphan node processes exist, then manually delete `<state_dir>/daemon.lock`.
 3. **Recovery barrier (`RECOVERING`):** On startup, the daemon generates a new `daemon_incarnation`, audits pending intents, fails unfinished provisioning/capture tasks, marks running turns `UNKNOWN`, and restores reservations before entering `READY`.
 4. **Post-READY state:** Quarantined workspaces and `BLOCKED` sessions stay blocked. Only unaffected workspaces accept new turns.
+
+`AB_DEADLINE_POLL_MS` defaults to 50ms and must be an integer from 5 to 60000;
+invalid configuration is rejected before creating/opening state. Deadline scan
+errors produce bounded stderr diagnostics and counters, then scans retry.
+Failure/recovery diagnostic pairs are capped to once per minute. A scan failure
+does not release execution resources or establish process quiescence.
 
 ## 5. Storage cleanup (§15.3)
 
