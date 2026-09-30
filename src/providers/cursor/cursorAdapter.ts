@@ -34,6 +34,13 @@ const CURSOR_ENV_ALLOWLIST = [
   "XDG_CACHE_HOME",
   "XDG_DATA_HOME",
   "COLORTERM",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "TEMP",
+  "TMP",
+  "CURSOR_API_KEY",
+  "NODE_COMPILE_CACHE",
 ] as const;
 
 export interface CursorAdapterOptions {
@@ -43,7 +50,7 @@ export interface CursorAdapterOptions {
 
 export class CursorAdapter implements ProviderAdapter {
   readonly providerId = "cursor";
-  readonly adapterVersion = "0.1.0";
+  readonly adapterVersion = "0.2.0";
 
   private readonly binary: string;
   private readonly defaultModel: string;
@@ -51,7 +58,7 @@ export class CursorAdapter implements ProviderAdapter {
 
   constructor(opts: CursorAdapterOptions = {}) {
     this.binary = opts.binary ?? "cursor-agent";
-    this.defaultModel = opts.model ?? "claude-3-5-sonnet";
+    this.defaultModel = opts.model ?? "";
   }
 
   dispatchPermissionAcquired(turnId: string): boolean {
@@ -68,12 +75,14 @@ export class CursorAdapter implements ProviderAdapter {
     gate: DispatchGate,
     onEvent: (ev: AdapterEvent) => void,
   ): Promise<TurnExecutionResult> {
-    // 1. Acquire dispatch permission first. Throws if cancelled early.
-    gate.acquireDispatchPermission();
-    this.turnPermissionAcquired.set(req.turn_id, true);
-
-    // 2. Build args per facts.
+    // Require an operator-selected model; historical defaults can disappear.
     const model = req.requested_model || this.defaultModel;
+    if (!model.trim()) {
+      throw new BrokerError("MODEL_UNAVAILABLE", "Cursor requires an explicit model from its CLI catalog.", { executionStarted: false });
+    }
+    if (req.native_conversation_ref !== null && !req.native_conversation_ref.trim()) {
+      throw new BrokerError("SESSION_NOT_RESUMABLE", "Cursor resume requires a nonempty native conversation reference.", { executionStarted: false });
+    }
     const args = ["--print", "--output-format", "stream-json", "--model", model, "--trust"];
     if (req.workspace_path !== null && req.workspace_path !== undefined && req.workspace_path.length > 0) {
       args.push("--workspace", req.workspace_path);
@@ -94,7 +103,12 @@ export class CursorAdapter implements ProviderAdapter {
       }
     };
 
+    gate.acquireDispatchPermission();
+    this.turnPermissionAcquired.set(req.turn_id, true);
     checkCancellation();
+    if (ac.signal.aborted) {
+      throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "Cursor cancelled before launch.", { executionStarted: false });
+    }
     const pollInterval = setInterval(checkCancellation, 100);
 
     // 4. Headless spawn spec and stream event handlers.
@@ -112,21 +126,28 @@ export class CursorAdapter implements ProviderAdapter {
 
     const events: CursorStreamEvent[] = [];
     let nativeRefEmitted = false;
+    let observedRef: string | null = null;
+    let identityMismatch = false;
 
     const cliEvents: HeadlessCliEvents = {
       onStdoutLine: (line: string) => {
         const ev = parseCursorStreamLine(line);
         events.push(ev);
+        const ref = ev.kind === "init" || ev.kind === "result" ? ev.session_id : null;
+        if (ref) {
+          if ((observedRef !== null && observedRef !== ref) ||
+              (req.native_conversation_ref !== null && req.native_conversation_ref !== ref)) {
+            identityMismatch = true;
+          }
+          observedRef ??= ref;
+          if (!nativeRefEmitted && !identityMismatch) {
+            nativeRefEmitted = true;
+            onEvent({ type: "native_ref_obtained", payload: { ref } });
+          }
+        }
 
         switch (ev.kind) {
           case "init": {
-            if (!nativeRefEmitted && ev.session_id) {
-              nativeRefEmitted = true;
-              onEvent({
-                type: "native_ref_obtained",
-                payload: { ref: ev.session_id },
-              });
-            }
             break;
           }
           case "assistant_text": {
@@ -166,10 +187,19 @@ export class CursorAdapter implements ProviderAdapter {
     try {
       const cliResult = await runHeadlessCli(spec, cliEvents);
       const summary = summarizeCursorTurn(events);
-
-      // 6. Resolve or throw based on outcome.
+      // A result record does not override an interrupted or failed process.
+      if (cliResult.timedOut || cliResult.killed || cliResult.exitCode !== 0) {
+        const message = cliResult.timedOut ? `Cursor timed out (${cliResult.timedOut}).`
+          : cliResult.killed ? `Cursor execution interrupted: ${cancelReason ?? "cancelled"}.`
+          : cliResult.stderrTail || `Cursor exited with code ${cliResult.exitCode}.`;
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", message, { executionStarted: true });
+      }
+      if (identityMismatch || (req.native_conversation_ref !== null && observedRef === null)) {
+        throw new BrokerError(req.native_conversation_ref !== null ? "SESSION_NOT_RESUMABLE" : "PROVIDER_PROTOCOL_ERROR",
+          "Cursor returned missing or conflicting native conversation identity.", { executionStarted: true });
+      }
       if (summary.sawResult && !summary.isError) {
-        const nativeRef = summary.sessionId ?? req.native_conversation_ref ?? `cursor-${req.turn_id}`;
+        const nativeRef = summary.sessionId ?? "";
         const rawText = (summary.resultText && summary.resultText.trim().length > 0)
           ? summary.resultText
           : summary.assistantText;
@@ -189,21 +219,6 @@ export class CursorAdapter implements ProviderAdapter {
         throw new BrokerError("PROVIDER_PROTOCOL_ERROR", summary.resultText || "cursor execution failed", {
           executionStarted: true,
         });
-      }
-
-      // !sawResult:
-      if (cliResult.timedOut) {
-        const code = cliResult.timedOut === "first-line" ? "RATE_LIMITED" : "PROVIDER_PROTOCOL_ERROR";
-        throw new BrokerError(code, "cursor timed out", { executionStarted: true });
-      }
-
-      if (cliResult.exitCode !== 0) {
-        const msg = cliResult.stderrTail.trim().length > 0
-          ? cliResult.stderrTail
-          : cancelReason
-            ? `cursor cancelled: ${cancelReason}`
-            : `cursor process exited with code ${cliResult.exitCode}`;
-        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", msg, { executionStarted: true });
       }
 
       throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "stream closed without result", {

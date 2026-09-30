@@ -19,6 +19,7 @@ import {
   getSession,
   getSnapshotRecord,
   getTurn,
+  getTurnEventPayload,
   getWorkspace,
   getArtifact,
   insertIdempotencyRecord,
@@ -308,6 +309,9 @@ export class BrokerCore {
   }
 
   private spawnPreflight(req: SpawnRequest): void {
+    if (Buffer.byteLength(req.instructions, "utf8") > 64 * 1024) {
+      throw new BrokerError("INPUT_LIMIT", "Session instructions exceed 64 KiB.");
+    }
     if (!req.idempotency_key || req.idempotency_key.length > 256) {
       throw new BrokerError("INVALID_REQUEST", "Invalid idempotency key.");
     }
@@ -389,7 +393,7 @@ export class BrokerCore {
       session_id: sessionId,
       turn_id: null,
       state: "pending",
-      payload: JSON.stringify({ request_hash: payloadHash }),
+      payload: JSON.stringify({ request_hash: payloadHash, instructions: req.instructions }),
       created_at: now,
       updated_at: now,
     });
@@ -788,7 +792,7 @@ export class BrokerCore {
           turn_id: turnId,
           session_id: session.session_id,
           type: "turn_admitted",
-          payload: { expected_snapshot_id: expectedSnapshot },
+          payload: { expected_snapshot_id: expectedSnapshot, task: req.task },
           created_at: now,
         });
         return {
@@ -1665,6 +1669,11 @@ export class BrokerCore {
 
   turnStatus(coordinatorId: string, turnId: string): TurnRecord {
     return this.authorizeTurn(coordinatorId, turnId);
+  }
+
+  turnAgentReported(coordinatorId: string, turnId: string) {
+    this.turnStatus(coordinatorId, turnId); // Apply the same turn ownership check.
+    return getTurnEventPayload(this.db, turnId, "agent_reported");
   }
 
   turnEvents(coordinatorId: string, turnId: string, afterSeq: number, limit: number) {

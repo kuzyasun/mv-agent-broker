@@ -1,0 +1,408 @@
+{
+  "mode": "desktop-catalog",
+  "root": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-24-38-658Z-zcode-app-server",
+  "bundle": "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+  "builtin": "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\config\\provider\\zcode-builtin.json",
+  "personal": "C:\\Users\\902st\\.zcode\\v2\\provider_config.json",
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T15:24:38.660Z",
+  "desktopProviderConfigHashBefore": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "processes": [
+    {
+      "pid": 55792,
+      "exitCode": 0,
+      "stderr": "",
+      "messages": [
+        {
+          "method": "startup/storageState",
+          "params": {
+            "schemaVersion": 1,
+            "attemptId": "e660f7b9-4ce2-4c8d-83a3-978cf1967eea",
+            "sequence": 1,
+            "databaseId": "fa3bf0bab0999d2e3ec796cfe4e21b5e60c7588952fd30f5963c243d32b85002",
+            "databaseKind": "session",
+            "phase": "checking",
+            "elapsedMs": 0
+          }
+        },
+        {
+          "method": "startup/storageState",
+          "params": {
+            "schemaVersion": 1,
+            "attemptId": "e660f7b9-4ce2-4c8d-83a3-978cf1967eea",
+            "sequence": 2,
+            "databaseId": "fa3bf0bab0999d2e3ec796cfe4e21b5e60c7588952fd30f5963c243d32b85002",
+            "databaseKind": "session",
+            "phase": "checking",
+            "elapsedMs": 0
+          }
+        },
+        {
+          "method": "startup/storageState",
+          "params": {
+            "schemaVersion": 1,
+            "attemptId": "e660f7b9-4ce2-4c8d-83a3-978cf1967eea",
+            "sequence": 3,
+            "databaseId": "fa3bf0bab0999d2e3ec796cfe4e21b5e60c7588952fd30f5963c243d32b85002",
+            "databaseKind": "session",
+            "phase": "checking",
+            "migration": {
+              "kind": "none",
+              "executedCount": 0,
+              "committedCount": 0
+            },
+            "elapsedMs": 2
+          }
+        },
+        {
+          "method": "startup/storageState",
+          "params": {
+            "schemaVersion": 1,
+            "attemptId": "e660f7b9-4ce2-4c8d-83a3-978cf1967eea",
+            "sequence": 4,
+            "databaseId": "fa3bf0bab0999d2e3ec796cfe4e21b5e60c7588952fd30f5963c243d32b85002",
+            "databaseKind": "session",
+            "phase": "committing",
+            "migration": {
+              "kind": "none",
+              "executedCount": 0,
+              "committedCount": 0,
+              "lastAppliedMigrationId": "0022_backfilled_session_reasoning"
+            },
+            "elapsedMs": 4
+          }
+        },
+        {
+          "method": "startup/storageState",
+          "params": {
+            "schemaVersion": 1,
+            "attemptId": "e660f7b9-4ce2-4c8d-83a3-978cf1967eea",
+            "sequence": 5,
+            "databaseId": "fa3bf0bab0999d2e3ec796cfe4e21b5e60c7588952fd30f5963c243d32b85002",
+            "databaseKind": "session",
+            "phase": "ready",
+            "migration": {
+              "kind": "none",
+              "executedCount": 0,
+              "committedCount": 0,
+              "lastAppliedMigrationId": "0022_backfilled_session_reasoning"
+            },
+            "elapsedMs": 5
+          }
+        },
+        {
+          "id": "46fa1d66-9fbc-4b0a-b819-33565863cc6f",
+          "result": {
+            "independentPlanState": true
+          }
+        },
+        {
+          "id": "server-1",
+          "method": "session/requestRuntimePreferences",
+          "params": {
+            "sessionId": "sess_316ba876-8575-4a82-ba0b-9fbbf4a17254",
+            "scope": "runtime-materialization"
+          }
+        },
+        {
+          "id": "8c7eb352-eced-4c0f-9a47-07b5c08a5a74",
+          "result": {
+            "messages": [],
+            "projection": {
+              "activeToolCalls": [],
+              "backgroundJobs": [],
+              "contextUsed": 0,
+              "contextWindow": 200000,
+              "mode": "build",
+              "pendingPermissions": [],
+              "sessionId": "unknown",
+              "status": "idle",
+              "target": null,
+              "totalTokenCount": 0,
+              "turnCount": 0
+            },
+            "protocol": {
+              "name": "ZCode Protocol",
+              "version": 1
+            },
+            "runtime": {
+              "eventSeq": 0,
+              "pendingRequestIds": [],
+              "goalVerifications": [],
+              "goalVerificationTimeline": [],
+              "stateRevision": 0
+            },
+            "session": {
+              "createdAt": 1790781880061,
+              "mode": "build",
+              "traceId": "a07e82a6-31ae-433c-a09d-5873c1a61282",
+              "sessionId": "sess_316ba876-8575-4a82-ba0b-9fbbf4a17254",
+              "sessionKind": "interactive",
+              "status": "idle",
+              "target": null,
+              "title": "",
+              "updatedAt": 1790781880061,
+              "workspace": {
+                "workspacePath": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-24-38-658Z-zcode-app-server\\workspace",
+                "workspaceKey": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-24-38-658Z-zcode-app-server\\workspace"
+              }
+            },
+            "settings": {
+              "mode": {
+                "current": "build"
+              },
+              "model": {
+                "available": []
+              },
+              "permission": {
+                "mode": "build"
+              },
+              "thoughtLevel": {
+                "available": [],
+                "enabled": false
+              }
+            },
+            "slashCommands": [
+              {
+                "description": "Show or set the current session goal.",
+                "inputHint": "/goal [pause|resume|clear|replace <objective>|<objective>]",
+                "name": "goal",
+                "source": "builtin"
+              },
+              {
+                "description": "Compact the current conversation with optional instructions.",
+                "inputHint": "/compact [instructions]",
+                "name": "compact",
+                "source": "builtin"
+              },
+              {
+                "description": "Create or update workspace AGENTS.md instructions.",
+                "inputHint": "/init [notes]",
+                "name": "init",
+                "source": "builtin"
+              },
+              {
+                "description": "Switch to Plan mode and optionally send a task.",
+                "inputHint": "/plan [task]",
+                "name": "plan",
+                "source": "builtin"
+              }
+            ],
+            "todos": [],
+            "todoGroups": []
+          }
+        }
+      ]
+    }
+  ],
+  "operations": [
+    {
+      "method": "runtime/capabilities",
+      "params": {},
+      "result": {
+        "independentPlanState": true
+      }
+    },
+    {
+      "method": "session/create",
+      "params": {
+        "workspace": {
+          "workspacePath": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-24-38-658Z-zcode-app-server\\workspace",
+          "workspaceKey": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-24-38-658Z-zcode-app-server\\workspace"
+        },
+        "mode": "plan",
+        "persistence": "immediate",
+        "titleGenerationEnabled": false,
+        "mcpServers": [],
+        "toolAllowlist": [],
+        "offPeakToolEnabled": false,
+        "dynamicWorkflowEnabled": false
+      },
+      "result": {
+        "messages": [],
+        "projection": {
+          "activeToolCalls": [],
+          "backgroundJobs": [],
+          "contextUsed": 0,
+          "contextWindow": 200000,
+          "mode": "build",
+          "pendingPermissions": [],
+          "sessionId": "unknown",
+          "status": "idle",
+          "target": null,
+          "totalTokenCount": 0,
+          "turnCount": 0
+        },
+        "protocol": {
+          "name": "ZCode Protocol",
+          "version": 1
+        },
+        "runtime": {
+          "eventSeq": 0,
+          "pendingRequestIds": [],
+          "goalVerifications": [],
+          "goalVerificationTimeline": [],
+          "stateRevision": 0
+        },
+        "session": {
+          "createdAt": 1790781880061,
+          "mode": "build",
+          "traceId": "a07e82a6-31ae-433c-a09d-5873c1a61282",
+          "sessionId": "sess_316ba876-8575-4a82-ba0b-9fbbf4a17254",
+          "sessionKind": "interactive",
+          "status": "idle",
+          "target": null,
+          "title": "",
+          "updatedAt": 1790781880061,
+          "workspace": {
+            "workspacePath": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-24-38-658Z-zcode-app-server\\workspace",
+            "workspaceKey": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-24-38-658Z-zcode-app-server\\workspace"
+          }
+        },
+        "settings": {
+          "mode": {
+            "current": "build"
+          },
+          "model": {
+            "available": []
+          },
+          "permission": {
+            "mode": "build"
+          },
+          "thoughtLevel": {
+            "available": [],
+            "enabled": false
+          }
+        },
+        "slashCommands": [
+          {
+            "description": "Show or set the current session goal.",
+            "inputHint": "/goal [pause|resume|clear|replace <objective>|<objective>]",
+            "name": "goal",
+            "source": "builtin"
+          },
+          {
+            "description": "Compact the current conversation with optional instructions.",
+            "inputHint": "/compact [instructions]",
+            "name": "compact",
+            "source": "builtin"
+          },
+          {
+            "description": "Create or update workspace AGENTS.md instructions.",
+            "inputHint": "/init [notes]",
+            "name": "init",
+            "source": "builtin"
+          },
+          {
+            "description": "Switch to Plan mode and optionally send a task.",
+            "inputHint": "/plan [task]",
+            "name": "plan",
+            "source": "builtin"
+          }
+        ],
+        "todos": [],
+        "todoGroups": []
+      }
+    }
+  ],
+  "appServerInferenceSends": 0,
+  "selection": {
+    "providerId": "account:zai-individual-coding-plan",
+    "modelId": "GLM-5.3-Flash",
+    "options": {
+      "reasoningLevel": "low"
+    }
+  },
+  "capabilities": {
+    "independentPlanState": true
+  },
+  "createdSnapshot": {
+    "messages": [],
+    "projection": {
+      "activeToolCalls": [],
+      "backgroundJobs": [],
+      "contextUsed": 0,
+      "contextWindow": 200000,
+      "mode": "build",
+      "pendingPermissions": [],
+      "sessionId": "unknown",
+      "status": "idle",
+      "target": null,
+      "totalTokenCount": 0,
+      "turnCount": 0
+    },
+    "protocol": {
+      "name": "ZCode Protocol",
+      "version": 1
+    },
+    "runtime": {
+      "eventSeq": 0,
+      "pendingRequestIds": [],
+      "goalVerifications": [],
+      "goalVerificationTimeline": [],
+      "stateRevision": 0
+    },
+    "session": {
+      "createdAt": 1790781880061,
+      "mode": "build",
+      "traceId": "a07e82a6-31ae-433c-a09d-5873c1a61282",
+      "sessionId": "sess_316ba876-8575-4a82-ba0b-9fbbf4a17254",
+      "sessionKind": "interactive",
+      "status": "idle",
+      "target": null,
+      "title": "",
+      "updatedAt": 1790781880061,
+      "workspace": {
+        "workspacePath": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-24-38-658Z-zcode-app-server\\workspace",
+        "workspaceKey": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-24-38-658Z-zcode-app-server\\workspace"
+      }
+    },
+    "settings": {
+      "mode": {
+        "current": "build"
+      },
+      "model": {
+        "available": []
+      },
+      "permission": {
+        "mode": "build"
+      },
+      "thoughtLevel": {
+        "available": [],
+        "enabled": false
+      }
+    },
+    "slashCommands": [
+      {
+        "description": "Show or set the current session goal.",
+        "inputHint": "/goal [pause|resume|clear|replace <objective>|<objective>]",
+        "name": "goal",
+        "source": "builtin"
+      },
+      {
+        "description": "Compact the current conversation with optional instructions.",
+        "inputHint": "/compact [instructions]",
+        "name": "compact",
+        "source": "builtin"
+      },
+      {
+        "description": "Create or update workspace AGENTS.md instructions.",
+        "inputHint": "/init [notes]",
+        "name": "init",
+        "source": "builtin"
+      },
+      {
+        "description": "Switch to Plan mode and optionally send a task.",
+        "inputHint": "/plan [task]",
+        "name": "plan",
+        "source": "builtin"
+      }
+    ],
+    "todos": [],
+    "todoGroups": []
+  },
+  "status": "probe-passed",
+  "desktopProviderConfigHashAfter": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "desktopProviderConfigUnchanged": true,
+  "finishedAt": "2026-09-30T15:24:40.537Z"
+}

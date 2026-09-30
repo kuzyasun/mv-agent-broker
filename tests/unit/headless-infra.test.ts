@@ -23,6 +23,14 @@ function spec(overrides: Partial<Parameters<typeof runHeadlessCli>[0]> = {}) {
 }
 
 describe("runHeadlessCli", () => {
+  it.skipIf(process.platform !== "win32").each([undefined, ".EXE;.COM;.CMD"])("keeps Windows executable lookup when PATHEXT is %s", async (pathext) => {
+    const out: string[] = [];
+    await runHeadlessCli(spec({
+      args: ["-e", "console.log(process.env.PATHEXT);"],
+      inheritEnv: { ...process.env, PATHEXT: pathext },
+    }), { onStdoutLine: line => out.push(line), onStderrLine: () => undefined });
+    expect(out).toEqual([pathext ?? ".COM;.EXE;.BAT;.CMD"]);
+  });
   it("streams stdout/stderr lines and reports exit code 0", async () => {
     const out: string[] = [];
     const err: string[] = [];

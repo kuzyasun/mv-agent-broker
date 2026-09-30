@@ -68,6 +68,7 @@ describe("Claude stream parser (parseClaudeStreamLine)", () => {
     });
     expect(parseClaudeStreamLine(success)).toEqual({
       kind: "result",
+      session_id: null,
       text: "All tasks completed cleanly",
       is_error: false,
     });
@@ -80,6 +81,7 @@ describe("Claude stream parser (parseClaudeStreamLine)", () => {
     });
     expect(parseClaudeStreamLine(errorEvent)).toEqual({
       kind: "result",
+      session_id: null,
       text: "Maximum turn limit reached",
       is_error: true,
     });
@@ -91,6 +93,7 @@ describe("Claude stream parser (parseClaudeStreamLine)", () => {
     });
     expect(parseClaudeStreamLine(errorSubtypeOnly)).toEqual({
       kind: "result",
+      session_id: null,
       text: "API rate limited",
       is_error: true,
     });
@@ -205,7 +208,7 @@ describe("ClaudeAdapter lifecycle and preflight", () => {
   it("initializes with default binary and version", () => {
     const adapter = new ClaudeAdapter();
     expect(adapter.providerId).toBe("claude-code");
-    expect(adapter.adapterVersion).toBe("0.1.0");
+    expect(adapter.adapterVersion).toBe("0.2.0");
     expect(adapter.inspectRuntime("sess-1")).toBeNull();
   });
 
@@ -252,4 +255,3 @@ describe("ClaudeAdapter lifecycle and preflight", () => {
     await expect(adapter.executeTurn(req, gate, () => {})).rejects.toThrow("cancelled before dispatch");
   });
 });
-

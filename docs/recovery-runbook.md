@@ -57,13 +57,18 @@ SELECT pin_id, artifact_id, root_kind, owner_session_id, owner_turn_id FROM arti
   - *Protection:* Artifacts referenced by `artifact_pins` (active turns, anchors, holds) are never deleted.
   - *Tombstones:* Expired artifacts retain DB metadata records (`state = 'expired'`).
   - *Fail-closed:* If any retained manifest is unreadable or staging artifacts lack hashes, blob GC aborts (`gcSkippedReason`).
-- **`STORAGE_LIMIT`:** Raised if unique retained blob storage exceeds the 2 GiB project cap or a source snapshot exceeds 256 MiB.
+- **`STORAGE_LIMIT`:** The 256 MiB per-source-capture cap is enforced. The
+  specification's total project storage budget is not yet enforced; cleanup
+  accounting must not be mistaken for admission-time budget enforcement.
 - **Action:** Inspect pins with `previewCleanup`, confirm stale historical review artifacts to expire, and invoke `executeCleanup`.
 
 ## 6. Adapter version drift (§13.3)
 
-- **`PROVIDER_INCOMPATIBLE`:** Thrown when CLI versions, flags, or output schemas deviate from the verified adapter contract.
-- **Revalidation:** Adapters are currently `documented` pending the native P0 spike. In-place binary upgrades break running sessions; operators must register updated profiles and spawn new sessions.
+- **`PROVIDER_INCOMPATIBLE`:** The core currently detects adapter-version
+  drift. Native CLI-version preflight/revalidation is still incomplete.
+- **Revalidation:** All five providers passed limited model/resume smoke;
+  complete native role/profile acceptance remains open. Recheck CLI upgrades
+  explicitly and create sessions matching the validated adapter profile.
 
 ## 7. Escalation
 

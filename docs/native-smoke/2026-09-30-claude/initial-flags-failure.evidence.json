@@ -1,0 +1,44 @@
+{
+  "provider": "claude-code",
+  "requestedModel": "claude-haiku-4-5-20251001",
+  "platform": "win32",
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T18:13:31.744Z",
+  "scope": "adapter-only; no broker lifecycle/profile acceptance",
+  "usage": "unknown; not exposed by adapter",
+  "turns": [
+    {
+      "index": 0,
+      "requestedNativeRef": null,
+      "events": [],
+      "error": {
+        "name": "BrokerError",
+        "message": "Error: When using --print, --output-format=stream-json requires --verbose\n",
+        "code": "PROVIDER_PROTOCOL_ERROR"
+      },
+      "dispatchGateCalls": 1
+    }
+  ],
+  "adapterVersion": "0.1.0",
+  "status": "failed",
+  "finishedAt": "2026-09-30T18:13:33.760Z",
+  "processes": [
+    {
+      "binary": "C:\\Users\\902st\\.local\\bin\\claude.exe",
+      "args": [
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--model",
+        "claude-haiku-4-5-20251001"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T18-13-31-742Z-claude-code\\workspace",
+      "pid": 21388,
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "Error: When using --print, --output-format=stream-json requires --verbose\n",
+      "startedAt": "2026-09-30T18:13:31.817Z",
+      "finishedAt": "2026-09-30T18:13:33.759Z"
+    }
+  ]
+}

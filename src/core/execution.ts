@@ -19,6 +19,8 @@ import {
   getSession,
   getSnapshotRecord,
   getTurn,
+  getTurnEventPayload,
+  getSessionInstructions,
   getWorkspace,
   insertArtifact,
   insertBlobRecord,
@@ -36,7 +38,7 @@ import {
 } from "../storage/repo.ts";
 import { BrokerError } from "../shared/errors.ts";
 import type { ArtifactKind } from "../shared/api-types.ts";
-import { newId, ID_PREFIX } from "../shared/ids.ts";
+import { newId, ID_PREFIX, sha256Hex } from "../shared/ids.ts";
 import type { Clock } from "../shared/clock.ts";
 import type { Limits, SessionRecord, SnapshotManifest, SnapshotRecord, TurnRecord, TurnState } from "../shared/api-types.ts";
 import {
@@ -355,6 +357,21 @@ export class TurnExecutor {
     if (!result) {
       this.markUnknown(after, session, new Error("adapter resolved without result"));
       return;
+    }
+
+    // Preserve bounded native prose before outcome/finalization. Recovery can
+    // then expose it through the existing agent_reported result field.
+    if (this.expectedIncarnation !== null) {
+      const daemonState = getDaemonState(this.db);
+      if (daemonState && daemonState.incarnation !== this.expectedIncarnation) return;
+    }
+    if (result.agent_reported && typeof result.agent_reported.summary === "string" &&
+        (result.agent_reported.format_status === "structured" || result.agent_reported.format_status === "text_only")) {
+      const report = { ...result.agent_reported, summary: result.agent_reported.summary.slice(0, 4000) };
+      const bounded = Buffer.byteLength(JSON.stringify(report), "utf8") <= 64 * 1024
+        ? report : { summary: report.summary, format_status: report.format_status };
+      appendEvent(this.db, { turn_id: turnId, session_id: session.session_id,
+        type: "agent_reported", payload: bounded, created_at: this.clock.now() });
     }
 
     if (after.state !== "UNKNOWN") {
@@ -705,10 +722,18 @@ export class TurnExecutor {
    * data inline (within the shared budget), path inputs as exact locations.
    */
   private buildEnvelope(session: SessionRecord, turn: TurnRecord, manifest: TurnInputManifest): string {
+    const instructions = getSessionInstructions(this.db, session.session_id);
+    const task = getTurnEventPayload(this.db, turn.turn_id, "turn_admitted")?.task as Record<string, unknown> | undefined;
+    if (instructions === null || sha256Hex(instructions) !== session.instructions_hash ||
+        !task || typeof task.goal !== "string" || sha256Hex(task.goal) !== turn.task_goal_hash) {
+      throw new BrokerError("INPUT_DELIVERY_FAILED", "Persisted session instructions or task contract is missing or inconsistent.");
+    }
     const lines: string[] = [
       "agent-broker context envelope (deterministic, broker-generated)",
       `turn=${turn.turn_id} session=${session.session_id} role=${session.role}`,
       `workspace=${session.workspace_id ?? "none"} baseline_snapshot=${turn.baseline_snapshot_id ?? "none"}`,
+      "[session instructions]", instructions, "[/session instructions]",
+      "[task contract JSON]", JSON.stringify(task), "[/task contract JSON]",
       // §9.3: the prompt states which snapshot replaced the previous code.
       ...(turn.review_target_snapshot_id
         ? [`review_target_snapshot=${turn.review_target_snapshot_id} (this replaced the previous code in your cwd)`]

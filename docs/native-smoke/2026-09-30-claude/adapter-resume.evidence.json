@@ -1,0 +1,232 @@
+{
+  "provider": "claude-code",
+  "requestedModel": "claude-haiku-4-5-20251001",
+  "platform": "win32",
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T18:38:13.408Z",
+  "scope": "adapter-only; no broker lifecycle/profile acceptance",
+  "usage": "unknown; not exposed by adapter",
+  "turns": [
+    {
+      "index": 0,
+      "requestedNativeRef": null,
+      "events": [
+        {
+          "type": "native_ref_obtained",
+          "payload": {
+            "ref": "a44cbc4e-54eb-48e3-8a00-f1858dcccee3"
+          }
+        },
+        {
+          "type": "progress",
+          "payload": {
+            "label": "AB_b00037e8c841497a9da8bbebbf73747e"
+          }
+        }
+      ],
+      "result": {
+        "native_outcome": "completed",
+        "native_conversation_ref": "a44cbc4e-54eb-48e3-8a00-f1858dcccee3",
+        "agent_reported": {
+          "summary": "AB_b00037e8c841497a9da8bbebbf73747e",
+          "format_status": "text_only"
+        }
+      },
+      "markerMatched": true,
+      "dispatchGateCalls": 1,
+      "observedModel": "claude-haiku-4-5-20251001",
+      "observedNativeRef": "a44cbc4e-54eb-48e3-8a00-f1858dcccee3",
+      "rawResultUsage": {
+        "input_tokens": 9,
+        "cache_creation_input_tokens": 10161,
+        "cache_read_input_tokens": 18091,
+        "output_tokens": 102,
+        "output_tokens_details": {
+          "thinking_tokens": 75
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 10161,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 9,
+            "output_tokens": 102,
+            "cache_read_input_tokens": 18091,
+            "cache_creation_input_tokens": 10161,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 10161
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "rawModelUsage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 9,
+          "outputTokens": 102,
+          "cacheReadInputTokens": 18091,
+          "cacheCreationInputTokens": 10161,
+          "webSearchRequests": 0,
+          "costUSD": 0.0226501,
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "thinkingTokens": 75,
+          "canonicalModel": "claude-haiku-4-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "reportedCostUsd": 0.0226501,
+      "permissionMode": "default",
+      "assistantModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5-20251001"
+      ]
+    },
+    {
+      "index": 1,
+      "requestedNativeRef": "a44cbc4e-54eb-48e3-8a00-f1858dcccee3",
+      "events": [
+        {
+          "type": "native_ref_obtained",
+          "payload": {
+            "ref": "a44cbc4e-54eb-48e3-8a00-f1858dcccee3"
+          }
+        },
+        {
+          "type": "progress",
+          "payload": {
+            "label": "AB_b00037e8c841497a9da8bbebbf73747e"
+          }
+        }
+      ],
+      "result": {
+        "native_outcome": "completed",
+        "native_conversation_ref": "a44cbc4e-54eb-48e3-8a00-f1858dcccee3",
+        "agent_reported": {
+          "summary": "AB_b00037e8c841497a9da8bbebbf73747e",
+          "format_status": "text_only"
+        }
+      },
+      "markerMatched": true,
+      "dispatchGateCalls": 1,
+      "observedModel": "claude-haiku-4-5-20251001",
+      "observedNativeRef": "a44cbc4e-54eb-48e3-8a00-f1858dcccee3",
+      "rawResultUsage": {
+        "input_tokens": 9,
+        "cache_creation_input_tokens": 1393,
+        "cache_read_input_tokens": 28252,
+        "output_tokens": 93,
+        "output_tokens_details": {
+          "thinking_tokens": 66
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 1393,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 9,
+            "output_tokens": 93,
+            "cache_read_input_tokens": 28252,
+            "cache_creation_input_tokens": 1393,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 1393
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "rawModelUsage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 18,
+          "outputTokens": 195,
+          "thinkingTokens": 141,
+          "cacheReadInputTokens": 46343,
+          "cacheCreationInputTokens": 11554,
+          "webSearchRequests": 0,
+          "costUSD": 0.0287353,
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "canonicalModel": "claude-haiku-4-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "reportedCostUsd": 0.0287353,
+      "permissionMode": "default",
+      "assistantModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5-20251001"
+      ]
+    }
+  ],
+  "adapterVersion": "0.2.0",
+  "status": "headless-and-resume-passed",
+  "finishedAt": "2026-09-30T18:38:23.196Z",
+  "processes": [
+    {
+      "binary": "C:\\Users\\902st\\.local\\bin\\claude.exe",
+      "args": [
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--model",
+        "claude-haiku-4-5-20251001"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T18-38-13-403Z-claude-code\\workspace",
+      "pid": 21168,
+      "exitCode": 0,
+      "stdout": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"2aa5e078-004b-490e-875a-b7262dbd3e93\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"14160dd1-ed86-446e-a1e8-02266c5f7961\",\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\"}\n{\"type\":\"system\",\"subtype\":\"hook_response\",\"hook_id\":\"2aa5e078-004b-490e-875a-b7262dbd3e93\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"output\":\"[OMITTED custom hook output]\",\"stdout\":\"[OMITTED custom hook output]\",\"stderr\":\"[OMITTED custom hook output]\",\"exit_code\":0,\"outcome\":\"success\",\"uuid\":\"597d7b5a-5e3f-47ee-a05e-aa852064c11b\",\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\"}\n{\"type\":\"system\",\"subtype\":\"commands_changed\",\"commands\":[],\"uuid\":\"7b4f4af7-4e89-42cd-9672-f4c45550c57f\",\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"commandsCount\":77}\n{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"C:\\\\projects\\\\gemslibe\\\\ago\\\\agent-broker\\\\.state\\\\native-smoke\\\\2026-09-30T18-38-13-403Z-claude-code\\\\workspace\",\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"tools\":[\"Task\",\"Bash\",\"CronCreate\",\"CronDelete\",\"CronList\",\"DesignSync\",\"Edit\",\"EnterWorktree\",\"ExitWorktree\",\"Glob\",\"Grep\",\"ListAgents\",\"LSP\",\"Monitor\",\"NotebookEdit\",\"PowerShell\",\"PushNotification\",\"Read\",\"RemoteTrigger\",\"ReportFindings\",\"ScheduleWakeup\",\"SendMessage\",\"ShareOnboardingGuide\",\"Skill\",\"TaskCreate\",\"TaskGet\",\"TaskList\",\"TaskStop\",\"TaskUpdate\",\"ToolSearch\",\"WebFetch\",\"WebSearch\",\"Workflow\",\"Write\",\"mcp__claude_ai_Claude_Docs__batch\",\"mcp__claude_ai_Claude_Docs__create\",\"mcp__claude_ai_Claude_Docs__delete\",\"mcp__claude_ai_Claude_Docs__export\",\"mcp__claude_ai_Claude_Docs__guide\",\"mcp__claude_ai_Claude_Docs__query\",\"mcp__claude_ai_Claude_Docs__read\",\"mcp__claude_ai_Claude_Docs__update\"],\"mcp_servers\":[{\"name\":\"claude.ai Claude Docs\",\"status\":\"connected\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Atlassian MCP\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Slack\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Atlassian\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Salesforce - Read Only\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Gmail\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Microsoft 365\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Figma\",\"status\":\"needs-auth\",\"source\":\"claudeai\"}],\"model\":\"claude-haiku-4-5-20251001\",\"permissionMode\":\"default\",\"slash_commands\":[\"fusion\",\"deep-research\",\"superpowers:brainstorming\",\"superpowers:dispatching-parallel-agents\",\"superpowers:executing-plans\",\"superpowers:finishing-a-development-branch\",\"superpowers:receiving-code-review\",\"superpowers:requesting-code-review\",\"superpowers:subagent-driven-development\",\"superpowers:systematic-debugging\",\"superpowers:test-driven-development\",\"superpowers:using-git-worktrees\",\"superpowers:using-superpowers\",\"superpowers:verification-before-completion\",\"superpowers:writing-plans\",\"superpowers:writing-skills\",\"design\",\"design-sync\",\"dataviz\",\"update-config\",\"verify\",\"debug\",\"code-review\",\"simplify\",\"batch\",\"fewer-permission-prompts\",\"doctor\",\"loop\",\"anthropic-skills:docs\",\"anthropic-skills:google-workspace\",\"anthropic-skills:import-memory\",\"anthropic-skills:morning\",\"anthropic-skills:skill-creator\",\"anthropic-skills:xlsx\",\"anthropic-skills:pptx\",\"anthropic-skills:pdf\",\"anthropic-skills:docx\",\"schedule\",\"claude-api\",\"workflow-authoring\",\"run\",\"run-skill-generator\",\"advisor\",\"agents\",\"auto-mode-setup\",\"autocompact\",\"clear\",\"color\",\"compact\",\"config\",\"output-style\",\"context\",\"effort\",\"fast\",\"focus\",\"heapdump\",\"init\",\"mcp\",\"import\",\"model\",\"__remote-workflow\",\"workflow-launch-exec\",\"reload-plugins\",\"reload-skills\",\"rename\",\"security-review\",\"usage-credits\",\"extra-usage\",\"usage\",\"insights\",\"recap\",\"skill-doctor\",\"goal\",\"design-consent\",\"design-revoke\",\"list-agents\",\"team-onboarding\"],\"terminal_slash_commands\":[\"doctor\",\"color\",\"focus\",\"reload-plugins\"],\"apiKeySource\":\"none\",\"claude_code_version\":\"2.1.285\",\"output_style\":\"default\",\"agents\":[\"claude\",\"Explore\",\"general-purpose\",\"Plan\",\"statusline-setup\"],\"skills\":[\"fusion\",\"deep-research\",\"superpowers:brainstorming\",\"superpowers:dispatching-parallel-agents\",\"superpowers:executing-plans\",\"superpowers:finishing-a-development-branch\",\"superpowers:receiving-code-review\",\"superpowers:requesting-code-review\",\"superpowers:subagent-driven-development\",\"superpowers:systematic-debugging\",\"superpowers:test-driven-development\",\"superpowers:using-git-worktrees\",\"superpowers:using-superpowers\",\"superpowers:verification-before-completion\",\"superpowers:writing-plans\",\"superpowers:writing-skills\",\"design\",\"design-sync\",\"dataviz\",\"update-config\",\"verify\",\"debug\",\"code-review\",\"simplify\",\"batch\",\"fewer-permission-prompts\",\"doctor\",\"loop\",\"anthropic-skills:xlsx\",\"anthropic-skills:pptx\",\"anthropic-skills:docx\",\"schedule\",\"claude-api\",\"workflow-authoring\",\"run\",\"run-skill-generator\",\"anthropic-skills:docs\",\"anthropic-skills:google-workspace\",\"anthropic-skills:import-memory\",\"anthropic-skills:morning\",\"anthropic-skills:pdf\",\"anthropic-skills:skill-creator\"],\"plugins\":[{\"name\":\"superpowers\",\"path\":\"C:\\\\Users\\\\902st\\\\.claude\\\\plugins\\\\cache\\\\superpowers-marketplace\\\\superpowers\\\\6.1.1\",\"source\":\"superpowers@superpowers-marketplace\",\"version\":\"6.1.1\"},{\"name\":\"clangd-lsp\",\"path\":\"C:\\\\Users\\\\902st\\\\.claude\\\\plugins\\\\cache\\\\claude-plugins-official\\\\clangd-lsp\\\\1.0.0\",\"source\":\"clangd-lsp@claude-plugins-official\",\"version\":\"1.0.0\"},{\"name\":\"rust-analyzer-lsp\",\"path\":\"C:\\\\Users\\\\902st\\\\.claude\\\\plugins\\\\cache\\\\claude-plugins-official\\\\rust-analyzer-lsp\\\\1.0.0\",\"source\":\"rust-analyzer-lsp@claude-plugins-official\",\"version\":\"1.0.0\"},{\"name\":\"cc-plugin-agents-md\",\"path\":\"builtin\",\"source\":\"cc-plugin-agents-md@builtin\"},{\"name\":\"cc-plugin-telemetry\",\"path\":\"builtin\",\"source\":\"cc-plugin-telemetry@builtin\"}],\"capabilities\":[\"interrupt_receipt_v1\",\"interrupt_cancel_queued_v1\",\"msg_lifecycle_v1\",\"mcp_read_resource_v1\",\"mcp_tool_ui_meta_v1\"],\"analytics_disabled\":false,\"product_feedback_disabled\":false,\"uuid\":\"dc317eaa-2361-4789-beb0-45b8f236e895\",\"memory_paths\":{\"auto\":\"C:\\\\Users\\\\902st\\\\.claude\\\\projects\\\\C--projects-gemslibe-ago-agent-broker\\\\memory\\\\\"},\"messaging_socket_path\":\"\\\\\\\\.\\\\pipe\\\\LOCAL\\\\cc-msg-ac8fa2b65bbf27f962c14e7cb977c7cf\",\"fast_mode_state\":\"off\",\"fast_mode_disabled_reason\":\"sdk_opt_in_required\",\"per_turn_effort_active\":false,\"view_mode\":\"default\",\"powershell_path\":\"C:\\\\Users\\\\902st\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\"}\n{\"type\":\"system\",\"subtype\":\"commands_changed\",\"commands\":[],\"uuid\":\"2dd60d6d-93bd-458b-a6f0-8d52cff121e7\",\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"commandsCount\":77}\n{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":50,\"estimated_tokens_delta\":50,\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"uuid\":\"c237bc0a-076a-46b4-8b8d-76f7e05a752b\"}\n{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":150,\"estimated_tokens_delta\":100,\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"uuid\":\"dda6b14e-d065-4330-a6fe-e1f2d7c8515a\"}\n{\"type\":\"assistant\",\"message\":{\"model\":\"claude-haiku-4-5-20251001\",\"id\":\"msg_011Cfa7MDoSusWJvujqZCAYf\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"Es4ECtABCBIYAipAdwhJrpeoGaYg42RCYWrNIN09zuHM+M9fcASnZFgHvzZTJEewSMh1rACtP7QbhBXhrbOeUn95YUYsEXzZsjHN5TIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okZjkxYjM1YjktZGNlNy00NjI5LWFjNTMtMGI2ZjU2MmI3MjVlchCl2hzu1qfnl1IX+lOpo6jviAEBmgEbChljbGF1ZGUtaGFpa3UtNC01LTIwMjUxMDAxqAGarvXVBrABAhIMHcMu+dwFlCw2oKj1GgwRrf0BiBqBxKz4o14iMOTUXo7ZajrWDA1MIqw4gPPspNVOByMp2h+qwYVjohSw9tivj/AahlDiyuEhU0t0eiqqAqpTmefHBfqh0oevX07ti+MwPkq8J22IqKZVIKdewmpCDpZH/xT1uUQmo+6V2eY0WOJt5yDS7w3SJGfZJAApryWA24J+v8MqfeuLOlOUgc2JThVa5IacvYLdNtixM9kIMc1j3tULLXUI6l14pygnqGUmMrdrVvi1BPF0CX+o6Oh0c+ok7kUslLDp92Roh5EZqVkIBrMWnJl8Cpi617WHrBOLfVna6lbRZak6Nu5uHqVvYxOdgZsiRYcDYEJNU4uo7tr3GY6WVQUDifEhnhEgOMK5sBaJm1gNWgNYGsugyavmBBWzHuD8IMZwxZUQ3iyO4Ul2BoAxNRMnxlwER51FCkjNeyJ6tjY8y5m2H1UAyqrYHaIjQUkw4Oo+qM3iJ2asQ3rjsRHsRqhL0W4YAQ==\"}],\"container\":null,\"stop_reason\":null,\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":9,\"cache_creation_input_tokens\":10161,\"cache_read_input_tokens\":18091,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":10161},\"output_tokens\":4,\"service_tier\":\"standard\",\"inference_geo\":\"not_available\"},\"input_transformations\":[],\"diagnostics\":null,\"context_management\":null},\"parent_tool_use_id\":null,\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"uuid\":\"8be2208b-e30d-4c50-a16c-ee301327fbb0\",\"timestamp\":\"2026-09-30T18:38:17.479Z\",\"request_id\":\"req_011Cfa7MDJvCKHU4ZmZpSjdw\"}\n{\"type\":\"assistant\",\"message\":{\"model\":\"claude-haiku-4-5-20251001\",\"id\":\"msg_011Cfa7MDoSusWJvujqZCAYf\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"AB_b00037e8c841497a9da8bbebbf73747e\"}],\"container\":null,\"stop_reason\":null,\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":9,\"cache_creation_input_tokens\":10161,\"cache_read_input_tokens\":18091,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":10161},\"output_tokens\":4,\"service_tier\":\"standard\",\"inference_geo\":\"not_available\"},\"input_transformations\":[],\"diagnostics\":null,\"context_management\":null},\"parent_tool_use_id\":null,\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"uuid\":\"880d3197-c7f5-42e4-a920-8bf2481f5e74\",\"timestamp\":\"2026-09-30T18:38:17.576Z\",\"request_id\":\"req_011Cfa7MDJvCKHU4ZmZpSjdw\"}\n{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\",\"resetsAt\":1790811000,\"rateLimitType\":\"five_hour\",\"overageStatus\":\"rejected\",\"overageDisabledReason\":\"org_level_disabled_until\",\"isUsingOverage\":false,\"unifiedWindows\":{\"five_hour\":{\"utilization\":0,\"resetsAt\":1790811000},\"seven_day\":{\"utilization\":0.31,\"resetsAt\":1791298800}}},\"uuid\":\"d6d5ca1b-e73b-4bcf-aa94-403ed7c2dd0d\",\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\"}\n{\"duration_api_ms\":1843,\"stop_reason\":\"end_turn\",\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"total_cost_usd\":0.0226501,\"usage\":{\"input_tokens\":9,\"cache_creation_input_tokens\":10161,\"cache_read_input_tokens\":18091,\"output_tokens\":102,\"output_tokens_details\":{\"thinking_tokens\":75},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":10161,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"not_available\",\"iterations\":[{\"input_tokens\":9,\"output_tokens\":102,\"cache_read_input_tokens\":18091,\"cache_creation_input_tokens\":10161,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":10161},\"type\":\"message\"}],\"speed\":\"standard\",\"fallback_credit\":null},\"modelUsage\":{\"claude-haiku-4-5-20251001\":{\"inputTokens\":9,\"outputTokens\":102,\"cacheReadInputTokens\":18091,\"cacheCreationInputTokens\":10161,\"webSearchRequests\":0,\"costUSD\":0.0226501,\"contextWindow\":200000,\"maxOutputTokens\":32000,\"thinkingTokens\":75,\"canonicalModel\":\"claude-haiku-4-5\",\"provider\":\"firstParty\",\"costBasis\":\"list\"}},\"permission_denials\":[],\"terminal_reason\":\"completed\",\"fast_mode_state\":\"off\",\"fast_mode_disabled_reason\":\"sdk_opt_in_required\",\"subagent_stats\":{\"spawned\":0,\"requested\":{\"background\":0,\"foreground\":0,\"unset\":0},\"started_in_background\":0,\"max_depth\":0,\"spawned_by_subagents\":0,\"completed\":0,\"failed\":0,\"killed\":{\"parent\":0,\"user\":0,\"system\":0},\"refused\":{\"depth_limit\":0,\"concurrency_limit\":0,\"budget\":0},\"by_type\":{}},\"is_error\":false,\"num_turns\":1,\"subtype\":\"success\",\"api_error_status\":null,\"result\":\"AB_b00037e8c841497a9da8bbebbf73747e\",\"ttft_ms\":1786,\"type\":\"result\",\"duration_ms\":1918,\"uuid\":\"c5f00e82-7198-4f02-aef4-2e3b4ec8dd3d\",\"ttft_stream_ms\":999,\"time_to_request_ms\":70,\"first_content_frame_ms\":999,\"queued_turn_count\":0,\"result_index\":0}\n",
+      "stderr": "",
+      "startedAt": "2026-09-30T18:38:13.481Z",
+      "stdin": "Remember this marker for the next turn: AB_b00037e8c841497a9da8bbebbf73747e. Reply exactly AB_b00037e8c841497a9da8bbebbf73747e. Do not use tools, read files, run commands, or change any file.\n[broker-eor agent-broker:9e381179]\n",
+      "finishedAt": "2026-09-30T18:38:18.900Z"
+    },
+    {
+      "binary": "C:\\Users\\902st\\.local\\bin\\claude.exe",
+      "args": [
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--model",
+        "claude-haiku-4-5-20251001",
+        "--resume",
+        "a44cbc4e-54eb-48e3-8a00-f1858dcccee3"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T18-38-13-403Z-claude-code\\workspace",
+      "pid": 31032,
+      "exitCode": 0,
+      "stdout": "{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"C:\\\\projects\\\\gemslibe\\\\ago\\\\agent-broker\\\\.state\\\\native-smoke\\\\2026-09-30T18-38-13-403Z-claude-code\\\\workspace\",\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"tools\":[\"Task\",\"Bash\",\"CronCreate\",\"CronDelete\",\"CronList\",\"DesignSync\",\"Edit\",\"EnterWorktree\",\"ExitWorktree\",\"Glob\",\"Grep\",\"ListAgents\",\"LSP\",\"Monitor\",\"NotebookEdit\",\"PowerShell\",\"PushNotification\",\"Read\",\"RemoteTrigger\",\"ReportFindings\",\"ScheduleWakeup\",\"SendMessage\",\"ShareOnboardingGuide\",\"Skill\",\"TaskCreate\",\"TaskGet\",\"TaskList\",\"TaskStop\",\"TaskUpdate\",\"ToolSearch\",\"WebFetch\",\"WebSearch\",\"Workflow\",\"Write\"],\"mcp_servers\":[{\"name\":\"plugin:engineering:linear\",\"status\":\"needs-auth\",\"source\":\"plugin\"},{\"name\":\"plugin:engineering:asana\",\"status\":\"needs-auth\",\"source\":\"plugin\"},{\"name\":\"plugin:engineering:atlassian\",\"status\":\"needs-auth\",\"source\":\"plugin\"},{\"name\":\"plugin:engineering:notion\",\"status\":\"needs-auth\",\"source\":\"plugin\"},{\"name\":\"plugin:engineering:github\",\"status\":\"needs-auth\",\"source\":\"plugin\"},{\"name\":\"plugin:engineering:pagerduty\",\"status\":\"needs-auth\",\"source\":\"plugin\"},{\"name\":\"plugin:engineering:datadog\",\"status\":\"needs-auth\",\"source\":\"plugin\"},{\"name\":\"plugin:engineering:google calendar\",\"status\":\"failed\",\"source\":\"plugin\"},{\"name\":\"plugin:engineering:gmail\",\"status\":\"failed\",\"source\":\"plugin\"},{\"name\":\"claude.ai Claude Docs\",\"status\":\"pending\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Atlassian MCP\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Slack\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Atlassian\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Salesforce - Read Only\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Gmail\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Microsoft 365\",\"status\":\"needs-auth\",\"source\":\"claudeai\"},{\"name\":\"claude.ai Figma\",\"status\":\"needs-auth\",\"source\":\"claudeai\"}],\"model\":\"claude-haiku-4-5-20251001\",\"permissionMode\":\"default\",\"slash_commands\":[\"fusion\",\"deep-research\",\"superpowers:brainstorming\",\"superpowers:dispatching-parallel-agents\",\"superpowers:executing-plans\",\"superpowers:finishing-a-development-branch\",\"superpowers:receiving-code-review\",\"superpowers:requesting-code-review\",\"superpowers:subagent-driven-development\",\"superpowers:systematic-debugging\",\"superpowers:test-driven-development\",\"superpowers:using-git-worktrees\",\"superpowers:using-superpowers\",\"superpowers:verification-before-completion\",\"superpowers:writing-plans\",\"superpowers:writing-skills\",\"cowork-plugin-management:cowork-plugin-customizer\",\"cowork-plugin-management:create-cowork-plugin\",\"engineering:architecture\",\"engineering:code-review\",\"engineering:debug\",\"engineering:deploy-checklist\",\"engineering:documentation\",\"engineering:incident-response\",\"engineering:standup\",\"engineering:system-design\",\"engineering:tech-debt\",\"engineering:testing-strategy\",\"design\",\"design-sync\",\"dataviz\",\"update-config\",\"verify\",\"debug\",\"code-review\",\"simplify\",\"batch\",\"fewer-permission-prompts\",\"doctor\",\"loop\",\"schedule\",\"claude-api\",\"workflow-authoring\",\"run\",\"run-skill-generator\",\"advisor\",\"agents\",\"auto-mode-setup\",\"autocompact\",\"clear\",\"color\",\"compact\",\"config\",\"output-style\",\"context\",\"effort\",\"fast\",\"focus\",\"heapdump\",\"init\",\"mcp\",\"import\",\"model\",\"__remote-workflow\",\"workflow-launch-exec\",\"reload-plugins\",\"reload-skills\",\"rename\",\"security-review\",\"usage-credits\",\"extra-usage\",\"usage\",\"insights\",\"recap\",\"skill-doctor\",\"goal\",\"design-consent\",\"design-revoke\",\"list-agents\",\"team-onboarding\",\"anthropic-skills:docs\",\"anthropic-skills:docx\",\"anthropic-skills:google-workspace\",\"anthropic-skills:import-memory\",\"anthropic-skills:morning\",\"anthropic-skills:pdf\",\"anthropic-skills:pptx\",\"anthropic-skills:skill-creator\",\"anthropic-skills:xlsx\"],\"terminal_slash_commands\":[\"doctor\",\"color\",\"focus\",\"reload-plugins\"],\"apiKeySource\":\"none\",\"claude_code_version\":\"2.1.285\",\"output_style\":\"default\",\"agents\":[\"claude\",\"Explore\",\"general-purpose\",\"Plan\",\"statusline-setup\"],\"skills\":[\"fusion\",\"deep-research\",\"superpowers:brainstorming\",\"superpowers:dispatching-parallel-agents\",\"superpowers:executing-plans\",\"superpowers:finishing-a-development-branch\",\"superpowers:receiving-code-review\",\"superpowers:requesting-code-review\",\"superpowers:subagent-driven-development\",\"superpowers:systematic-debugging\",\"superpowers:test-driven-development\",\"superpowers:using-git-worktrees\",\"superpowers:using-superpowers\",\"superpowers:verification-before-completion\",\"superpowers:writing-plans\",\"superpowers:writing-skills\",\"cowork-plugin-management:cowork-plugin-customizer\",\"cowork-plugin-management:create-cowork-plugin\",\"engineering:architecture\",\"engineering:code-review\",\"engineering:debug\",\"engineering:deploy-checklist\",\"engineering:documentation\",\"engineering:incident-response\",\"engineering:standup\",\"engineering:system-design\",\"engineering:tech-debt\",\"engineering:testing-strategy\",\"design\",\"design-sync\",\"dataviz\",\"update-config\",\"verify\",\"debug\",\"code-review\",\"simplify\",\"batch\",\"fewer-permission-prompts\",\"doctor\",\"loop\",\"schedule\",\"claude-api\",\"workflow-authoring\",\"run\",\"run-skill-generator\",\"anthropic-skills:docs\",\"anthropic-skills:docx\",\"anthropic-skills:google-workspace\",\"anthropic-skills:import-memory\",\"anthropic-skills:morning\",\"anthropic-skills:pdf\",\"anthropic-skills:pptx\",\"anthropic-skills:skill-creator\",\"anthropic-skills:xlsx\"],\"plugins\":[{\"name\":\"superpowers\",\"path\":\"C:\\\\Users\\\\902st\\\\.claude\\\\plugins\\\\cache\\\\superpowers-marketplace\\\\superpowers\\\\6.1.1\",\"source\":\"superpowers@superpowers-marketplace\",\"version\":\"6.1.1\"},{\"name\":\"clangd-lsp\",\"path\":\"C:\\\\Users\\\\902st\\\\.claude\\\\plugins\\\\cache\\\\claude-plugins-official\\\\clangd-lsp\\\\1.0.0\",\"source\":\"clangd-lsp@claude-plugins-official\",\"version\":\"1.0.0\"},{\"name\":\"rust-analyzer-lsp\",\"path\":\"C:\\\\Users\\\\902st\\\\.claude\\\\plugins\\\\cache\\\\claude-plugins-official\\\\rust-analyzer-lsp\\\\1.0.0\",\"source\":\"rust-analyzer-lsp@claude-plugins-official\",\"version\":\"1.0.0\"},{\"name\":\"cowork-plugin-management\",\"path\":\"C:\\\\Users\\\\902st\\\\.claude\\\\plugins\\\\synced\\\\f91b35b9-dce7-4629-ac53-0b6f562b725e_4565e575-45e2-45e1-bd57-1361eec787af\\\\cowork-plugin-management\",\"source\":\"cowork-plugin-management@synced\",\"version\":\"0.2.2\"},{\"name\":\"engineering\",\"path\":\"C:\\\\Users\\\\902st\\\\.claude\\\\plugins\\\\synced\\\\f91b35b9-dce7-4629-ac53-0b6f562b725e_4565e575-45e2-45e1-bd57-1361eec787af\\\\engineering\",\"source\":\"engineering@synced\",\"version\":\"1.2.0\"},{\"name\":\"cc-plugin-agents-md\",\"path\":\"builtin\",\"source\":\"cc-plugin-agents-md@builtin\"},{\"name\":\"cc-plugin-telemetry\",\"path\":\"builtin\",\"source\":\"cc-plugin-telemetry@builtin\"}],\"capabilities\":[\"interrupt_receipt_v1\",\"interrupt_cancel_queued_v1\",\"msg_lifecycle_v1\",\"mcp_read_resource_v1\",\"mcp_tool_ui_meta_v1\"],\"analytics_disabled\":false,\"product_feedback_disabled\":false,\"uuid\":\"e160f5ce-a2f8-4ee9-970a-8b6530db9b65\",\"memory_paths\":{\"auto\":\"C:\\\\Users\\\\902st\\\\.claude\\\\projects\\\\C--projects-gemslibe-ago-agent-broker\\\\memory\\\\\"},\"messaging_socket_path\":\"\\\\\\\\.\\\\pipe\\\\LOCAL\\\\cc-msg-797f7584f7203236db78f71b9e14f149\",\"fast_mode_state\":\"off\",\"fast_mode_disabled_reason\":\"sdk_opt_in_required\",\"per_turn_effort_active\":false,\"view_mode\":\"default\",\"powershell_path\":\"C:\\\\Users\\\\902st\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\"}\n{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":50,\"estimated_tokens_delta\":50,\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"uuid\":\"a9fb120e-628b-4449-9b85-ecb177e8d8ef\"}\n{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":132,\"estimated_tokens_delta\":82,\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"uuid\":\"ea98f090-4c0d-495e-9bbf-395898297164\"}\n{\"type\":\"assistant\",\"message\":{\"model\":\"claude-haiku-4-5-20251001\",\"id\":\"msg_011Cfa7MYmCrneLD2fiJ9gkG\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"EokECtABCBIYAipAUrNHPv6SbCXysIwdGJ7rTGI3g7LZMjyBtn0/SFGEflM6770BubcGxCWLSFFlPa76vYgpeK6HAgX4aerh1cTBWDIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okZjkxYjM1YjktZGNlNy00NjI5LWFjNTMtMGI2ZjU2MmI3MjVlchCl2hzu1qfnl1IX+lOpo6jviAEBmgEbChljbGF1ZGUtaGFpa3UtNC01LTIwMjUxMDAxqAGervXVBrABAhIMDr416KTaeNR3HvBdGgyPnrFlskKkjf30QB4iMPrSE49znhBTqOxYDNsJirwcRaXlN1oFFwWEPBYyEy7CV0vCc1BEVhzH8TBLd4rcuyrlARXCi0SAdJuowAtO7Pj1t/uNO/K3Q6QHRj+8jBEMSj/elbFXhAeyo9RQvG5x0EIWeum7sCGCjFmRWgfOPJdO4tqTM5jw9hMuqvW2UhR9HZTwb2NDDWeYecoC9kNvaR46yQuUIpT+3M8iK+WVcTC6JbDDXaVCc5FCTjZTV+iSkN3YyFsWHOWUxiR6W0S7WRzEg8MCBmOWLU6nXzF3LtRGxupB/DFfXGzQExGmTlvuqJyJP+X3SYITlXzFu7Ez8YEViLJKSkOiqmLILhqIyyBf/x2k8g7wU1OOvFUwuTEG5gBxPgajB78YAQ==\"}],\"container\":null,\"stop_reason\":null,\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":9,\"cache_creation_input_tokens\":1393,\"cache_read_input_tokens\":28252,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":1393},\"output_tokens\":3,\"service_tier\":\"standard\",\"inference_geo\":\"not_available\"},\"input_transformations\":[],\"diagnostics\":null,\"context_management\":null},\"parent_tool_use_id\":null,\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"uuid\":\"588adef2-ca93-4101-a907-1afa9c649412\",\"timestamp\":\"2026-09-30T18:38:21.670Z\",\"request_id\":\"req_011Cfa7MYHgdpDvc5MDYCcHv\"}\n{\"type\":\"assistant\",\"message\":{\"model\":\"claude-haiku-4-5-20251001\",\"id\":\"msg_011Cfa7MYmCrneLD2fiJ9gkG\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"AB_b00037e8c841497a9da8bbebbf73747e\"}],\"container\":null,\"stop_reason\":null,\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":9,\"cache_creation_input_tokens\":1393,\"cache_read_input_tokens\":28252,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":1393},\"output_tokens\":3,\"service_tier\":\"standard\",\"inference_geo\":\"not_available\"},\"input_transformations\":[],\"diagnostics\":null,\"context_management\":null},\"parent_tool_use_id\":null,\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"uuid\":\"0cd3cbf4-952d-4ead-b947-9ad18247ae42\",\"timestamp\":\"2026-09-30T18:38:21.764Z\",\"request_id\":\"req_011Cfa7MYHgdpDvc5MDYCcHv\"}\n{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\",\"resetsAt\":1790811000,\"rateLimitType\":\"five_hour\",\"overageStatus\":\"rejected\",\"overageDisabledReason\":\"org_level_disabled_until\",\"isUsingOverage\":false,\"unifiedWindows\":{\"five_hour\":{\"utilization\":0,\"resetsAt\":1790811000},\"seven_day\":{\"utilization\":0.31,\"resetsAt\":1791298800}}},\"uuid\":\"c697d4cd-e795-42c7-b5b9-240cb74f572b\",\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\"}\n{\"duration_api_ms\":3435,\"stop_reason\":\"end_turn\",\"session_id\":\"a44cbc4e-54eb-48e3-8a00-f1858dcccee3\",\"total_cost_usd\":0.0287353,\"usage\":{\"input_tokens\":9,\"cache_creation_input_tokens\":1393,\"cache_read_input_tokens\":28252,\"output_tokens\":93,\"output_tokens_details\":{\"thinking_tokens\":66},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":1393,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"not_available\",\"iterations\":[{\"input_tokens\":9,\"output_tokens\":93,\"cache_read_input_tokens\":28252,\"cache_creation_input_tokens\":1393,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":1393},\"type\":\"message\"}],\"speed\":\"standard\",\"fallback_credit\":null},\"modelUsage\":{\"claude-haiku-4-5-20251001\":{\"inputTokens\":18,\"outputTokens\":195,\"thinkingTokens\":141,\"cacheReadInputTokens\":46343,\"cacheCreationInputTokens\":11554,\"webSearchRequests\":0,\"costUSD\":0.0287353,\"contextWindow\":200000,\"maxOutputTokens\":32000,\"canonicalModel\":\"claude-haiku-4-5\",\"provider\":\"firstParty\",\"costBasis\":\"list\"}},\"permission_denials\":[],\"terminal_reason\":\"completed\",\"fast_mode_state\":\"off\",\"fast_mode_disabled_reason\":\"sdk_opt_in_required\",\"subagent_stats\":{\"spawned\":0,\"requested\":{\"background\":0,\"foreground\":0,\"unset\":0},\"started_in_background\":0,\"max_depth\":0,\"spawned_by_subagents\":0,\"completed\":0,\"failed\":0,\"killed\":{\"parent\":0,\"user\":0,\"system\":0},\"refused\":{\"depth_limit\":0,\"concurrency_limit\":0,\"budget\":0},\"by_type\":{}},\"is_error\":false,\"num_turns\":1,\"subtype\":\"success\",\"api_error_status\":null,\"result\":\"AB_b00037e8c841497a9da8bbebbf73747e\",\"ttft_ms\":1770,\"type\":\"result\",\"duration_ms\":1895,\"uuid\":\"440b1a01-dd5c-4460-91a3-6833abdb1f51\",\"ttft_stream_ms\":978,\"time_to_request_ms\":300,\"first_content_frame_ms\":979,\"queued_turn_count\":0,\"result_index\":0}\n",
+      "stderr": "",
+      "startedAt": "2026-09-30T18:38:18.926Z",
+      "stdin": "Return only the exact marker I asked you to remember in the previous turn. Do not use tools, read files, run commands, or change any file.\n[broker-eor agent-broker:8f0725f4]\n",
+      "finishedAt": "2026-09-30T18:38:23.195Z"
+    }
+  ],
+  "publicRedactions": [
+    "Native hook output omitted",
+    "Custom slash-command descriptions omitted"
+  ]
+}

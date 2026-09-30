@@ -1,0 +1,26 @@
+{
+  "mode": "readiness",
+  "root": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-40-29-292Z-zcode-standalone",
+  "workspace": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-40-29-292Z-zcode-standalone\\workspace",
+  "bundle": "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+  "selection": {
+    "providerId": "account:zai-individual-coding-plan",
+    "modelId": "GLM-5.3-Flash",
+    "options": {
+      "reasoningLevel": "low"
+    }
+  },
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T15:40:29.301Z",
+  "desktopProviderConfigHashBefore": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "hasStandaloneIdentity": true,
+  "hasAccountScopedKey": true,
+  "credentialValuesDisplayedOrCopied": false,
+  "generationAttempts": 0,
+  "processes": [],
+  "readiness": "local-account-registration-present; model execution verified only in smoke mode",
+  "status": "readiness-passed",
+  "desktopProviderConfigHashAfter": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "desktopProviderConfigUnchanged": true,
+  "finishedAt": "2026-09-30T15:40:29.302Z"
+}

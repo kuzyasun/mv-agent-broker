@@ -1,0 +1,170 @@
+{
+  "mode": "probe",
+  "root": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T14-59-24-760Z-zcode-app-server",
+  "bundle": "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+  "builtin": "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\config\\provider\\zcode-builtin.json",
+  "personal": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T14-59-24-760Z-zcode-app-server\\provider_config.json",
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T14:59:24.763Z",
+  "desktopSettingsHashBefore": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "processes": [
+    {
+      "pid": 78272,
+      "exitCode": 0,
+      "stderr": "",
+      "messages": [
+        {
+          "method": "startup/storageState",
+          "params": {
+            "schemaVersion": 1,
+            "attemptId": "7dc35a0b-5aef-4b3a-9961-e1c54bb88846",
+            "sequence": 1,
+            "databaseId": "fa3bf0bab0999d2e3ec796cfe4e21b5e60c7588952fd30f5963c243d32b85002",
+            "databaseKind": "session",
+            "phase": "checking",
+            "elapsedMs": 0
+          }
+        },
+        {
+          "method": "startup/storageState",
+          "params": {
+            "schemaVersion": 1,
+            "attemptId": "7dc35a0b-5aef-4b3a-9961-e1c54bb88846",
+            "sequence": 2,
+            "databaseId": "fa3bf0bab0999d2e3ec796cfe4e21b5e60c7588952fd30f5963c243d32b85002",
+            "databaseKind": "session",
+            "phase": "checking",
+            "elapsedMs": 0
+          }
+        },
+        {
+          "method": "startup/storageState",
+          "params": {
+            "schemaVersion": 1,
+            "attemptId": "7dc35a0b-5aef-4b3a-9961-e1c54bb88846",
+            "sequence": 3,
+            "databaseId": "fa3bf0bab0999d2e3ec796cfe4e21b5e60c7588952fd30f5963c243d32b85002",
+            "databaseKind": "session",
+            "phase": "checking",
+            "migration": {
+              "kind": "none",
+              "executedCount": 0,
+              "committedCount": 0
+            },
+            "elapsedMs": 31
+          }
+        },
+        {
+          "method": "startup/storageState",
+          "params": {
+            "schemaVersion": 1,
+            "attemptId": "7dc35a0b-5aef-4b3a-9961-e1c54bb88846",
+            "sequence": 4,
+            "databaseId": "fa3bf0bab0999d2e3ec796cfe4e21b5e60c7588952fd30f5963c243d32b85002",
+            "databaseKind": "session",
+            "phase": "committing",
+            "migration": {
+              "kind": "none",
+              "executedCount": 0,
+              "committedCount": 0,
+              "lastAppliedMigrationId": "0022_backfilled_session_reasoning"
+            },
+            "elapsedMs": 33
+          }
+        },
+        {
+          "method": "startup/storageState",
+          "params": {
+            "schemaVersion": 1,
+            "attemptId": "7dc35a0b-5aef-4b3a-9961-e1c54bb88846",
+            "sequence": 5,
+            "databaseId": "fa3bf0bab0999d2e3ec796cfe4e21b5e60c7588952fd30f5963c243d32b85002",
+            "databaseKind": "session",
+            "phase": "ready",
+            "migration": {
+              "kind": "none",
+              "executedCount": 0,
+              "committedCount": 0,
+              "lastAppliedMigrationId": "0022_backfilled_session_reasoning"
+            },
+            "elapsedMs": 33
+          }
+        },
+        {
+          "id": "28e9aa62-7d41-48b6-8e91-925de79a6957",
+          "result": {
+            "independentPlanState": true
+          }
+        },
+        {
+          "id": "server-1",
+          "method": "session/requestRuntimePreferences",
+          "params": {
+            "sessionId": "sess_56255539-7c97-4e25-a40e-19277b0b0289",
+            "scope": "runtime-materialization"
+          }
+        },
+        {
+          "error": {
+            "code": -32603,
+            "data": {
+              "name": "Error",
+              "stack": "Error: Provider Registry 中不存在 Model: account:zai-individual-coding-plan/GLM-5.3-Flash\n    at Object.setModel (C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs:14806:11229)\n    at C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs:15256:18381"
+            },
+            "message": "Provider Registry 中不存在 Model: account:zai-individual-coding-plan/GLM-5.3-Flash"
+          },
+          "id": "13bce1d3-e09d-44aa-b777-6483d79bed39"
+        }
+      ]
+    }
+  ],
+  "operations": [
+    {
+      "method": "runtime/capabilities",
+      "params": {},
+      "result": {
+        "independentPlanState": true
+      }
+    },
+    {
+      "method": "session/create",
+      "params": {
+        "workspace": {
+          "workspacePath": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T14-59-24-760Z-zcode-app-server\\workspace",
+          "workspaceKey": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T14-59-24-760Z-zcode-app-server\\workspace"
+        },
+        "mode": "plan",
+        "model": {
+          "providerId": "account:zai-individual-coding-plan",
+          "modelId": "GLM-5.3-Flash",
+          "options": {
+            "reasoningLevel": "low"
+          }
+        },
+        "persistence": "immediate",
+        "titleGenerationEnabled": false,
+        "mcpServers": [],
+        "toolAllowlist": [],
+        "offPeakToolEnabled": false,
+        "dynamicWorkflowEnabled": false
+      },
+      "error": "{\"code\":-32603,\"data\":{\"name\":\"Error\",\"stack\":\"Error: Provider Registry 中不存在 Model: account:zai-individual-coding-plan/GLM-5.3-Flash\\n    at Object.setModel (C:\\\\Users\\\\902st\\\\AppData\\\\Local\\\\Programs\\\\ZCode\\\\resources\\\\glm\\\\zcode.cjs:14806:11229)\\n    at C:\\\\Users\\\\902st\\\\AppData\\\\Local\\\\Programs\\\\ZCode\\\\resources\\\\glm\\\\zcode.cjs:15256:18381\"},\"message\":\"Provider Registry 中不存在 Model: account:zai-individual-coding-plan/GLM-5.3-Flash\"}"
+    }
+  ],
+  "inferenceSends": 0,
+  "capabilities": {
+    "independentPlanState": true
+  },
+  "selection": {
+    "providerId": "account:zai-individual-coding-plan",
+    "modelId": "GLM-5.3-Flash",
+    "options": {
+      "reasoningLevel": "low"
+    }
+  },
+  "status": "failed",
+  "error": "{\"code\":-32603,\"data\":{\"name\":\"Error\",\"stack\":\"Error: Provider Registry 中不存在 Model: account:zai-individual-coding-plan/GLM-5.3-Flash\\n    at Object.setModel (C:\\\\Users\\\\902st\\\\AppData\\\\Local\\\\Programs\\\\ZCode\\\\resources\\\\glm\\\\zcode.cjs:14806:11229)\\n    at C:\\\\Users\\\\902st\\\\AppData\\\\Local\\\\Programs\\\\ZCode\\\\resources\\\\glm\\\\zcode.cjs:15256:18381\"},\"message\":\"Provider Registry 中不存在 Model: account:zai-individual-coding-plan/GLM-5.3-Flash\"}",
+  "desktopSettingsHashAfter": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "desktopSettingsUnchanged": true,
+  "finishedAt": "2026-09-30T14:59:26.362Z"
+}

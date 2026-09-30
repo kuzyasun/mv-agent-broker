@@ -1,0 +1,101 @@
+{
+  "mode": "readiness",
+  "root": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-35-29-253Z-zcode-standalone",
+  "workspace": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-35-29-253Z-zcode-standalone\\workspace",
+  "bundle": "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+  "selection": {
+    "providerId": "account:zai-individual-coding-plan",
+    "modelId": "GLM-5.3-Flash",
+    "options": {
+      "reasoningLevel": "low"
+    }
+  },
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T15:35:29.258Z",
+  "desktopProviderConfigHashBefore": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "hasStandaloneIdentity": true,
+  "hasAccountScopedKey": true,
+  "credentialValuesDisplayedOrCopied": false,
+  "generationAttempts": 0,
+  "processes": [
+    {
+      "args": [
+        "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+        "--prompt",
+        "/model",
+        "--json",
+        "--mode",
+        "plan",
+        "--cwd",
+        "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-35-29-253Z-zcode-standalone\\workspace",
+        "--disallowed-tools",
+        "Bash",
+        "Write",
+        "Edit"
+      ],
+      "pid": 31860,
+      "exitCode": 0,
+      "stdout": "{\n  \"sessionId\": \"sess_64dd3805-c3b5-46d0-9209-dff64c856265\",\n  \"traceId\": \"e4c81e35-e7f8-4e35-9a05-429390105ad0\",\n  \"turnId\": \"turn_9944bb56-7a5d-40ff-982a-9c44332d61b7\",\n  \"response\": \"`/model` is a built-in ZCode CLI command handled by the client itself — it looks like it reached me as a plain message instead of opening the model picker, so here's the answer directly:\\n\\n- **Current model:** `account:zai-individual-coding-plan/GLM-5.3` (reasoning levels: low, high, max — default max)\\n- **Also configured on this host:** `account:zai-individual-coding-plan/GLM-5.3-Flash` (same reasoning levels)\\n\\nTo actually switch models, use the client's model picker (typing `/model` again at the prompt usually opens it, or `/model <name>` directly) — I can't change the session model from my side.\\n\\nIf you meant something else by `/model` (e.g., planning work on model configuration for the agent-broker project), let me know what you'd like to do.\",\n  \"usage\": {\n    \"source\": \"provider\",\n    \"modelRequestCount\": 2,\n    \"inputTokens\": 51109,\n    \"outputTokens\": 1304,\n    \"totalTokens\": 52413,\n    \"cacheReadTokens\": 25152,\n    \"cacheWriteTokens\": 0,\n    \"reasoningTokens\": 0,\n    \"webFetchRequests\": 0,\n    \"webSearchRequests\": 0\n  },\n  \"eventCount\": 1329,\n  \"projection\": {\n    \"status\": \"idle\",\n    \"turnCount\": 1,\n    \"totalTokenCount\": 52413,\n    \"contextUsed\": 26364,\n    \"contextWindow\": 200000\n  }\n}\n",
+      "stderr": "",
+      "startedAt": "2026-09-30T15:35:29.258Z",
+      "timedOut": false,
+      "finishedAt": "2026-09-30T15:36:13.315Z",
+      "result": {
+        "sessionId": "sess_64dd3805-c3b5-46d0-9209-dff64c856265",
+        "traceId": "e4c81e35-e7f8-4e35-9a05-429390105ad0",
+        "turnId": "turn_9944bb56-7a5d-40ff-982a-9c44332d61b7",
+        "response": "`/model` is a built-in ZCode CLI command handled by the client itself — it looks like it reached me as a plain message instead of opening the model picker, so here's the answer directly:\n\n- **Current model:** `account:zai-individual-coding-plan/GLM-5.3` (reasoning levels: low, high, max — default max)\n- **Also configured on this host:** `account:zai-individual-coding-plan/GLM-5.3-Flash` (same reasoning levels)\n\nTo actually switch models, use the client's model picker (typing `/model` again at the prompt usually opens it, or `/model <name>` directly) — I can't change the session model from my side.\n\nIf you meant something else by `/model` (e.g., planning work on model configuration for the agent-broker project), let me know what you'd like to do.",
+        "usage": {
+          "source": "provider",
+          "modelRequestCount": 2,
+          "inputTokens": 51109,
+          "outputTokens": 1304,
+          "totalTokens": 52413,
+          "cacheReadTokens": 25152,
+          "cacheWriteTokens": 0,
+          "reasoningTokens": 0,
+          "webFetchRequests": 0,
+          "webSearchRequests": 0
+        },
+        "eventCount": 1329,
+        "projection": {
+          "status": "idle",
+          "turnCount": 1,
+          "totalTokenCount": 52413,
+          "contextUsed": 26364,
+          "contextWindow": 200000
+        }
+      }
+    }
+  ],
+  "readiness": {
+    "sessionId": "sess_64dd3805-c3b5-46d0-9209-dff64c856265",
+    "traceId": "e4c81e35-e7f8-4e35-9a05-429390105ad0",
+    "turnId": "turn_9944bb56-7a5d-40ff-982a-9c44332d61b7",
+    "response": "`/model` is a built-in ZCode CLI command handled by the client itself — it looks like it reached me as a plain message instead of opening the model picker, so here's the answer directly:\n\n- **Current model:** `account:zai-individual-coding-plan/GLM-5.3` (reasoning levels: low, high, max — default max)\n- **Also configured on this host:** `account:zai-individual-coding-plan/GLM-5.3-Flash` (same reasoning levels)\n\nTo actually switch models, use the client's model picker (typing `/model` again at the prompt usually opens it, or `/model <name>` directly) — I can't change the session model from my side.\n\nIf you meant something else by `/model` (e.g., planning work on model configuration for the agent-broker project), let me know what you'd like to do.",
+    "usage": {
+      "source": "provider",
+      "modelRequestCount": 2,
+      "inputTokens": 51109,
+      "outputTokens": 1304,
+      "totalTokens": 52413,
+      "cacheReadTokens": 25152,
+      "cacheWriteTokens": 0,
+      "reasoningTokens": 0,
+      "webFetchRequests": 0,
+      "webSearchRequests": 0
+    },
+    "eventCount": 1329,
+    "projection": {
+      "status": "idle",
+      "turnCount": 1,
+      "totalTokenCount": 52413,
+      "contextUsed": 26364,
+      "contextWindow": 200000
+    }
+  },
+  "status": "readiness-passed",
+  "desktopProviderConfigHashAfter": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "desktopProviderConfigUnchanged": true,
+  "finishedAt": "2026-09-30T15:36:13.316Z"
+}

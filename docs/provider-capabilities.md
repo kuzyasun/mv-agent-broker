@@ -1,9 +1,18 @@
 # Provider capability matrix
 
-Per spec §13.1 and ADR-0001/ADR-0002: the native spike is **deferred** until
-the operator authorizes provider usage. Until then every native capability
-stays `unknown`/`documented` and no platform/adapter/role/profile combination
-may be advertised as `supported` (§18.1).
+Per spec §13.1 and ADR-0001/ADR-0002: the operator authorized a limited
+Antigravity/ZCode native smoke and then Cursor testing on 2026-09-30.
+[Antigravity/ZCode evidence](native-smoke/2026-09-30-antigravity-zcode/report.md),
+[Cursor evidence and scope](native-smoke/2026-09-30-cursor/report.md).
+Only individually exercised capabilities below are `smoke_tested`; full
+platform/adapter/role/profile combinations remain unverified and may not
+be advertised as `supported` (§18.1). Claude Haiku model/resume also passed
+after native login ([evidence](native-smoke/2026-09-30-claude/report.md)).
+Codex Luna/low also passed through an external Node MCP client and separate
+bridge/daemon processes ([evidence](native-smoke/2026-09-30-codex/report.md)).
+
+Setup, auth ownership, model/effort rules and limitations for every provider:
+[provider operations guide](providers.md).
 
 Legend — `support`: native | emulated | unsupported | unknown;
 `verification`: configured | documented | smoke_tested | failed.
@@ -23,58 +32,73 @@ auto-retry/fresh-session fallback/PTY machinery ported.
 | read-only enforcement | n/a | n/a | metadata-only in P1 |
 | artifact input delivery | native | smoke_tested | views + manifest since P2-2 |
 
-## codex (adapter 0.1.0, `src/providers/codex/`)
+## codex (adapter 0.2.0, `src/providers/codex/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
-| headless turn (`codex exec`, prompt via stdin) | native | documented | fusion facts |
-| turn-complete + thread-id via `-c notify=[...]` bridge | native | documented | notify.js writes events.log; thread-id = native ref |
-| resume (`codex resume <thread-id>`) | unknown | documented | not exercised headless this milestone |
+| headless turn (`codex exec --json`, prompt via stdin) | native | smoke_tested | Windows CLI 0.157.0, existing ChatGPT login, two marker turns; full task envelope after core fix |
+| native thread-id + turn completion | native | smoke_tested | thread.started ID captured before completion; native JSONL, no notify/fabricated ID; failures/conflicts tested locally |
+| resume (`codex exec resume <thread-id>`) | native | smoke_tested | exact same native ID after first process exits; marker recalled without marker in second stdin |
+| model and effort selection | native | smoke_tested | gpt-6-luna/low in both native turn contexts; other models/efforts unverified |
+| caller-independent MCP execution | native | smoke_tested | plain Node client -> stdio bridge -> named pipe -> daemon -> Codex; result summary/snapshots and session close passed |
 | cancellation (taskkill/SIGKILL tree) | native | documented | common headless infra, unit-tested with node fake CLI |
-| structured final output | unsupported | documented | text_only (`last-assistant-message`) |
-| read-only enforcement / tool restrictions | unknown | configured | needs spike |
+| structured final output | unsupported | documented | native JSONL transport; report remains text_only |
+| effective role sandbox / tool restrictions | unknown | configured | adapter requests worker workspace-write/reviewer read-only; native smoke recorded read-only for worker, no tools exercised; mapping/write-denial unverified |
+| native usage interpretation | native | smoke_tested | cumulative turn.completed counters confirmed by rollout last_token_usage; broker usage still unknown |
 
-## claude-code (adapter 0.1.0, `src/providers/claude/`)
+## claude-code (adapter 0.2.0, `src/providers/claude/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
-| headless turn (`claude --print --output-format stream-json`) | native | documented | fusion facts |
-| session-id capture (`system/init` stream event) | native | documented | hook-events parser also transcribed (SessionStart/Stop) for future use |
-| resume (`--resume <id>`) | unknown | documented | argv wired; not exercised |
+| headless turn (`claude --print --output-format stream-json --verbose`) | native | smoke_tested | Windows CLI 2.1.285, adapter 0.2.0, Haiku 4.5; stdin, default permissions, two successful processes ([evidence](native-smoke/2026-09-30-claude/report.md)) |
+| CLI authentication | native | smoke_tested | initial loggedIn=false; operator completed native login; claude.ai/Team profile reused by both adapter processes; no broker token extraction |
+| session-id capture (startup hook, init or result) | native | smoke_tested | init/result ID agrees; first startup hook contains same ID before init; final parser early emission verified by offline replay; result-only/conflict paths locally tested |
+| resume (`--resume <id>`) | native | smoke_tested | exact ID after first process exits; marker recalled without marker in second stdin; no fresh fallback |
+| model selection (`--model <id>`) | native | smoke_tested | claude-haiku-4-5-20251001 in init, assistant and modelUsage both turns; other models and effort not exercised |
 | `--settings` hooks (Stop/PermissionRequest) | unsupported | documented | deliberately NOT wired this milestone (§12.5, no hidden prompts) |
 | cancellation | native | documented | common infra |
 | structured final output | unsupported | documented | text_only |
 
-## cursor (adapter 0.1.0, `src/providers/cursor/`)
+Native `usage` was per turn; `modelUsage`/cost were cumulative on resume.
+User startup hooks can run, although broker hook/permission integration is
+unwired. Worker writes, reviewer enforcement and live tool cancellation remain
+unverified. Native rate-limit status was allowed; quota rejection was not tested.
+
+## cursor (adapter 0.2.0, `src/providers/cursor/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
-| headless turn (`cursor-agent --print --output-format stream-json --trust`) | native | documented | fusion plugin facts |
-| session-id capture (`system/init` → session_id) | native | documented | parser unit-tested |
-| resume (`--resume <id>`) | unknown | documented | argv wired; not exercised |
-| Windows shim safety (cmd /d /s /c boundary checks) | native | documented | common infra, unit-tested via node fake |
-| cancellation + inactivity timeouts | native | documented | common infra |
+| headless turn (`cursor-agent --print --output-format stream-json --trust`) | native | smoke_tested | Windows CLI 2026.09.28-64d2043, adapter 0.2.0; stdin over pipes; existing CLI login, default permission mode, no tools ([evidence](native-smoke/2026-09-30-cursor/report.md)) |
+| session-id capture (`system/init` → session_id) | native | smoke_tested | init/result UUID agrees; no invented ID; result-only capture and conflict rejection have fake-process tests |
+| resume (`--resume <id>`) | native | smoke_tested | exact ID in second process after first exits; marker recalled without marker in follow-up; mismatch rejection is locally tested |
+| model selection (`--model <id>`) | native | smoke_tested | gpt-5.4-mini-none; init display name GPT-5.4 Mini None matches catalog; other models and separate effort unverified |
+| Windows PowerShell shim launch | native | smoke_tested | shared runner now preserves PATHEXT; Cursor passes Windows profile variables; metadata-only probe reproduces silent exit without PATHEXT |
+| Windows cmd shim boundary checks | native | documented | common infra; Cursor native run used .ps1, not .cmd |
+| cancellation + inactivity timeouts | native | documented | common infra/fake process cancellation; native tool-tree cancellation and quiescence unverified |
+| reviewer read-only / worker writes | unknown | configured | not exercised; --trust is workspace trust, not role enforcement |
+| quota-error classification | unknown | configured | four successful requests; quota exhaustion not observed; startup timeout no longer mislabeled RATE_LIMITED |
 | structured final output | unsupported | documented | text_only |
 
-## zcode (adapter 0.1.0, `src/providers/zcode/`) — print-first (ADR-0002)
+## zcode (adapter 0.2.0, `src/providers/zcode/`) — standalone JSON (ADR-0002 amendment)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
-| headless print run (`node zcode.cjs -p <prompt> --mode yolo --cwd`) | native | documented | feasibility-study facts; bundle path operator-configured |
-| native conversation identity | unsupported | documented | print mode returns none — adapter reports "" (broker never fakes native_resume) |
-| resume (`--resume`/`--continue`) | unknown | documented | unverified per the study; NOT wired |
-| model selection | unknown | configured | CLI-owned via ~/.zcode/cli/config.json; no `--model` flag |
+| adapter headless (`--prompt --json`, explicit config paths) | native | smoke_tested | Windows, CLI 0.16.9, native login; two Flash adapter turns in plan mode, MCP/memory off; yolo/worker writes/reviewer enforcement unverified ([evidence](native-smoke/2026-09-30-zcode-bootstrap/report.md)) |
+| native conversation identity | native | smoke_tested | JSON contains real sess_ ID; adapter emits native_ref_obtained and returns it |
+| resume (`--resume <sess_...>`) | native | smoke_tested | adapter wired; first process exits before second; same ID and marker recalled without marker in follow-up; mismatched ID rejected; --continue not exercised |
+| model selection | native | smoke_tested | private defaultModelSelection; logs confirm Flash twice; GLM-5.3/Flash on Z.AI Individual; other families rejected; low/high/max accepted, null selects low; reasoning semantics unverified |
 | prompt size | limited | documented | argv transport capped at 6000 chars (INPUT_LIMIT) — ENAMETOOLONG open question |
-| app-server NDJSON bus | unsupported | configured | phase-2 per study; not implemented |
+| structured agent report | unsupported | documented | native JSON parsed; response prose stays text_only; usage not returned in broker result |
+| app-server NDJSON bus | unsupported | configured | broker integration not implemented; native 0.16.9 protocol/empty-session bootstrap smoke passed, account model selection failed; requires host account/auth contract ([evidence](native-smoke/2026-09-30-zcode-bootstrap/report.md)) |
 
 ## antigravity (adapter 0.1.0, `src/providers/antigravity/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
-| headless turn (`agy --dangerously-skip-permissions --output-format stream-json --print-timeout 900s -p <prompt>`) | native | documented | local CLI research + fusion contract; prompt file fallback >2000 chars |
-| resume (`--conversation <id>`) | unknown | documented | argv wired; not exercised headless this milestone |
-| conversation-id capture | opportunistic | documented | scanned from top-level or nested result/step_update fields; empty string when absent |
-| model selection (`--model <id>`) | native | documented | passed verbatim from request or default model |
+| headless turn (`agy --dangerously-skip-permissions --output-format stream-json --print-timeout 900s -p <prompt>`) | native | smoke_tested | Windows, agy 1.2.1, gemini-3.8-flash-low, two short turns over pipes; large prompt fallback unverified |
+| resume (`--conversation <id>`) | native | smoke_tested | same observed init/result ID in both processes; second prompt omits random marker, response reproduces it |
+| conversation-id capture | native | smoke_tested | init.conversation_id observed; alternate nested-field capture remains parser-level only |
+| model selection (`--model <id>`) | native | smoke_tested | CLI init.model confirms gemini-3.8-flash-low on both turns; other models/effort unverified |
 | cancellation (taskkill/SIGKILL tree) | native | documented | common headless infra |
 | structured final output | unsupported | documented | text_only |
 
@@ -82,6 +106,6 @@ auto-retry/fresh-session fallback/PTY machinery ported.
 
 | Platform | Status |
 |---|---|
-| Windows (dev, native Node) | dev-only; adapters carry Windows shim handling but unverified with real CLIs |
+| Windows (dev, native Node) | partial model/resume smoke for all five providers: agy 1.2.1, ZCode CLI 0.16.9, Cursor 2026.09.28-64d2043, Claude 2.1.285, Codex 0.157.0; Codex additionally exercised external MCP caller/bridge/daemon; full worker/reviewer profiles unverified |
 | macOS / Linux | unverified |
 | Windows via WSL2 | unverified |

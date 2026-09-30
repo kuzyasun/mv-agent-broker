@@ -1,0 +1,33 @@
+{
+  "mode": "print-probe",
+  "root": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-04-31-955Z-zcode-app-server",
+  "bundle": "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+  "builtin": "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\config\\provider\\zcode-builtin.json",
+  "personal": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-04-31-955Z-zcode-app-server\\provider_config.json",
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T15:04:31.958Z",
+  "desktopSettingsHashBefore": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "processes": [
+    {
+      "pid": 23184,
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "Error: Model creation failed (traceId: cbc131dd-5131-49ec-8185-4fb5de0d5c40)\n"
+    }
+  ],
+  "operations": [],
+  "inferenceSends": 0,
+  "selection": {
+    "providerId": "account:zai-individual-coding-plan",
+    "modelId": "GLM-5.3-Flash",
+    "options": {
+      "reasoningLevel": "low"
+    }
+  },
+  "promptAttempts": 1,
+  "status": "failed",
+  "error": "Error: Model creation failed (traceId: cbc131dd-5131-49ec-8185-4fb5de0d5c40)\n",
+  "desktopSettingsHashAfter": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "desktopSettingsUnchanged": true,
+  "finishedAt": "2026-09-30T15:04:34.664Z"
+}

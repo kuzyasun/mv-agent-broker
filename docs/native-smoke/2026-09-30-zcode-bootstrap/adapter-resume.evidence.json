@@ -1,0 +1,332 @@
+{
+  "provider": "zcode",
+  "requestedModel": "GLM-5.3-Flash",
+  "platform": "win32",
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T16:06:24.770Z",
+  "scope": "adapter-only; no broker lifecycle/profile acceptance",
+  "usage": "unknown; not exposed by adapter",
+  "turns": [
+    {
+      "index": 0,
+      "requestedNativeRef": null,
+      "events": [
+        {
+          "type": "native_ref_obtained",
+          "payload": {
+            "ref": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09"
+          }
+        },
+        {
+          "type": "progress",
+          "payload": {
+            "label": "json-run-complete"
+          }
+        }
+      ],
+      "result": {
+        "native_outcome": "completed",
+        "native_conversation_ref": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09",
+        "agent_reported": {
+          "summary": "AB_d63731bb3c77414993ae739a16013b36",
+          "format_status": "text_only"
+        }
+      },
+      "markerMatched": true,
+      "dispatchGateCalls": 1,
+      "rawResultUsage": {
+        "source": "provider",
+        "modelRequestCount": 1,
+        "inputTokens": 18300,
+        "outputTokens": 22,
+        "totalTokens": 18322,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "reasoningTokens": 0,
+        "webFetchRequests": 0,
+        "webSearchRequests": 0
+      },
+      "observedNativeRef": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09",
+      "modelRequests": [
+        {
+          "sessionId": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09",
+          "modelId": "GLM-5.3-Flash",
+          "providerId": "account:zai-individual-coding-plan",
+          "attempt": 1,
+          "finishReason": "stop"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "requestedNativeRef": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09",
+      "events": [
+        {
+          "type": "native_ref_obtained",
+          "payload": {
+            "ref": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09"
+          }
+        },
+        {
+          "type": "progress",
+          "payload": {
+            "label": "json-run-complete"
+          }
+        }
+      ],
+      "result": {
+        "native_outcome": "completed",
+        "native_conversation_ref": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09",
+        "agent_reported": {
+          "summary": "AB_d63731bb3c77414993ae739a16013b36",
+          "format_status": "text_only"
+        }
+      },
+      "markerMatched": true,
+      "dispatchGateCalls": 1,
+      "rawResultUsage": {
+        "source": "provider",
+        "modelRequestCount": 1,
+        "inputTokens": 18356,
+        "outputTokens": 22,
+        "totalTokens": 18378,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "reasoningTokens": 0,
+        "webFetchRequests": 0,
+        "webSearchRequests": 0
+      },
+      "observedNativeRef": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09",
+      "modelRequests": [
+        {
+          "sessionId": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09",
+          "modelId": "GLM-5.3-Flash",
+          "providerId": "account:zai-individual-coding-plan",
+          "attempt": 1,
+          "finishReason": "stop"
+        }
+      ]
+    }
+  ],
+  "adapterVersion": "0.2.0",
+  "status": "headless-and-resume-passed",
+  "finishedAt": "2026-09-30T16:06:36.832Z",
+  "processes": [
+    {
+      "binary": "C:\\nvm4w\\nodejs\\node.exe",
+      "args": [
+        "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+        "--prompt",
+        "Remember this marker for the next turn: AB_d63731bb3c77414993ae739a16013b36. Reply exactly AB_d63731bb3c77414993ae739a16013b36. Do not use tools, read files, run commands, or change any file.",
+        "--json",
+        "--mode",
+        "plan",
+        "--cwd",
+        "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T16-06-24-767Z-zcode\\workspace"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T16-06-24-767Z-zcode\\workspace",
+      "pid": 72296,
+      "exitCode": 0,
+      "stdout": "{\n  \"sessionId\": \"sess_8609a207-c37d-41df-bf54-6441a1eb7d09\",\n  \"traceId\": \"79dc6a0a-4ffd-4c40-a849-68b54fa5b7c6\",\n  \"turnId\": \"turn_a43d2c17-6f87-4f59-972e-87670f71cdd5\",\n  \"response\": \"AB_d63731bb3c77414993ae739a16013b36\",\n  \"usage\": {\n    \"source\": \"provider\",\n    \"modelRequestCount\": 1,\n    \"inputTokens\": 18300,\n    \"outputTokens\": 22,\n    \"totalTokens\": 18322,\n    \"cacheReadTokens\": 0,\n    \"cacheWriteTokens\": 0,\n    \"reasoningTokens\": 0,\n    \"webFetchRequests\": 0,\n    \"webSearchRequests\": 0\n  },\n  \"eventCount\": 29,\n  \"projection\": {\n    \"status\": \"idle\",\n    \"turnCount\": 1,\n    \"totalTokenCount\": 18322,\n    \"contextUsed\": 18322,\n    \"contextWindow\": 200000\n  }\n}\n",
+      "stderr": "",
+      "startedAt": "2026-09-30T16:06:24.838Z",
+      "privateProviderConfig": {
+        "schemaVersion": 1,
+        "config": {
+          "providerConfigRules": {
+            "providerRules": [
+              {
+                "providerId": "account:zai-team-coding-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:zai-start-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:bigmodel-individual-coding-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:bigmodel-team-coding-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:bigmodel-start-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:zai-offpeak-idle-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:bigmodel-offpeak-idle-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              }
+            ]
+          },
+          "modelConfigRules": {
+            "providerModelRules": [
+              {
+                "providerId": "account:zai-individual-coding-plan",
+                "modelId": "GLM-5.3",
+                "config": {
+                  "enabled": false
+                }
+              }
+            ],
+            "manualProviderModelRules": []
+          },
+          "defaultModelSelection": {
+            "providerId": "account:zai-individual-coding-plan",
+            "modelId": "GLM-5.3-Flash",
+            "options": {
+              "reasoningLevel": "low"
+            }
+          }
+        }
+      },
+      "privateProviderConfigPath": "C:\\Users\\902st\\AppData\\Local\\Temp\\agent-broker-zcode-4XWizf\\provider_config.json",
+      "finishedAt": "2026-09-30T16:06:32.779Z",
+      "modelRequests": [
+        {
+          "sessionId": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09",
+          "modelId": "GLM-5.3-Flash",
+          "providerId": "account:zai-individual-coding-plan",
+          "attempt": 1,
+          "finishReason": "stop"
+        }
+      ],
+      "runtimeConfigs": [
+        {
+          "mcpEnabled": false,
+          "memoryEnabled": false,
+          "mode": "plan"
+        }
+      ]
+    },
+    {
+      "binary": "C:\\nvm4w\\nodejs\\node.exe",
+      "args": [
+        "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+        "--prompt",
+        "Return only the exact marker I asked you to remember in the previous turn. Do not use tools, read files, run commands, or change any file.",
+        "--json",
+        "--mode",
+        "plan",
+        "--cwd",
+        "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T16-06-24-767Z-zcode\\workspace",
+        "--resume",
+        "sess_8609a207-c37d-41df-bf54-6441a1eb7d09"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T16-06-24-767Z-zcode\\workspace",
+      "pid": 74496,
+      "exitCode": 0,
+      "stdout": "{\n  \"sessionId\": \"sess_8609a207-c37d-41df-bf54-6441a1eb7d09\",\n  \"traceId\": \"6a0c3822-4daa-48f2-aa02-2f6efa63c32d\",\n  \"turnId\": \"turn_f626f7cf-3968-4e92-aa47-7d354516c806\",\n  \"response\": \"AB_d63731bb3c77414993ae739a16013b36\",\n  \"usage\": {\n    \"source\": \"provider\",\n    \"modelRequestCount\": 1,\n    \"inputTokens\": 18356,\n    \"outputTokens\": 22,\n    \"totalTokens\": 18378,\n    \"cacheReadTokens\": 0,\n    \"cacheWriteTokens\": 0,\n    \"reasoningTokens\": 0,\n    \"webFetchRequests\": 0,\n    \"webSearchRequests\": 0\n  },\n  \"eventCount\": 29,\n  \"projection\": {\n    \"status\": \"idle\",\n    \"turnCount\": 1,\n    \"totalTokenCount\": 18378,\n    \"contextUsed\": 18378,\n    \"contextWindow\": 200000\n  }\n}\n",
+      "stderr": "",
+      "startedAt": "2026-09-30T16:06:32.804Z",
+      "privateProviderConfig": {
+        "schemaVersion": 1,
+        "config": {
+          "providerConfigRules": {
+            "providerRules": [
+              {
+                "providerId": "account:zai-team-coding-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:zai-start-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:bigmodel-individual-coding-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:bigmodel-team-coding-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:bigmodel-start-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:zai-offpeak-idle-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              },
+              {
+                "providerId": "account:bigmodel-offpeak-idle-plan",
+                "config": {
+                  "visibility": "hidden"
+                }
+              }
+            ]
+          },
+          "modelConfigRules": {
+            "providerModelRules": [
+              {
+                "providerId": "account:zai-individual-coding-plan",
+                "modelId": "GLM-5.3",
+                "config": {
+                  "enabled": false
+                }
+              }
+            ],
+            "manualProviderModelRules": []
+          },
+          "defaultModelSelection": {
+            "providerId": "account:zai-individual-coding-plan",
+            "modelId": "GLM-5.3-Flash",
+            "options": {
+              "reasoningLevel": "low"
+            }
+          }
+        }
+      },
+      "privateProviderConfigPath": "C:\\Users\\902st\\AppData\\Local\\Temp\\agent-broker-zcode-rCqB6x\\provider_config.json",
+      "finishedAt": "2026-09-30T16:06:36.830Z",
+      "modelRequests": [
+        {
+          "sessionId": "sess_8609a207-c37d-41df-bf54-6441a1eb7d09",
+          "modelId": "GLM-5.3-Flash",
+          "providerId": "account:zai-individual-coding-plan",
+          "attempt": 1,
+          "finishReason": "stop"
+        }
+      ],
+      "runtimeConfigs": [
+        {
+          "mcpEnabled": false,
+          "memoryEnabled": false,
+          "mode": "plan"
+        }
+      ]
+    }
+  ]
+}

@@ -4,8 +4,9 @@
 
 export type ClaudeStreamEvent =
   | { kind: "init"; session_id: string }
+  | { kind: "session_ref"; session_id: string }
   | { kind: "assistant_text"; text: string }
-  | { kind: "result"; text: string; is_error: boolean }
+  | { kind: "result"; session_id: string | null; text: string; is_error: boolean }
   | { kind: "unknown" };
 
 export function parseClaudeStreamLine(line: string): ClaudeStreamEvent {
@@ -22,12 +23,19 @@ export function parseClaudeStreamLine(line: string): ClaudeStreamEvent {
 
     const obj = parsed as Record<string, unknown>;
 
+    // Native startup hooks can expose identity before system/init (§14.3).
+    if (obj.type === "system" && typeof obj.subtype === "string" &&
+        ["hook_started", "hook_progress", "hook_response", "commands_changed"].includes(obj.subtype) &&
+        typeof obj.session_id === "string" && obj.session_id.trim()) {
+      return { kind: "session_ref", session_id: obj.session_id };
+    }
+
     // Init: {"type":"system","subtype":"init","session_id":"..."}
     if (
       obj.type === "system" &&
       obj.subtype === "init" &&
       typeof obj.session_id === "string" &&
-      obj.session_id.length > 0
+      obj.session_id.trim().length > 0
     ) {
       return { kind: "init", session_id: obj.session_id };
     }
@@ -55,12 +63,16 @@ export function parseClaudeStreamLine(line: string): ClaudeStreamEvent {
 
     // Result: {"type":"result","subtype":"success"|"error_*","result":"text","is_error":false}
     if (obj.type === "result") {
-      const text = typeof obj.result === "string" ? obj.result : "";
-      const isError =
-        typeof obj.is_error === "boolean"
-          ? obj.is_error
-          : typeof obj.subtype === "string" && obj.subtype.startsWith("error");
-      return { kind: "result", text, is_error: isError };
+      // Fail closed for unknown success shapes; native error records may use errors[].
+      const errorSubtype = typeof obj.subtype === "string" && obj.subtype.startsWith("error");
+      const isError = obj.is_error === true || errorSubtype;
+      if (!isError && (obj.is_error !== false || typeof obj.result !== "string" || obj.subtype !== "success")) {
+        return { kind: "unknown" };
+      }
+      const text = typeof obj.result === "string" ? obj.result
+        : Array.isArray(obj.errors) ? obj.errors.filter((item): item is string => typeof item === "string").join("\n") : "";
+      const sessionId = typeof obj.session_id === "string" && obj.session_id.trim() ? obj.session_id : null;
+      return { kind: "result", session_id: sessionId, text, is_error: isError };
     }
 
     return { kind: "unknown" };

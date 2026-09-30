@@ -115,6 +115,8 @@ function buildEnv(spec: HeadlessSpawnSpec): NodeJS.ProcessEnv {
   env.PATH = spec.inheritEnv.PATH ?? "";
   if (process.platform === "win32") {
     env.SystemRoot = spec.inheritEnv.SystemRoot ?? "C:\\Windows";
+    // PowerShell needs PATHEXT even for native .exe calls inside a .ps1 shim.
+    env.PATHEXT = spec.inheritEnv.PATHEXT ?? ".COM;.EXE;.BAT;.CMD";
     if (spec.inheritEnv.ComSpec) env.ComSpec = spec.inheritEnv.ComSpec;
   }
   return env;

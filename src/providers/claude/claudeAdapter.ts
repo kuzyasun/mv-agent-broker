@@ -34,6 +34,13 @@ const CLAUDE_ENV_ALLOWLIST = [
   "XDG_CACHE_HOME",
   "XDG_DATA_HOME",
   "COLORTERM",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "TEMP",
+  "TMP",
+  "CLAUDE_CONFIG_DIR",
+  "CLAUDE_CODE_OAUTH_TOKEN",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_BASE_URL",
@@ -41,7 +48,7 @@ const CLAUDE_ENV_ALLOWLIST = [
 
 export class ClaudeAdapter implements ProviderAdapter {
   readonly providerId = "claude-code";
-  readonly adapterVersion = "0.1.0";
+  readonly adapterVersion = "0.2.0";
   private readonly binary: string;
 
   constructor(opts?: ClaudeAdapterOptions) {
@@ -58,14 +65,14 @@ export class ClaudeAdapter implements ProviderAdapter {
     gate: DispatchGate,
     onEvent: (ev: AdapterEvent) => void,
   ): Promise<TurnExecutionResult> {
-    // 1. gate.acquireDispatchPermission() first.
-    gate.acquireDispatchPermission();
-
-    // 2. Headless arguments: --print --output-format stream-json (+ optional --model, + --resume when non-null)
-    const args = ["--print", "--output-format", "stream-json"];
-    if (req.requested_model && req.requested_model.trim().length > 0) {
-      args.push("--model", req.requested_model.trim());
+    if (!req.requested_model.trim()) {
+      throw new BrokerError("MODEL_UNAVAILABLE", "Claude requires an explicit model.", { executionStarted: false });
     }
+    if (req.native_conversation_ref !== null && !req.native_conversation_ref.trim()) {
+      throw new BrokerError("SESSION_NOT_RESUMABLE", "Claude resume requires a nonempty native reference.", { executionStarted: false });
+    }
+    // Installed CLI requires --verbose to emit stream-json in print mode.
+    const args = ["--print", "--output-format", "stream-json", "--verbose", "--model", req.requested_model.trim()];
     if (req.native_conversation_ref !== null) {
       args.push("--resume", req.native_conversation_ref);
     }
@@ -77,7 +84,11 @@ export class ClaudeAdapter implements ProviderAdapter {
         abortController.abort();
       }
     };
+    gate.acquireDispatchPermission();
     checkCancellation();
+    if (abortController.signal.aborted) {
+      throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "Claude cancelled before launch.", { executionStarted: false });
+    }
     const pollInterval = setInterval(checkCancellation, 100);
 
     const streamState: {
@@ -88,6 +99,7 @@ export class ClaudeAdapter implements ProviderAdapter {
       lastResult: null,
     };
     let nativeRefEmitted = false;
+    let identityMismatch = false;
 
     let cliResult: HeadlessCliResult;
     try {
@@ -106,16 +118,22 @@ export class ClaudeAdapter implements ProviderAdapter {
         {
           onStdoutLine(line: string) {
             const ev = parseClaudeStreamLine(line);
-            if (ev.kind === "init") {
-              streamState.sessionId = ev.session_id;
-              if (!nativeRefEmitted) {
+            const ref = ev.kind === "init" || ev.kind === "session_ref" || ev.kind === "result" ? ev.session_id : null;
+            if (ref) {
+              if ((streamState.sessionId !== null && streamState.sessionId !== ref) ||
+                  (req.native_conversation_ref !== null && req.native_conversation_ref !== ref)) {
+                identityMismatch = true;
+              }
+              streamState.sessionId ??= ref;
+              if (!nativeRefEmitted && !identityMismatch) {
                 nativeRefEmitted = true;
                 onEvent({
                   type: "native_ref_obtained",
-                  payload: { ref: ev.session_id },
+                  payload: { ref },
                 });
               }
-            } else if (ev.kind === "assistant_text") {
+            }
+            if (ev.kind === "assistant_text") {
               onEvent({
                 type: "progress",
                 payload: { label: ev.text.slice(0, 80) },
@@ -133,11 +151,21 @@ export class ClaudeAdapter implements ProviderAdapter {
       clearInterval(pollInterval);
     }
 
-    // 6. Settle outcome
+    // Native output never overrides process failure or interruption.
+    if (cliResult.timedOut || cliResult.killed || cliResult.exitCode !== 0) {
+      const message = cliResult.timedOut ? `Claude timed out (${cliResult.timedOut}).`
+        : cliResult.killed ? "Claude execution interrupted."
+        : cliResult.stderrTail || streamState.lastResult?.text || `Claude exited with code ${cliResult.exitCode}.`;
+      throw new BrokerError("PROVIDER_PROTOCOL_ERROR", message, { executionStarted: true });
+    }
+    if (identityMismatch || (req.native_conversation_ref !== null && streamState.sessionId === null)) {
+      throw new BrokerError(req.native_conversation_ref !== null ? "SESSION_NOT_RESUMABLE" : "PROVIDER_PROTOCOL_ERROR",
+        "Claude returned missing or conflicting native conversation identity.", { executionStarted: true });
+    }
     if (streamState.lastResult !== null) {
       if (!streamState.lastResult.is_error) {
         const nativeRef =
-          streamState.sessionId ?? req.native_conversation_ref ?? `claude-${req.turn_id}`;
+          streamState.sessionId ?? "";
         return {
           native_outcome: "completed",
           native_conversation_ref: nativeRef,
@@ -148,18 +176,6 @@ export class ClaudeAdapter implements ProviderAdapter {
         };
       }
       throw new BrokerError("PROVIDER_PROTOCOL_ERROR", streamState.lastResult.text, {
-        executionStarted: true,
-      });
-    }
-
-    if (cliResult.timedOut) {
-      throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "claude timed out", {
-        executionStarted: true,
-      });
-    }
-
-    if (cliResult.exitCode !== 0) {
-      throw new BrokerError("PROVIDER_PROTOCOL_ERROR", cliResult.stderrTail, {
         executionStarted: true,
       });
     }

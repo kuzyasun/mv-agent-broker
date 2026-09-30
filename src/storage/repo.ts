@@ -722,6 +722,22 @@ export function listEventsByTurn(db: RegistryDb, turnId: string, afterSeq: numbe
   return rows.map(mapEventRow);
 }
 
+/** Persisted contract/result payloads in the existing journal; no schema migration. */
+export function getTurnEventPayload(db: RegistryDb, turnId: string, type: string): Record<string, unknown> | null {
+  const row = db.raw.prepare("SELECT payload FROM events WHERE turn_id = ? AND type = ? ORDER BY seq DESC LIMIT 1")
+    .get(turnId, type) as { payload: string | null } | undefined;
+  if (!row?.payload) return null;
+  return JSON.parse(row.payload) as Record<string, unknown>;
+}
+
+export function getSessionInstructions(db: RegistryDb, sessionId: string): string | null {
+  const row = db.raw.prepare("SELECT payload FROM intents WHERE session_id = ? AND kind = 'provision_session' ORDER BY created_at LIMIT 1")
+    .get(sessionId) as { payload: string | null } | undefined;
+  if (!row?.payload) return null;
+  const payload = JSON.parse(row.payload) as Record<string, unknown>;
+  return typeof payload.instructions === "string" ? payload.instructions : null;
+}
+
 // ─── intents ────────────────────────────────────────────────────────────────
 
 function mapIntentRow(row: Record<string, unknown>): IntentRecord {

@@ -1,0 +1,519 @@
+{
+  "provider": "codex",
+  "status": "smoke-passed",
+  "caller": "plain Node.js MCP client",
+  "transport": "client -> stdio bridge -> private named pipe/socket -> daemon -> native adapter",
+  "platform": "win32",
+  "node": "v24.11.1",
+  "requestedModel": "gpt-6-luna",
+  "requestedEffort": "low",
+  "marker": "AB_b6d47dbb8335473ca3bce260f33cabfb",
+  "startedAt": "2026-09-30T19:44:24.855Z",
+  "finishedAt": "2026-09-30T19:44:37.366Z",
+  "tools": [
+    "broker_status",
+    "agents_list",
+    "agent_session_spawn",
+    "agent_workspace_snapshot",
+    "agent_sessions_list",
+    "agent_session_status",
+    "agent_session_send",
+    "agent_turn_status",
+    "agent_turn_result",
+    "agent_turn_events",
+    "agent_artifact_read",
+    "agent_turn_cancel",
+    "agent_session_stop"
+  ],
+  "session": {
+    "api_version": "0.2",
+    "session_id": "session-6a2939b3ff307da7a6b7ab57",
+    "state": "IDLE",
+    "initial_snapshot_id": "snap-86625f698d1f60b6c8282e19",
+    "replayed_request": false
+  },
+  "turns": [
+    {
+      "request": {
+        "api_version": "0.2",
+        "session_id": "session-6a2939b3ff307da7a6b7ab57",
+        "turn_id": "turn-860ad974752ca161f183a508",
+        "state": "ACCEPTED",
+        "replayed_request": false
+      },
+      "goal": "Remember this marker for this conversation: AB_b6d47dbb8335473ca3bce260f33cabfb. Reply with exactly the marker.",
+      "status": {
+        "turn_id": "turn-860ad974752ca161f183a508",
+        "session_id": "session-6a2939b3ff307da7a6b7ab57",
+        "state": "SUCCEEDED",
+        "state_version": 7,
+        "execution_started": true,
+        "native_outcome": "completed",
+        "termination_reason": "normal",
+        "error_code": null,
+        "deadline_at": 1790798365445,
+        "input_manifest_id": "art-44f910e1a231883a18f725ca",
+        "baseline_snapshot_id": "snap-86625f698d1f60b6c8282e19",
+        "review_target_snapshot_id": null,
+        "final_snapshot_id": "snap-2125ebd811826dbbf8891c4e",
+        "continuation": "new_native_conversation",
+        "created_at": 1790797465445,
+        "terminal_at": 1790797471728
+      },
+      "result": {
+        "api_version": "0.2",
+        "session_id": "session-6a2939b3ff307da7a6b7ab57",
+        "turn_id": "turn-860ad974752ca161f183a508",
+        "execution_status": "SUCCEEDED",
+        "quality_status": "unreviewed",
+        "context": {
+          "continuation": "new_native_conversation",
+          "native_conversation_ref": "01a0f3d8-cc81-78c1-a040-7f0aa5239208",
+          "status": "available"
+        },
+        "agent_reported": {
+          "summary": "AB_b6d47dbb8335473ca3bce260f33cabfb",
+          "format_status": "text_only"
+        },
+        "broker_observed": {
+          "native_outcome": "completed",
+          "termination_reason": "normal",
+          "finalization_error": null,
+          "execution_started": true,
+          "input_manifest_id": "art-44f910e1a231883a18f725ca",
+          "baseline_snapshot_id": "snap-86625f698d1f60b6c8282e19",
+          "final_snapshot_id": "snap-2125ebd811826dbbf8891c4e",
+          "error_code": null
+        },
+        "usage": {
+          "availability": "unknown",
+          "billing_basis": "unknown",
+          "measurements": []
+        },
+        "artifacts": [],
+        "warnings": []
+      },
+      "session": {
+        "session_id": "session-6a2939b3ff307da7a6b7ab57",
+        "project_id": "p-smoke",
+        "provider": "codex",
+        "model": "gpt-6-luna",
+        "role": "worker",
+        "workspace_id": "ws",
+        "workspace_mode": "current",
+        "state": "IDLE",
+        "context_status": "available",
+        "native_conversation_ref": "01a0f3d8-cc81-78c1-a040-7f0aa5239208",
+        "active_turn_id": null,
+        "block_reason": null,
+        "close_state": "none",
+        "initial_snapshot_id": "snap-86625f698d1f60b6c8282e19",
+        "latest_snapshot_id": "snap-86625f698d1f60b6c8282e19",
+        "coverage_profile_id": "cov",
+        "policy_profile_id": "pol",
+        "created_at": 1790797465379,
+        "updated_at": 1790797471728
+      },
+      "events": {
+        "events": [
+          {
+            "cursor": 4,
+            "type": "turn_admitted",
+            "payload": {
+              "expected_snapshot_id": "snap-86625f698d1f60b6c8282e19",
+              "task": {
+                "goal": "Remember this marker for this conversation: AB_b6d47dbb8335473ca3bce260f33cabfb. Reply with exactly the marker.",
+                "artifact_refs": []
+              }
+            },
+            "created_at": 1790797465445
+          },
+          {
+            "cursor": 5,
+            "type": "turn_starting",
+            "payload": {},
+            "created_at": 1790797465447
+          },
+          {
+            "cursor": 6,
+            "type": "input_manifest_sealed",
+            "payload": {
+              "artifact_id": "art-44f910e1a231883a18f725ca",
+              "inputs": 0
+            },
+            "created_at": 1790797465448
+          },
+          {
+            "cursor": 7,
+            "type": "dispatch_permission_granted",
+            "payload": {},
+            "created_at": 1790797465452
+          },
+          {
+            "cursor": 8,
+            "type": "adapter:native_ref_obtained",
+            "payload": {
+              "ref": "01a0f3d8-cc81-78c1-a040-7f0aa5239208"
+            },
+            "created_at": 1790797467011
+          },
+          {
+            "cursor": 9,
+            "type": "turn_running",
+            "payload": {},
+            "created_at": 1790797467011
+          },
+          {
+            "cursor": 10,
+            "type": "adapter:progress",
+            "payload": {
+              "label": "AB_b6d47dbb8335473ca3bce260f33cabfb"
+            },
+            "created_at": 1790797470469
+          },
+          {
+            "cursor": 11,
+            "type": "agent_reported",
+            "payload": {
+              "summary": "AB_b6d47dbb8335473ca3bce260f33cabfb",
+              "format_status": "text_only"
+            },
+            "created_at": 1790797471668
+          },
+          {
+            "cursor": 13,
+            "type": "turn_terminal",
+            "payload": {
+              "state": "SUCCEEDED",
+              "malformed": false,
+              "cancel_reason": null,
+              "observed_workspace_delta": {
+                "added": [],
+                "modified": [],
+                "deleted": []
+              }
+            },
+            "created_at": 1790797471728
+          },
+          {
+            "cursor": 14,
+            "type": "input_views_released",
+            "payload": {},
+            "created_at": 1790797471731
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "request": {
+        "api_version": "0.2",
+        "session_id": "session-6a2939b3ff307da7a6b7ab57",
+        "turn_id": "turn-f6e48df68f993ffda7f2c936",
+        "state": "ACCEPTED",
+        "replayed_request": false
+      },
+      "goal": "Return exactly the marker from the previous turn in this conversation. No tools or explanation.",
+      "status": {
+        "turn_id": "turn-f6e48df68f993ffda7f2c936",
+        "session_id": "session-6a2939b3ff307da7a6b7ab57",
+        "state": "SUCCEEDED",
+        "state_version": 7,
+        "execution_started": true,
+        "native_outcome": "completed",
+        "termination_reason": "normal",
+        "error_code": null,
+        "deadline_at": 1790798371740,
+        "input_manifest_id": "art-cf57592821742a49c67ee495",
+        "baseline_snapshot_id": "snap-2125ebd811826dbbf8891c4e",
+        "review_target_snapshot_id": null,
+        "final_snapshot_id": "snap-9bab175715d4240ee1f87601",
+        "continuation": "native_resume",
+        "created_at": 1790797471740,
+        "terminal_at": 1790797477124
+      },
+      "result": {
+        "api_version": "0.2",
+        "session_id": "session-6a2939b3ff307da7a6b7ab57",
+        "turn_id": "turn-f6e48df68f993ffda7f2c936",
+        "execution_status": "SUCCEEDED",
+        "quality_status": "unreviewed",
+        "context": {
+          "continuation": "native_resume",
+          "native_conversation_ref": "01a0f3d8-cc81-78c1-a040-7f0aa5239208",
+          "status": "available"
+        },
+        "agent_reported": {
+          "summary": "AB_b6d47dbb8335473ca3bce260f33cabfb",
+          "format_status": "text_only"
+        },
+        "broker_observed": {
+          "native_outcome": "completed",
+          "termination_reason": "normal",
+          "finalization_error": null,
+          "execution_started": true,
+          "input_manifest_id": "art-cf57592821742a49c67ee495",
+          "baseline_snapshot_id": "snap-2125ebd811826dbbf8891c4e",
+          "final_snapshot_id": "snap-9bab175715d4240ee1f87601",
+          "error_code": null
+        },
+        "usage": {
+          "availability": "unknown",
+          "billing_basis": "unknown",
+          "measurements": []
+        },
+        "artifacts": [],
+        "warnings": []
+      },
+      "session": {
+        "session_id": "session-6a2939b3ff307da7a6b7ab57",
+        "project_id": "p-smoke",
+        "provider": "codex",
+        "model": "gpt-6-luna",
+        "role": "worker",
+        "workspace_id": "ws",
+        "workspace_mode": "current",
+        "state": "IDLE",
+        "context_status": "available",
+        "native_conversation_ref": "01a0f3d8-cc81-78c1-a040-7f0aa5239208",
+        "active_turn_id": null,
+        "block_reason": null,
+        "close_state": "none",
+        "initial_snapshot_id": "snap-86625f698d1f60b6c8282e19",
+        "latest_snapshot_id": "snap-86625f698d1f60b6c8282e19",
+        "coverage_profile_id": "cov",
+        "policy_profile_id": "pol",
+        "created_at": 1790797465379,
+        "updated_at": 1790797477124
+      },
+      "events": {
+        "events": [
+          {
+            "cursor": 15,
+            "type": "turn_admitted",
+            "payload": {
+              "expected_snapshot_id": "snap-2125ebd811826dbbf8891c4e",
+              "task": {
+                "goal": "Return exactly the marker from the previous turn in this conversation. No tools or explanation.",
+                "artifact_refs": []
+              }
+            },
+            "created_at": 1790797471740
+          },
+          {
+            "cursor": 16,
+            "type": "turn_starting",
+            "payload": {},
+            "created_at": 1790797471742
+          },
+          {
+            "cursor": 17,
+            "type": "input_manifest_sealed",
+            "payload": {
+              "artifact_id": "art-cf57592821742a49c67ee495",
+              "inputs": 0
+            },
+            "created_at": 1790797471745
+          },
+          {
+            "cursor": 18,
+            "type": "dispatch_permission_granted",
+            "payload": {},
+            "created_at": 1790797471751
+          },
+          {
+            "cursor": 19,
+            "type": "adapter:native_ref_obtained",
+            "payload": {
+              "ref": "01a0f3d8-cc81-78c1-a040-7f0aa5239208"
+            },
+            "created_at": 1790797471996
+          },
+          {
+            "cursor": 20,
+            "type": "turn_running",
+            "payload": {},
+            "created_at": 1790797471996
+          },
+          {
+            "cursor": 21,
+            "type": "adapter:progress",
+            "payload": {
+              "label": "AB_b6d47dbb8335473ca3bce260f33cabfb"
+            },
+            "created_at": 1790797476056
+          },
+          {
+            "cursor": 22,
+            "type": "agent_reported",
+            "payload": {
+              "summary": "AB_b6d47dbb8335473ca3bce260f33cabfb",
+              "format_status": "text_only"
+            },
+            "created_at": 1790797477072
+          },
+          {
+            "cursor": 24,
+            "type": "turn_terminal",
+            "payload": {
+              "state": "SUCCEEDED",
+              "malformed": false,
+              "cancel_reason": null,
+              "observed_workspace_delta": {
+                "added": [],
+                "modified": [],
+                "deleted": []
+              }
+            },
+            "created_at": 1790797477124
+          },
+          {
+            "cursor": 25,
+            "type": "input_views_released",
+            "payload": {},
+            "created_at": 1790797477125
+          }
+        ],
+        "next_cursor": null
+      }
+    }
+  ],
+  "closedSession": {
+    "session_id": "session-6a2939b3ff307da7a6b7ab57",
+    "project_id": "p-smoke",
+    "provider": "codex",
+    "model": "gpt-6-luna",
+    "role": "worker",
+    "workspace_id": "ws",
+    "workspace_mode": "current",
+    "state": "CLOSED",
+    "context_status": "available",
+    "native_conversation_ref": "01a0f3d8-cc81-78c1-a040-7f0aa5239208",
+    "active_turn_id": null,
+    "block_reason": null,
+    "close_state": "completed",
+    "initial_snapshot_id": "snap-86625f698d1f60b6c8282e19",
+    "latest_snapshot_id": "snap-86625f698d1f60b6c8282e19",
+    "coverage_profile_id": "cov",
+    "policy_profile_id": "pol",
+    "created_at": 1790797465379,
+    "updated_at": 1790797477363
+  },
+  "error": null,
+  "processes": [
+    {
+      "binary": "C:/Users/902st/AppData/Roaming/npm/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+      "args": [
+        "exec",
+        "--sandbox",
+        "workspace-write",
+        "--json",
+        "--ignore-user-config",
+        "--model",
+        "gpt-6-luna",
+        "-c",
+        "model_reasoning_effort=\"low\"",
+        "-"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T19-44-24-602Z-codex-mcp\\workspace",
+      "pid": 68536,
+      "startedAt": "2026-09-30T19:44:25.484Z",
+      "exitCode": 0,
+      "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a0f3d8-cc81-78c1-a040-7f0aa5239208\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"AB_b6d47dbb8335473ca3bce260f33cabfb\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":17448,\"cached_input_tokens\":11008,\"cache_write_input_tokens\":0,\"output_tokens\":23,\"reasoning_output_tokens\":0}}\n",
+      "stderr": "",
+      "stdin": "agent-broker context envelope (deterministic, broker-generated)\nturn=turn-860ad974752ca161f183a508 session=session-6a2939b3ff307da7a6b7ab57 role=worker\nworkspace=ws baseline_snapshot=snap-86625f698d1f60b6c8282e19\n[session instructions]\nRun only the requested short response. Do not use tools, edit files, browse, delegate or call any MCP server.\n[/session instructions]\n[task contract JSON]\n{\"goal\":\"Remember this marker for this conversation: AB_b6d47dbb8335473ca3bce260f33cabfb. Reply with exactly the marker.\",\"artifact_refs\":[]}\n[/task contract JSON]\nrequired inputs: none\ninstruction: re-read changed files before editing; do not modify input views.\n[broker-eor agent-broker:bbb1f10d]\n",
+      "finishedAt": "2026-09-30T19:44:31.666Z"
+    },
+    {
+      "binary": "C:/Users/902st/AppData/Roaming/npm/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+      "args": [
+        "exec",
+        "--sandbox",
+        "workspace-write",
+        "resume",
+        "--json",
+        "--ignore-user-config",
+        "--model",
+        "gpt-6-luna",
+        "-c",
+        "model_reasoning_effort=\"low\"",
+        "01a0f3d8-cc81-78c1-a040-7f0aa5239208",
+        "-"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T19-44-24-602Z-codex-mcp\\workspace",
+      "pid": 71076,
+      "startedAt": "2026-09-30T19:44:31.785Z",
+      "exitCode": 0,
+      "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a0f3d8-cc81-78c1-a040-7f0aa5239208\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"AB_b6d47dbb8335473ca3bce260f33cabfb\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":36112,\"cached_input_tokens\":28160,\"cache_write_input_tokens\":0,\"output_tokens\":46,\"reasoning_output_tokens\":0}}\n",
+      "stderr": "",
+      "stdin": "agent-broker context envelope (deterministic, broker-generated)\nturn=turn-f6e48df68f993ffda7f2c936 session=session-6a2939b3ff307da7a6b7ab57 role=worker\nworkspace=ws baseline_snapshot=snap-2125ebd811826dbbf8891c4e\n[session instructions]\nRun only the requested short response. Do not use tools, edit files, browse, delegate or call any MCP server.\n[/session instructions]\n[task contract JSON]\n{\"goal\":\"Return exactly the marker from the previous turn in this conversation. No tools or explanation.\",\"artifact_refs\":[]}\n[/task contract JSON]\nrequired inputs: none\ninstruction: re-read changed files before editing; do not modify input views.\n[broker-eor agent-broker:36f0e4d8]\n",
+      "finishedAt": "2026-09-30T19:44:37.071Z"
+    }
+  ],
+  "nativeSession": {
+    "id": "01a0f3d8-cc81-78c1-a040-7f0aa5239208",
+    "cli_version": "0.157.0",
+    "source": "exec",
+    "model_provider": "openai",
+    "contexts": [
+      {
+        "turn_id": "01a0f3d8-cd84-76a2-9253-f2ff20f8f6cf",
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "approval_policy": "never",
+        "sandbox_policy": {
+          "type": "read-only"
+        },
+        "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T19-44-24-602Z-codex-mcp\\workspace"
+      },
+      {
+        "turn_id": "01a0f3d8-e111-7721-96e3-e9b0e1fbacd1",
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "approval_policy": "never",
+        "sandbox_policy": {
+          "type": "read-only"
+        },
+        "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T19-44-24-602Z-codex-mcp\\workspace"
+      }
+    ],
+    "counters": [
+      {
+        "total": {
+          "input_tokens": 17448,
+          "cached_input_tokens": 11008,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 23,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 17471
+        },
+        "last": {
+          "input_tokens": 17448,
+          "cached_input_tokens": 11008,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 23,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 17471
+        }
+      },
+      {
+        "total": {
+          "input_tokens": 36112,
+          "cached_input_tokens": 28160,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 46,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 36158
+        },
+        "last": {
+          "input_tokens": 18664,
+          "cached_input_tokens": 17152,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 23,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 18687
+        }
+      }
+    ]
+  }
+}

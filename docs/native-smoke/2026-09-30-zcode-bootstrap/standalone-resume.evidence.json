@@ -1,0 +1,198 @@
+{
+  "mode": "smoke",
+  "root": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-40-52-773Z-zcode-standalone",
+  "workspace": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-40-52-773Z-zcode-standalone\\workspace",
+  "bundle": "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+  "selection": {
+    "providerId": "account:zai-individual-coding-plan",
+    "modelId": "GLM-5.3-Flash",
+    "options": {
+      "reasoningLevel": "low"
+    }
+  },
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T15:40:52.778Z",
+  "desktopProviderConfigHashBefore": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "hasStandaloneIdentity": true,
+  "hasAccountScopedKey": true,
+  "credentialValuesDisplayedOrCopied": false,
+  "generationAttempts": 2,
+  "processes": [
+    {
+      "args": [
+        "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+        "--prompt",
+        "Remember this marker for this conversation: ZC_de9e06951a68344aab76. Reply with only the marker. Do not use tools or change files.",
+        "--json",
+        "--mode",
+        "plan",
+        "--cwd",
+        "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-40-52-773Z-zcode-standalone\\workspace",
+        "--disallowed-tools",
+        "Bash",
+        "Write",
+        "Edit"
+      ],
+      "pid": 71700,
+      "exitCode": 0,
+      "stdout": "{\n  \"sessionId\": \"sess_09d66b17-fb38-4808-9c1f-68656df6c243\",\n  \"traceId\": \"aec22e3f-1620-4b5c-81f5-9c2935a0522d\",\n  \"turnId\": \"turn_1e13eff0-cfb8-4348-bdb1-4c792bc940c0\",\n  \"response\": \"ZC_de9e06951a68344aab76\",\n  \"usage\": {\n    \"source\": \"provider\",\n    \"modelRequestCount\": 1,\n    \"inputTokens\": 18690,\n    \"outputTokens\": 16,\n    \"totalTokens\": 18706,\n    \"cacheReadTokens\": 0,\n    \"cacheWriteTokens\": 0,\n    \"reasoningTokens\": 0,\n    \"webFetchRequests\": 0,\n    \"webSearchRequests\": 0\n  },\n  \"eventCount\": 24,\n  \"projection\": {\n    \"status\": \"idle\",\n    \"turnCount\": 1,\n    \"totalTokenCount\": 18706,\n    \"contextUsed\": 18706,\n    \"contextWindow\": 200000\n  }\n}\n",
+      "stderr": "",
+      "startedAt": "2026-09-30T15:40:52.779Z",
+      "timedOut": false,
+      "finishedAt": "2026-09-30T15:41:17.264Z",
+      "result": {
+        "sessionId": "sess_09d66b17-fb38-4808-9c1f-68656df6c243",
+        "traceId": "aec22e3f-1620-4b5c-81f5-9c2935a0522d",
+        "turnId": "turn_1e13eff0-cfb8-4348-bdb1-4c792bc940c0",
+        "response": "ZC_de9e06951a68344aab76",
+        "usage": {
+          "source": "provider",
+          "modelRequestCount": 1,
+          "inputTokens": 18690,
+          "outputTokens": 16,
+          "totalTokens": 18706,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "reasoningTokens": 0,
+          "webFetchRequests": 0,
+          "webSearchRequests": 0
+        },
+        "eventCount": 24,
+        "projection": {
+          "status": "idle",
+          "turnCount": 1,
+          "totalTokenCount": 18706,
+          "contextUsed": 18706,
+          "contextWindow": 200000
+        }
+      },
+      "observedModelRequests": [
+        {
+          "modelId": "GLM-5.3-Flash",
+          "providerId": "account:zai-individual-coding-plan",
+          "querySource": "main_turn",
+          "attempt": 1,
+          "finishReason": "stop"
+        }
+      ]
+    },
+    {
+      "args": [
+        "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+        "--prompt",
+        "What marker did I ask you to remember earlier in this conversation? Reply with only that marker. Do not use tools or change files.",
+        "--json",
+        "--mode",
+        "plan",
+        "--cwd",
+        "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T15-40-52-773Z-zcode-standalone\\workspace",
+        "--resume",
+        "sess_09d66b17-fb38-4808-9c1f-68656df6c243",
+        "--disallowed-tools",
+        "Bash",
+        "Write",
+        "Edit"
+      ],
+      "pid": 22644,
+      "exitCode": 0,
+      "stdout": "{\n  \"sessionId\": \"sess_09d66b17-fb38-4808-9c1f-68656df6c243\",\n  \"traceId\": \"c72b64c0-3a64-45a7-aa8f-49857b1315cf\",\n  \"turnId\": \"turn_8cc6ab1b-f0e5-46f4-af71-c478da349540\",\n  \"response\": \"ZC_de9e06951a68344aab76\",\n  \"usage\": {\n    \"source\": \"provider\",\n    \"modelRequestCount\": 1,\n    \"inputTokens\": 18736,\n    \"outputTokens\": 16,\n    \"totalTokens\": 18752,\n    \"cacheReadTokens\": 192,\n    \"cacheWriteTokens\": 0,\n    \"reasoningTokens\": 0,\n    \"webFetchRequests\": 0,\n    \"webSearchRequests\": 0\n  },\n  \"eventCount\": 23,\n  \"projection\": {\n    \"status\": \"idle\",\n    \"turnCount\": 1,\n    \"totalTokenCount\": 18752,\n    \"contextUsed\": 18752,\n    \"contextWindow\": 200000\n  }\n}\n",
+      "stderr": "",
+      "startedAt": "2026-09-30T15:41:17.265Z",
+      "timedOut": false,
+      "finishedAt": "2026-09-30T15:41:25.060Z",
+      "result": {
+        "sessionId": "sess_09d66b17-fb38-4808-9c1f-68656df6c243",
+        "traceId": "c72b64c0-3a64-45a7-aa8f-49857b1315cf",
+        "turnId": "turn_8cc6ab1b-f0e5-46f4-af71-c478da349540",
+        "response": "ZC_de9e06951a68344aab76",
+        "usage": {
+          "source": "provider",
+          "modelRequestCount": 1,
+          "inputTokens": 18736,
+          "outputTokens": 16,
+          "totalTokens": 18752,
+          "cacheReadTokens": 192,
+          "cacheWriteTokens": 0,
+          "reasoningTokens": 0,
+          "webFetchRequests": 0,
+          "webSearchRequests": 0
+        },
+        "eventCount": 23,
+        "projection": {
+          "status": "idle",
+          "turnCount": 1,
+          "totalTokenCount": 18752,
+          "contextUsed": 18752,
+          "contextWindow": 200000
+        }
+      },
+      "observedModelRequests": [
+        {
+          "modelId": "GLM-5.3-Flash",
+          "providerId": "account:zai-individual-coding-plan",
+          "querySource": "main_turn",
+          "attempt": 1,
+          "finishReason": "stop"
+        }
+      ]
+    }
+  ],
+  "readiness": "local-account-registration-present; model execution verified only in smoke mode",
+  "marker": "ZC_de9e06951a68344aab76",
+  "first": {
+    "sessionId": "sess_09d66b17-fb38-4808-9c1f-68656df6c243",
+    "traceId": "aec22e3f-1620-4b5c-81f5-9c2935a0522d",
+    "turnId": "turn_1e13eff0-cfb8-4348-bdb1-4c792bc940c0",
+    "response": "ZC_de9e06951a68344aab76",
+    "usage": {
+      "source": "provider",
+      "modelRequestCount": 1,
+      "inputTokens": 18690,
+      "outputTokens": 16,
+      "totalTokens": 18706,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "reasoningTokens": 0,
+      "webFetchRequests": 0,
+      "webSearchRequests": 0
+    },
+    "eventCount": 24,
+    "projection": {
+      "status": "idle",
+      "turnCount": 1,
+      "totalTokenCount": 18706,
+      "contextUsed": 18706,
+      "contextWindow": 200000
+    }
+  },
+  "second": {
+    "sessionId": "sess_09d66b17-fb38-4808-9c1f-68656df6c243",
+    "traceId": "c72b64c0-3a64-45a7-aa8f-49857b1315cf",
+    "turnId": "turn_8cc6ab1b-f0e5-46f4-af71-c478da349540",
+    "response": "ZC_de9e06951a68344aab76",
+    "usage": {
+      "source": "provider",
+      "modelRequestCount": 1,
+      "inputTokens": 18736,
+      "outputTokens": 16,
+      "totalTokens": 18752,
+      "cacheReadTokens": 192,
+      "cacheWriteTokens": 0,
+      "reasoningTokens": 0,
+      "webFetchRequests": 0,
+      "webSearchRequests": 0
+    },
+    "eventCount": 23,
+    "projection": {
+      "status": "idle",
+      "turnCount": 1,
+      "totalTokenCount": 18752,
+      "contextUsed": 18752,
+      "contextWindow": 200000
+    }
+  },
+  "status": "smoke-passed",
+  "desktopProviderConfigHashAfter": "07562cf43a97bb2513aeceacb9e1b2bd899cb8fab4af3cf048dd4f7b8bcfe355",
+  "desktopProviderConfigUnchanged": true,
+  "finishedAt": "2026-09-30T15:41:25.061Z"
+}

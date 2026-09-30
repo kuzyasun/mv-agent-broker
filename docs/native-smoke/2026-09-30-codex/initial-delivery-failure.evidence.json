@@ -1,0 +1,260 @@
+{
+  "provider": "codex",
+  "status": "failed",
+  "caller": "plain Node.js MCP client",
+  "transport": "client -> stdio bridge -> private named pipe/socket -> daemon -> native adapter",
+  "platform": "win32",
+  "node": "v24.11.1",
+  "requestedModel": "gpt-6-luna",
+  "requestedEffort": "low",
+  "marker": "AB_858fcf721cf54fd99d12212151e7883a",
+  "startedAt": "2026-09-30T19:36:41.940Z",
+  "finishedAt": "2026-09-30T19:36:49.988Z",
+  "tools": [
+    "broker_status",
+    "agents_list",
+    "agent_session_spawn",
+    "agent_workspace_snapshot",
+    "agent_sessions_list",
+    "agent_session_status",
+    "agent_session_send",
+    "agent_turn_status",
+    "agent_turn_result",
+    "agent_turn_events",
+    "agent_artifact_read",
+    "agent_turn_cancel",
+    "agent_session_stop"
+  ],
+  "session": {
+    "api_version": "0.2",
+    "session_id": "session-3391371bc8efbe81efee8070",
+    "state": "IDLE",
+    "initial_snapshot_id": "snap-54dac14380d0d91a6c17805f",
+    "replayed_request": false
+  },
+  "turns": [
+    {
+      "request": {
+        "api_version": "0.2",
+        "session_id": "session-3391371bc8efbe81efee8070",
+        "turn_id": "turn-34b4f51713b3bc1b5fa8bf30",
+        "state": "ACCEPTED",
+        "replayed_request": false
+      },
+      "goal": "Remember this marker for this conversation: AB_858fcf721cf54fd99d12212151e7883a. Reply with exactly the marker.",
+      "status": {
+        "turn_id": "turn-34b4f51713b3bc1b5fa8bf30",
+        "session_id": "session-3391371bc8efbe81efee8070",
+        "state": "SUCCEEDED",
+        "state_version": 7,
+        "execution_started": true,
+        "native_outcome": "completed",
+        "termination_reason": "normal",
+        "error_code": null,
+        "deadline_at": 1790797902499,
+        "input_manifest_id": "art-a2a8f818d042f8fb4ff12baa",
+        "baseline_snapshot_id": "snap-54dac14380d0d91a6c17805f",
+        "review_target_snapshot_id": null,
+        "final_snapshot_id": "snap-74ccb3371b4500ba197b2eb8",
+        "continuation": "new_native_conversation",
+        "created_at": 1790797002499,
+        "terminal_at": 1790797009775
+      },
+      "result": {
+        "api_version": "0.2",
+        "session_id": "session-3391371bc8efbe81efee8070",
+        "turn_id": "turn-34b4f51713b3bc1b5fa8bf30",
+        "execution_status": "SUCCEEDED",
+        "quality_status": "unreviewed",
+        "context": {
+          "continuation": "new_native_conversation",
+          "native_conversation_ref": "01a0f3d1-bc45-79e0-8086-4556a920ac81",
+          "status": "available"
+        },
+        "agent_reported": null,
+        "broker_observed": {
+          "native_outcome": "completed",
+          "termination_reason": "normal",
+          "finalization_error": null,
+          "execution_started": true,
+          "input_manifest_id": "art-a2a8f818d042f8fb4ff12baa",
+          "baseline_snapshot_id": "snap-54dac14380d0d91a6c17805f",
+          "final_snapshot_id": "snap-74ccb3371b4500ba197b2eb8",
+          "error_code": null
+        },
+        "usage": {
+          "availability": "unknown",
+          "billing_basis": "unknown",
+          "measurements": []
+        },
+        "artifacts": [],
+        "warnings": [
+          "Mock/native summary text is not persisted in P3-2; use agent_turn_events for the turn evidence trail."
+        ]
+      },
+      "session": {
+        "session_id": "session-3391371bc8efbe81efee8070",
+        "project_id": "p-smoke",
+        "provider": "codex",
+        "model": "gpt-6-luna",
+        "role": "worker",
+        "workspace_id": "ws",
+        "workspace_mode": "current",
+        "state": "IDLE",
+        "context_status": "available",
+        "native_conversation_ref": "01a0f3d1-bc45-79e0-8086-4556a920ac81",
+        "active_turn_id": null,
+        "block_reason": null,
+        "close_state": "none",
+        "initial_snapshot_id": "snap-54dac14380d0d91a6c17805f",
+        "latest_snapshot_id": "snap-54dac14380d0d91a6c17805f",
+        "coverage_profile_id": "cov",
+        "policy_profile_id": "pol",
+        "created_at": 1790797002438,
+        "updated_at": 1790797009775
+      },
+      "events": {
+        "events": [
+          {
+            "cursor": 4,
+            "type": "turn_admitted",
+            "payload": {
+              "expected_snapshot_id": "snap-54dac14380d0d91a6c17805f"
+            },
+            "created_at": 1790797002499
+          },
+          {
+            "cursor": 5,
+            "type": "turn_starting",
+            "payload": {},
+            "created_at": 1790797002500
+          },
+          {
+            "cursor": 6,
+            "type": "input_manifest_sealed",
+            "payload": {
+              "artifact_id": "art-a2a8f818d042f8fb4ff12baa",
+              "inputs": 0
+            },
+            "created_at": 1790797002502
+          },
+          {
+            "cursor": 7,
+            "type": "dispatch_permission_granted",
+            "payload": {},
+            "created_at": 1790797002505
+          },
+          {
+            "cursor": 8,
+            "type": "adapter:native_ref_obtained",
+            "payload": {
+              "ref": "01a0f3d1-bc45-79e0-8086-4556a920ac81"
+            },
+            "created_at": 1790797004329
+          },
+          {
+            "cursor": 9,
+            "type": "turn_running",
+            "payload": {},
+            "created_at": 1790797004329
+          },
+          {
+            "cursor": 10,
+            "type": "adapter:progress",
+            "payload": {
+              "label": "Контекст прийняв. Наразі немає конкретного завдання, тож файли не змінював."
+            },
+            "created_at": 1790797008672
+          },
+          {
+            "cursor": 12,
+            "type": "turn_terminal",
+            "payload": {
+              "state": "SUCCEEDED",
+              "malformed": false,
+              "cancel_reason": null,
+              "observed_workspace_delta": {
+                "added": [],
+                "modified": [],
+                "deleted": []
+              }
+            },
+            "created_at": 1790797009775
+          },
+          {
+            "cursor": 13,
+            "type": "input_views_released",
+            "payload": {},
+            "created_at": 1790797009778
+          }
+        ],
+        "next_cursor": null
+      }
+    }
+  ],
+  "closedSession": null,
+  "error": "TypeError: Cannot read properties of null (reading 'summary')",
+  "processes": [
+    {
+      "binary": "C:/Users/902st/AppData/Roaming/npm/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+      "args": [
+        "exec",
+        "--sandbox",
+        "workspace-write",
+        "--json",
+        "--ignore-user-config",
+        "--model",
+        "gpt-6-luna",
+        "-c",
+        "model_reasoning_effort=\"low\"",
+        "-"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T19-36-41-739Z-codex-mcp\\workspace",
+      "pid": 63356,
+      "startedAt": "2026-09-30T19:36:42.536Z",
+      "exitCode": 0,
+      "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a0f3d1-bc45-79e0-8086-4556a920ac81\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"Контекст прийняв. Наразі немає конкретного завдання, тож файли не змінював.\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":17366,\"cached_input_tokens\":11008,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":0}}\n",
+      "stderr": "",
+      "stdin": "agent-broker context envelope (deterministic, broker-generated)\nturn=turn-34b4f51713b3bc1b5fa8bf30 session=session-3391371bc8efbe81efee8070 role=worker\nworkspace=ws baseline_snapshot=snap-54dac14380d0d91a6c17805f\nrequired inputs: none\ninstruction: re-read changed files before editing; do not modify input views.\n[broker-eor agent-broker:094b7771]\n",
+      "finishedAt": "2026-09-30T19:36:49.718Z"
+    }
+  ],
+  "nativeSession": {
+    "id": "01a0f3d1-bc45-79e0-8086-4556a920ac81",
+    "cli_version": "0.157.0",
+    "source": "exec",
+    "model_provider": "openai",
+    "contexts": [
+      {
+        "turn_id": "01a0f3d1-be29-7663-9138-6f3ac71b7a70",
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "approval_policy": "never",
+        "sandbox_policy": {
+          "type": "read-only"
+        },
+        "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T19-36-41-739Z-codex-mcp\\workspace"
+      }
+    ],
+    "counters": [
+      {
+        "total": {
+          "input_tokens": 17366,
+          "cached_input_tokens": 11008,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 17396
+        },
+        "last": {
+          "input_tokens": 17366,
+          "cached_input_tokens": 11008,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 17396
+        }
+      }
+    ]
+  }
+}

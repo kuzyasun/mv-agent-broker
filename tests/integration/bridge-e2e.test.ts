@@ -19,6 +19,8 @@ import {
   insertWorkspace,
 } from "../../src/storage/repo.ts";
 import { coverageContractHash } from "../../src/workspaces/coverage.ts";
+import type { ProviderAdapter } from "../../src/runtime/adapter.ts";
+import { MockAdapter } from "../../src/providers/mock/mockAdapter.ts";
 
 interface Line {
   write(line: string): void;
@@ -26,13 +28,14 @@ interface Line {
 
 async function withBridge(
   fn: (rpc: (method: string, params?: unknown) => Promise<unknown>, drain: () => Promise<void>) => Promise<void>,
-  opts?: { extraProjects?: Array<{ project_id: string; display_name: string }> },
+  opts?: { extraProjects?: Array<{ project_id: string; display_name: string }>; adapter?: ProviderAdapter },
 ): Promise<void> {
   const stateDir = mkdtempSync(path.join(tmpdir(), "ab-e2e-"));
   const wsRoot = path.join(stateDir, "ws-main");
   mkdirSync(path.join(wsRoot, "src"), { recursive: true });
   writeFileSync(path.join(wsRoot, "src", "main.c"), "int main(){return 0;}\n", "utf8");
   const daemon = await startDaemon({ stateDir, coordinatorId: "coord-e2e" });
+  if (opts?.adapter) daemon.adapters.set("mock", opts.adapter);
   try {
     const coverage = {
       source_prefixes: ["src", "tests"],
@@ -124,6 +127,41 @@ function toolContent(result: unknown): Record<string, unknown> {
 }
 
 describe("bridge e2e: §16.2 vertical slice over MCP stdio", () => {
+  it("delivers the full task and instructions, and retains the report after close", async () => {
+    const adapter = new MockAdapter();
+    adapter.executeTurn = async (req, gate, onEvent) => {
+      gate.acquireDispatchPermission();
+      onEvent({ type: "native_ref_obtained", payload: { ref: "native-contract" } });
+      return { native_outcome: "completed", native_conversation_ref: "native-contract",
+        agent_reported: { summary: req.task_envelope, format_status: "text_only" } };
+    };
+    await withBridge(async (rpc, drain) => {
+      const spawn = toolContent(await rpc("tools/call", toolParams("agent_session_spawn", {
+        project_id: "p-e2e", idempotency_key: "contract-spawn", provider: "mock", account_profile_id: "acct",
+        model: "mock-model", role: "worker", instructions: "Preserve the caller instructions.",
+        workspace: { mode: "current", workspace_id: "ws-e2e" }, policy_profile_id: "pol-e2e",
+      })));
+      const task = { goal: "Return the caller marker.", acceptance_criteria: ["exact marker"],
+        relevant_paths: ["src/main.c"], context: "caller context", checks: ["compare"], artifact_refs: [] };
+      const send = toolContent(await rpc("tools/call", toolParams("agent_session_send", {
+        session_id: spawn.session_id, idempotency_key: "contract-send", task,
+        workspace_precondition: { expected_snapshot_id: spawn.initial_snapshot_id },
+      })));
+      await drain();
+      await rpc("tools/call", toolParams("agent_session_stop", { session_id: spawn.session_id, idempotency_key: "contract-close" }));
+      await drain();
+      const result = toolContent(await rpc("tools/call", toolParams("agent_turn_result", { turn_id: send.turn_id })));
+      expect(result.execution_status).toBe("SUCCEEDED"); expect(result.quality_status).toBe("unreviewed");
+      const report = result.agent_reported as { summary: string; format_status: string };
+      expect(report.summary).toContain("Preserve the caller instructions.");
+      const deliveredTask = report.summary.split("[task contract JSON]\n")[1]!.split("\n[/task contract JSON]")[0]!;
+      expect(JSON.parse(deliveredTask)).toEqual(task); expect(report.format_status).toBe("text_only");
+      expect(JSON.stringify(result.broker_observed)).not.toContain(task.goal);
+      const replay = toolContent(await rpc("tools/call", toolParams("agent_turn_result", { turn_id: send.turn_id })));
+      expect(replay.agent_reported).toEqual(result.agent_reported);
+    }, { adapter });
+  });
+
   it("initialize + tools/list expose the 13 API-0.2 tools", async () => {
     await withBridge(async (rpc) => {
       const init = await rpc("initialize");

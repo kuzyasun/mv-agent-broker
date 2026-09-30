@@ -1,0 +1,43 @@
+{
+  "provider": "zcode",
+  "requestedModel": null,
+  "platform": "win32",
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T14:15:07.872Z",
+  "scope": "adapter-only; no broker lifecycle/profile acceptance",
+  "usage": "unknown; not exposed by adapter",
+  "turns": [
+    {
+      "index": 0,
+      "requestedNativeRef": null,
+      "events": [],
+      "error": {
+        "name": "BrokerError",
+        "message": "无法定位 CLI ZCode Built-in Provider Config：C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\provider\\zcode-builtin.json, C:\\Users\\902st\\AppData\\config\\provider\\zcode-builtin.json\n",
+        "code": "PROVIDER_PROTOCOL_ERROR"
+      },
+      "dispatchGateCalls": 1
+    }
+  ],
+  "status": "failed",
+  "finishedAt": "2026-09-30T14:15:08.498Z",
+  "processes": [
+    {
+      "binary": "C:\\nvm4w\\nodejs\\node.exe",
+      "args": [
+        "C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+        "-p",
+        "Remember this marker for the next turn: AB_4bd03ac6f1384219962baec1cbdf949d. Reply exactly AB_4bd03ac6f1384219962baec1cbdf949d. Do not use tools, read files, run commands, or change any file.",
+        "--mode",
+        "yolo",
+        "--cwd",
+        "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T14-15-07-870Z-zcode\\workspace"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T14-15-07-870Z-zcode\\workspace",
+      "pid": 58388,
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "无法定位 CLI ZCode Built-in Provider Config：C:\\Users\\902st\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\provider\\zcode-builtin.json, C:\\Users\\902st\\AppData\\config\\provider\\zcode-builtin.json\n"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "provider": "cursor",
+  "requestedModel": "gpt-5.4-mini-none",
+  "platform": "win32",
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T17:40:19.989Z",
+  "scope": "adapter-only; no broker lifecycle/profile acceptance",
+  "usage": "unknown; not exposed by adapter",
+  "turns": [
+    {
+      "index": 0,
+      "requestedNativeRef": null,
+      "events": [],
+      "error": {
+        "name": "BrokerError",
+        "message": "stream closed without result",
+        "code": "PROVIDER_PROTOCOL_ERROR"
+      },
+      "dispatchGateCalls": 1
+    }
+  ],
+  "adapterVersion": "0.1.0",
+  "status": "failed",
+  "finishedAt": "2026-09-30T17:40:20.899Z",
+  "processes": [
+    {
+      "binary": "pwsh.exe",
+      "args": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\902st\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--model",
+        "gpt-5.4-mini-none",
+        "--trust",
+        "--workspace",
+        "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T17-40-19-988Z-cursor\\workspace"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T17-40-19-988Z-cursor\\workspace",
+      "pid": 58640,
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": "",
+      "startedAt": "2026-09-30T17:40:20.159Z",
+      "finishedAt": "2026-09-30T17:40:20.898Z"
+    }
+  ]
+}

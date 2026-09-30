@@ -1,0 +1,14 @@
+{
+  "event": "turn.failed",
+  "sessionId": "sess_b469ad35-2f81-4e4a-a196-641c696050dd",
+  "error": {
+    "name": "Error",
+    "message": "Model creation failed",
+    "code": "UNKNOWN_ERROR",
+    "cause": {
+      "name": "Error",
+      "message": "Select a model before continuing",
+      "code": "CONFIGURATION_ERROR"
+    }
+  }
+}

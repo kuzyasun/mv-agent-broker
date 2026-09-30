@@ -41,7 +41,7 @@ export function parseCursorStreamLine(line: string): CursorStreamEvent {
   const type = obj.type;
 
   if (type === "system") {
-    if (obj.subtype === "init" && typeof obj.session_id === "string") {
+    if (obj.subtype === "init" && typeof obj.session_id === "string" && obj.session_id.trim()) {
       return {
         kind: "init",
         session_id: obj.session_id,
@@ -87,8 +87,9 @@ export function parseCursorStreamLine(line: string): CursorStreamEvent {
   }
 
   if (type === "result") {
-    const sessionId = typeof obj.session_id === "string" ? obj.session_id : null;
-    const text = typeof obj.result === "string" ? obj.result : "";
+    if (typeof obj.is_error !== "boolean" || typeof obj.result !== "string") return { kind: "unknown" };
+    const sessionId = typeof obj.session_id === "string" && obj.session_id.trim() ? obj.session_id : null;
+    const text = obj.result;
     const isError = obj.is_error === true;
     const usage = obj.usage ?? null;
     return {

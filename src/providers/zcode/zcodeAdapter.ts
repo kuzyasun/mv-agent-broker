@@ -1,142 +1,116 @@
-/**
- * ZCode provider adapter — print-first headless (ADR-0002).
- *
- * Facts from the Fusion feasibility study (docs/research/2026-09-11-zcode-cli-
- * fusion-runtime-feasibility.md): no `zcode` shim on PATH; invoke via
- * `node <…>/resources/glm/zcode.cjs` with `-p "<prompt>" --mode yolo --cwd <dir>`;
- * print mode returns plain stdout with NO session id, NO stream events, and
- * resume (`--resume`/`--continue`) is UNVERIFIED. Consequently this adapter:
- * - reports NO native conversation ref ("" — every turn is honestly a fresh
- *   print run; the broker never fakes a native_resume, INV-05);
- * - refuses oversized prompts (argv transport; Windows ENAMETOOLONG risk is
- *   an open question in the study — we fail closed instead);
- * - stays `verification: configured` until an operator-authorized spike.
- */
-import type { ProviderAdapter } from "../../runtime/adapter.ts";
-import type { AdapterEvent, DispatchGate, RuntimeObservation, TurnExecutionRequest, TurnExecutionResult } from "../../runtime/adapter.ts";
+/** ZCode standalone --json adapter, based on the native 0.16.9 smoke. */
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { ProviderAdapter, AdapterEvent, DispatchGate, RuntimeObservation, TurnExecutionRequest, TurnExecutionResult } from "../../runtime/adapter.ts";
 import { runHeadlessCli } from "../common/headless.ts";
 import { BrokerError } from "../../shared/errors.ts";
+import { createZcodePersonalConfig, resolveZcodeBuiltinPath } from "./nativeConfig.ts";
+import { parseZcodeResult } from "./resultParser.ts";
 
-/** argv prompt cap: conservative until the ENAMETOOLONG question is resolved. */
 const ZCODE_PROMPT_ARG_MAX = 6000;
-
+const ZCODE_OUTPUT_MAX = 1_048_576;
 const ZCODE_ENV_ALLOWLIST = [
   "HOME", "PATH", "SHELL", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE",
-  "TERM", "TMPDIR", "COLORTERM", "APPDATA", "LOCALAPPDATA", "USERPROFILE",
-  "SystemRoot",
+  "TERM", "TMPDIR", "TEMP", "TMP", "COLORTERM", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "SystemRoot",
+  // CLI owns account state and credential decryption; secrets are not read or copied.
+  "ZCODE_DATA_BASE_DIR", "ZCODE_CREDENTIAL_SECRET",
+  "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "ZCODE_LOG_DIR",
 ] as const;
 
 export interface ZcodeAdapterOptions {
-  /** Absolute path to the desktop bundle (zcode.cjs). */
   bundlePath: string;
-  /** Node executable (default "node"). */
   nodeBinary?: string;
-  /** Effective model provider must be configured in ~/.zcode/cli/config.json (CLI-owned auth). */
+  /** Override for distributions with a different built-in config layout. */
+  builtinProviderConfigPath?: string;
+  /** Existing permission behavior; reviewer enforcement is not established. */
   mode?: string;
 }
 
 export class ZcodeAdapter implements ProviderAdapter {
   readonly providerId = "zcode";
-  readonly adapterVersion = "0.1.0";
+  readonly adapterVersion = "0.2.0";
   private readonly opts: ZcodeAdapterOptions;
-
-  constructor(opts: ZcodeAdapterOptions) {
-    this.opts = opts;
-  }
+  constructor(opts: ZcodeAdapterOptions) { this.opts = opts; }
 
   preflight(config: Record<string, unknown>): void {
-    const fail = config.failPreflight;
-    if (fail instanceof BrokerError) throw fail;
-    if (!this.opts.bundlePath) {
-      throw new BrokerError("PROVIDER_INCOMPATIBLE", "ZCode bundle path is not configured.");
+    if (config.failPreflight instanceof BrokerError) throw config.failPreflight;
+    if (!this.opts.bundlePath || !existsSync(this.opts.bundlePath)) {
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", "ZCode bundle path does not exist.", { executionStarted: false });
     }
+    resolveZcodeBuiltinPath(this.opts.bundlePath, this.opts.builtinProviderConfigPath);
   }
 
-  async executeTurn(
-    req: TurnExecutionRequest,
-    gate: DispatchGate,
-    onEvent: (ev: AdapterEvent) => void,
-  ): Promise<TurnExecutionResult> {
-    gate.acquireDispatchPermission();
-
+  async executeTurn(req: TurnExecutionRequest, gate: DispatchGate, onEvent: (ev: AdapterEvent) => void): Promise<TurnExecutionResult> {
     if (req.task_envelope.length > ZCODE_PROMPT_ARG_MAX) {
-      throw new BrokerError(
-        "INPUT_LIMIT",
-        `ZCode prompt exceeds the argv transport cap (${ZCODE_PROMPT_ARG_MAX} chars) — deliver context via task artifacts instead.`,
-        { executionStarted: false },
-      );
+      throw new BrokerError("INPUT_LIMIT", `ZCode prompt exceeds the argv transport cap (${ZCODE_PROMPT_ARG_MAX} chars) — deliver context via task artifacts instead.`, { executionStarted: false });
     }
-
+    if (req.native_conversation_ref !== null && !/^sess_[a-zA-Z0-9_-]+$/.test(req.native_conversation_ref)) {
+      throw new BrokerError("SESSION_NOT_RESUMABLE", "ZCode native conversation reference must be a sess_ ID.", { executionStarted: false });
+    }
+    this.preflight({});
+    const builtin = resolveZcodeBuiltinPath(this.opts.bundlePath, this.opts.builtinProviderConfigPath);
+    const config = createZcodePersonalConfig(builtin, req.requested_model, req.requested_effort);
     const controller = new AbortController();
-    const poll = setInterval(() => {
-      const reason = gate.cancellationRequested();
-      if (reason !== null) controller.abort();
-    }, 100);
-    const stdoutLines: string[] = [];
-
+    let tmpDir: string | null = null;
+    let poll: NodeJS.Timeout | null = null;
+    let text = "";
+    let outputTooLarge = false;
+    let emittedRef = false;
+    const checkCancel = () => { if (gate.cancellationRequested() !== null) controller.abort(); };
     try {
-      const result = await runHeadlessCli(
-        {
-          binary: this.opts.nodeBinary ?? "node",
-          args: [
-            this.opts.bundlePath,
-            "-p", req.task_envelope,
-            "--mode", this.opts.mode ?? "yolo",
-            ...(req.workspace_path ? ["--cwd", req.workspace_path] : []),
-          ],
-          promptStdin: "",
-          promptArgv: req.task_envelope,
-          cwd: req.workspace_path ?? process.cwd(),
-          envAllowlist: ZCODE_ENV_ALLOWLIST,
-          inheritEnv: process.env,
-          firstLineTimeoutMs: 120_000,
-          inactivityTimeoutMs: 300_000,
-          signal: controller.signal,
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "agent-broker-zcode-"));
+      const personal = path.join(tmpDir, "provider_config.json");
+      writeFileSync(personal, JSON.stringify(config), { encoding: "utf8", mode: 0o600 });
+      const args = [this.opts.bundlePath, "--prompt", req.task_envelope, "--json", "--mode", this.opts.mode ?? "yolo"];
+      if (req.workspace_path) args.push("--cwd", req.workspace_path);
+      if (req.native_conversation_ref !== null) args.push("--resume", req.native_conversation_ref);
+      // Single dispatch gate immediately before handing the task to the CLI.
+      gate.acquireDispatchPermission();
+      checkCancel();
+      if (controller.signal.aborted) throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "ZCode cancelled before launch.", { executionStarted: false });
+      poll = setInterval(checkCancel, 100);
+      const result = await runHeadlessCli({
+        binary: this.opts.nodeBinary ?? process.execPath, args,
+        promptStdin: "", promptArgv: req.task_envelope,
+        cwd: req.workspace_path ?? process.cwd(), envAllowlist: ZCODE_ENV_ALLOWLIST,
+        inheritEnv: { ...process.env, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtin,
+          ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personal, ZCODE_LOG_DIR: path.join(tmpDir, "log") },
+        firstLineTimeoutMs: 120_000, inactivityTimeoutMs: 300_000, signal: controller.signal,
+      }, {
+        onStdoutLine: (line) => {
+          if (outputTooLarge) return;
+          text += line + "\n";
+          if (text.length > ZCODE_OUTPUT_MAX) { outputTooLarge = true; controller.abort(); return; }
+          const parsed = parseZcodeResult(text);
+          if (parsed && !emittedRef && (req.native_conversation_ref === null || parsed.sessionId === req.native_conversation_ref)) {
+            emittedRef = true;
+            onEvent({ type: "native_ref_obtained", payload: { ref: parsed.sessionId } });
+          }
         },
-        {
-          onStdoutLine: (line) => stdoutLines.push(line),
-          onStderrLine: () => undefined,
-        },
-      );
-
-      const text = stdoutLines.join("\n").trim();
-      if (result.timedOut) {
-        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", `zcode timed out (${result.timedOut})`, {
-          executionStarted: true,
-        });
+        onStderrLine: () => undefined,
+      });
+      if (outputTooLarge || result.timedOut || result.killed || result.exitCode !== 0) {
+        const message = outputTooLarge ? "ZCode JSON output exceeds the adapter limit." : result.timedOut ? `ZCode timed out (${result.timedOut}).` : result.killed ? "ZCode execution interrupted." : result.stderrTail || `ZCode exited with code ${result.exitCode}.`;
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", message, { executionStarted: true });
       }
-      if (result.exitCode !== 0) {
-        throw new BrokerError(
-          "PROVIDER_PROTOCOL_ERROR",
-          result.stderrTail || `zcode exited with code ${result.exitCode}`,
-          { executionStarted: true },
-        );
+      const parsed = parseZcodeResult(text);
+      if (!parsed || (parsed.projection && parsed.projection.status !== "idle")) {
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "ZCode exited without a valid completed JSON result.", { executionStarted: true });
       }
-      onEvent({ type: "progress", payload: { label: "print-run-complete" } });
-      return {
-        native_outcome: "completed",
-        // No session identity exists in print mode — the empty ref is the
-        // honest answer; the executor records no native conversation.
-        native_conversation_ref: "",
-        agent_reported: {
-          summary: text.slice(0, 4000) || "zcode print run complete",
-          format_status: "text_only",
-        },
-      };
+      if (req.native_conversation_ref !== null && parsed.sessionId !== req.native_conversation_ref) {
+        throw new BrokerError("SESSION_NOT_RESUMABLE", "ZCode returned a different native session during explicit resume.", { executionStarted: true });
+      }
+      onEvent({ type: "progress", payload: { label: "json-run-complete" } });
+      return { native_outcome: "completed", native_conversation_ref: parsed.sessionId,
+        agent_reported: { summary: parsed.response.slice(0, 4000) || "zcode turn complete", format_status: "text_only" } };
     } finally {
-      clearInterval(poll);
+      if (poll) clearInterval(poll);
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
     }
   }
 
-  async shutdownIdleRuntime(): Promise<void> {
-    /* no persistent runtime in print-first mode */
-  }
-
-  inspectRuntime(): RuntimeObservation | null {
-    return null;
-  }
-
-  async interruptTurn(): Promise<boolean> {
-    return false; // abort is handled through the gate's AbortController
-  }
+  async shutdownIdleRuntime(): Promise<void> {}
+  inspectRuntime(): RuntimeObservation | null { return null; }
+  async interruptTurn(): Promise<boolean> { return false; }
 }

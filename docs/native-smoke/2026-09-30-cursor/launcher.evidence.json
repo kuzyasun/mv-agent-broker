@@ -1,0 +1,59 @@
+{
+  "timestamp": "2026-09-30T17:52:40.180Z",
+  "promptsSent": 0,
+  "attempts": [
+    {
+      "withPathext": false,
+      "envKeys": [
+        "PATH",
+        "SystemRoot",
+        "ComSpec",
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP"
+      ],
+      "args": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\902st\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
+        "--version"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "withPathext": true,
+      "envKeys": [
+        "PATH",
+        "SystemRoot",
+        "ComSpec",
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+        "PATHEXT"
+      ],
+      "args": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\902st\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
+        "--version"
+      ],
+      "exitCode": 0,
+      "stdout": "2026.09.28-64d2043\n",
+      "stderr": ""
+    }
+  ]
+}

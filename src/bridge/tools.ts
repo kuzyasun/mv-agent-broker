@@ -287,7 +287,7 @@ function turnResultDto(core: BrokerCore, coordinatorId: string, turn: TurnRecord
       native_conversation_ref: session.native_conversation_ref,
       status: session.context_status,
     },
-    agent_reported: null,
+    agent_reported: core.turnAgentReported(coordinatorId, turn.turn_id),
     broker_observed: {
       native_outcome: turn.native_outcome,
       termination_reason: turn.termination_reason,
@@ -300,9 +300,7 @@ function turnResultDto(core: BrokerCore, coordinatorId: string, turn: TurnRecord
     },
     usage: { availability: "unknown", billing_basis: "unknown", measurements: [] },
     artifacts: [],
-    warnings: [
-      "Mock/native summary text is not persisted in P3-2; use agent_turn_events for the turn evidence trail.",
-    ],
+    warnings: [],
   };
 }
 

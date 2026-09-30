@@ -1,0 +1,143 @@
+{
+  "provider": "cursor",
+  "requestedModel": "gpt-5.4-mini-none",
+  "platform": "win32",
+  "node": "v24.11.1",
+  "startedAt": "2026-09-30T17:50:36.544Z",
+  "scope": "adapter-only; no broker lifecycle/profile acceptance",
+  "usage": "unknown; not exposed by adapter",
+  "turns": [
+    {
+      "index": 0,
+      "requestedNativeRef": null,
+      "events": [
+        {
+          "type": "native_ref_obtained",
+          "payload": {
+            "ref": "30b0fd9a-ce76-47df-8661-8a7ce7148b91"
+          }
+        },
+        {
+          "type": "progress",
+          "payload": {
+            "label": "AB_8bbb30a96cd642a4b65a0d195b9ef200"
+          }
+        }
+      ],
+      "result": {
+        "native_outcome": "completed",
+        "native_conversation_ref": "30b0fd9a-ce76-47df-8661-8a7ce7148b91",
+        "agent_reported": {
+          "summary": "AB_8bbb30a96cd642a4b65a0d195b9ef200",
+          "format_status": "text_only"
+        }
+      },
+      "markerMatched": true,
+      "dispatchGateCalls": 1,
+      "observedModel": "GPT-5.4 Mini None",
+      "observedNativeRef": "30b0fd9a-ce76-47df-8661-8a7ce7148b91",
+      "rawResultUsage": {
+        "inputTokens": 12496,
+        "outputTokens": 25,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0
+      }
+    },
+    {
+      "index": 1,
+      "requestedNativeRef": "30b0fd9a-ce76-47df-8661-8a7ce7148b91",
+      "events": [
+        {
+          "type": "native_ref_obtained",
+          "payload": {
+            "ref": "30b0fd9a-ce76-47df-8661-8a7ce7148b91"
+          }
+        },
+        {
+          "type": "progress",
+          "payload": {
+            "label": "AB_8bbb30a96cd642a4b65a0d195b9ef200"
+          }
+        }
+      ],
+      "result": {
+        "native_outcome": "completed",
+        "native_conversation_ref": "30b0fd9a-ce76-47df-8661-8a7ce7148b91",
+        "agent_reported": {
+          "summary": "AB_8bbb30a96cd642a4b65a0d195b9ef200",
+          "format_status": "text_only"
+        }
+      },
+      "markerMatched": true,
+      "dispatchGateCalls": 1,
+      "observedModel": "GPT-5.4 Mini None",
+      "observedNativeRef": "30b0fd9a-ce76-47df-8661-8a7ce7148b91",
+      "rawResultUsage": {
+        "inputTokens": 316,
+        "outputTokens": 25,
+        "cacheReadTokens": 12288,
+        "cacheWriteTokens": 0
+      }
+    }
+  ],
+  "expectedModelDisplayName": "GPT-5.4 Mini None",
+  "adapterVersion": "0.2.0",
+  "status": "headless-and-resume-passed",
+  "finishedAt": "2026-09-30T17:50:57.938Z",
+  "processes": [
+    {
+      "binary": "pwsh.exe",
+      "args": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\902st\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--model",
+        "gpt-5.4-mini-none",
+        "--trust",
+        "--workspace",
+        "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T17-50-36-541Z-cursor\\workspace"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T17-50-36-541Z-cursor\\workspace",
+      "pid": 38252,
+      "exitCode": 0,
+      "stdout": "{\"type\":\"system\",\"subtype\":\"init\",\"apiKeySource\":\"login\",\"cwd\":\"C:\\\\projects\\\\gemslibe\\\\ago\\\\agent-broker\\\\.state\\\\native-smoke\\\\2026-09-30T17-50-36-541Z-cursor\\\\workspace\",\"session_id\":\"30b0fd9a-ce76-47df-8661-8a7ce7148b91\",\"model\":\"GPT-5.4 Mini None\",\"permissionMode\":\"default\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Remember this marker for the next turn: AB_8bbb30a96cd642a4b65a0d195b9ef200. Reply exactly AB_8bbb30a96cd642a4b65a0d195b9ef200. Do not use tools, read files, run commands, or change any file.\\n[broker-eor agent-broker:0ad8a6d2]\"}]},\"session_id\":\"30b0fd9a-ce76-47df-8661-8a7ce7148b91\"}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"AB_8bbb30a96cd642a4b65a0d195b9ef200\"}]},\"session_id\":\"30b0fd9a-ce76-47df-8661-8a7ce7148b91\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"duration_ms\":4488,\"duration_api_ms\":4488,\"is_error\":false,\"result\":\"AB_8bbb30a96cd642a4b65a0d195b9ef200\",\"session_id\":\"30b0fd9a-ce76-47df-8661-8a7ce7148b91\",\"request_id\":\"043ddb4d-ed83-4b73-9c08-1045e5967cb3\",\"usage\":{\"inputTokens\":12496,\"outputTokens\":25,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}\n",
+      "stderr": "",
+      "startedAt": "2026-09-30T17:50:36.704Z",
+      "finishedAt": "2026-09-30T17:50:47.672Z"
+    },
+    {
+      "binary": "pwsh.exe",
+      "args": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\902st\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--model",
+        "gpt-5.4-mini-none",
+        "--trust",
+        "--workspace",
+        "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T17-50-36-541Z-cursor\\workspace",
+        "--resume",
+        "30b0fd9a-ce76-47df-8661-8a7ce7148b91"
+      ],
+      "cwd": "C:\\projects\\gemslibe\\ago\\agent-broker\\.state\\native-smoke\\2026-09-30T17-50-36-541Z-cursor\\workspace",
+      "pid": 58020,
+      "exitCode": 0,
+      "stdout": "{\"type\":\"system\",\"subtype\":\"init\",\"apiKeySource\":\"login\",\"cwd\":\"C:\\\\projects\\\\gemslibe\\\\ago\\\\agent-broker\\\\.state\\\\native-smoke\\\\2026-09-30T17-50-36-541Z-cursor\\\\workspace\",\"session_id\":\"30b0fd9a-ce76-47df-8661-8a7ce7148b91\",\"model\":\"GPT-5.4 Mini None\",\"permissionMode\":\"default\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Return only the exact marker I asked you to remember in the previous turn. Do not use tools, read files, run commands, or change any file.\\n[broker-eor agent-broker:cfdfaad3]\"}]},\"session_id\":\"30b0fd9a-ce76-47df-8661-8a7ce7148b91\"}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"AB_8bbb30a96cd642a4b65a0d195b9ef200\"}]},\"session_id\":\"30b0fd9a-ce76-47df-8661-8a7ce7148b91\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"duration_ms\":4121,\"duration_api_ms\":4121,\"is_error\":false,\"result\":\"AB_8bbb30a96cd642a4b65a0d195b9ef200\",\"session_id\":\"30b0fd9a-ce76-47df-8661-8a7ce7148b91\",\"request_id\":\"0dcb6d0d-bc99-4a9b-a103-ef427247bb3a\",\"usage\":{\"inputTokens\":316,\"outputTokens\":25,\"cacheReadTokens\":12288,\"cacheWriteTokens\":0}}\n",
+      "stderr": "",
+      "startedAt": "2026-09-30T17:50:47.791Z",
+      "finishedAt": "2026-09-30T17:50:57.937Z"
+    }
+  ]
+}

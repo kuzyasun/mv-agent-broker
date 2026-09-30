@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   parseCursorStreamLine,
   summarizeCursorTurn,
@@ -6,6 +7,23 @@ import {
 } from "../../src/providers/cursor/streamParser.ts";
 
 describe("Cursor stream parser", () => {
+  it("parses retained native Windows output with the display model name", () => {
+    const evidence = JSON.parse(readFileSync(new URL("../../docs/native-smoke/2026-09-30-cursor/adapter-resume.evidence.json", import.meta.url), "utf8"));
+    const events = evidence.processes[0].stdout.trim().split(/\r?\n/).map(parseCursorStreamLine);
+    expect(events[0]).toEqual({ kind: "init", session_id: evidence.turns[0].observedNativeRef, model: "GPT-5.4 Mini None" });
+    const summary = summarizeCursorTurn(events);
+    expect(summary.sawResult).toBe(true); expect(summary.isError).toBe(false);
+    expect(summary.sessionId).toBe(evidence.turns[0].result.native_conversation_ref);
+    expect(summary.resultText).toBe(evidence.turns[0].result.agent_reported.summary);
+  });
+  it.each([
+    { type: "result", result: "ok" },
+    { type: "result", is_error: "false", result: "ok" },
+    { type: "result", is_error: false, result: {} },
+    { type: "system", subtype: "init", session_id: " " },
+  ])("does not turn malformed native records into success %j", record => {
+    expect(parseCursorStreamLine(JSON.stringify(record))).toEqual({ kind: "unknown" });
+  });
   describe("parseCursorStreamLine", () => {
     it("captures init event with session_id and model", () => {
       const line = JSON.stringify({
