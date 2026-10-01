@@ -82,12 +82,17 @@ import {
   isNonterminalTurnState,
 } from "./transitions.ts";
 import type { TurnExecutor } from "./execution.ts";
-import { computeEffectiveWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
+import { computeEffectiveWritePolicy, loadSessionWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
 import {
   cloneFrozenPolicy,
   type AdapterPreflightContext,
   type ProviderAdapter,
 } from "../runtime/adapter.ts";
+import {
+  fingerprintReadinessObservation,
+  readReadinessObservation,
+  type ProviderReadinessObservation,
+} from "../providers/common/readiness.ts";
 import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, CaptureError } from "../snapshots/capture.ts";
 import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
@@ -157,11 +162,12 @@ export interface StopRequest {
 
 /**
  * Everything the non-authoritative spawn preflight observed about external
- * state (§7.2 step 3): the adapter version, the registered account binding
- * and the narrowed effective policy. Carried into the authoritative
- * transaction where a pure fingerprint re-comparison decides whether the
- * observations are still fresh — stale observations are rejected, never
- * admitted.
+ * state (§7.2 step 3): the adapter version, the registered account binding,
+ * the narrowed effective policy and the adapter's optional readiness
+ * observation (observed CLI version/catalog/auth — void-compatible adapters
+ * leave it null). Carried into the authoritative transaction where a pure
+ * fingerprint re-comparison decides whether the observations are still fresh
+ * — stale observations are rejected, never admitted.
  */
 interface SpawnPreflightCandidate {
   adapter: ProviderAdapter;
@@ -169,8 +175,36 @@ interface SpawnPreflightCandidate {
   adapterVersion: string;
   account: AccountProfileRecord;
   policy: EffectiveWritePolicy;
+  observation: ProviderReadinessObservation | null;
   fingerprint: string;
 }
+
+/**
+ * Durable provider binding sealed into the provision_session intent (§12.1,
+ * §13.3): the REGISTERED account tuple, the adapter version and the observed
+ * readiness evidence at admission. Later turns re-validate live rows against
+ * this immutable grant — drift refuses instead of migrating.
+ */
+interface DurableReadinessMetadata {
+  fingerprint: string;
+  observed_at: number;
+  source: string;
+  authenticated: boolean | null;
+  model_catalog_size: number | null;
+}
+
+export interface DurableProviderBinding {
+  binding_version: number;
+  account: { account_profile_id: string; provider: string; auth_mode: string; quota_scope_id: string | null };
+  adapter_version: string | null;
+  cli_version: string | null;
+  readiness: DurableReadinessMetadata | null;
+}
+
+export type ProviderBindingLookup =
+  | { kind: "unbound" }
+  | { kind: "bound"; binding: DurableProviderBinding }
+  | { kind: "malformed"; reason: string };
 
 // ─── Public response shapes ─────────────────────────────────────────────────
 
@@ -420,15 +454,18 @@ export class BrokerCore {
       adapterVersion: adapter.adapterVersion,
       account,
       policy,
-      fingerprint: spawnCandidateFingerprint({ provider: req.provider, adapterVersion: adapter.adapterVersion, account, policy }),
+      observation: null,
+      fingerprint: "",
     };
 
     // §13.2 provider readiness: the adapter decides from the broker-supplied
     // context (model/effort/role/workspace/account/policy) with zero
     // inference. Known no-dispatch failures keep their code/message with
     // executionStarted=false; anything unexpected is PROVIDER_INCOMPATIBLE.
+    // A returned readiness observation is validated defensively; malformed non-void
+    // returns refuse admission rather than dropping required evidence.
     try {
-      adapter.preflight({
+      const returned = adapter.preflight({
         provider: req.provider,
         model: req.model,
         effort: req.effort,
@@ -441,6 +478,7 @@ export class BrokerCore {
         },
         effective_policy: candidate.policy,
       } satisfies AdapterPreflightContext);
+      candidate.observation = readReadinessObservation(returned, adapter.providerId);
     } catch (e) {
       if (e instanceof BrokerError) {
         throw new BrokerError(e.code, e.message, {
@@ -456,6 +494,13 @@ export class BrokerCore {
         { executionStarted: false },
       );
     }
+    candidate.fingerprint = spawnCandidateFingerprint({
+      provider: req.provider,
+      adapterVersion: adapter.adapterVersion,
+      account,
+      policy,
+      observation: candidate.observation,
+    });
     return candidate;
   }
 
@@ -495,8 +540,10 @@ export class BrokerCore {
     }
     // Re-derive the effective policy from the live profile row (pure DB read);
     // a changed config yields a different fingerprint and refuses admission.
+    // The readiness observation is the CAPTURED preflight return (pure
+    // in-memory comparison; no external process runs here).
     const policy = cloneFrozenPolicy(this.spawnPolicyPreflight(req));
-    const fresh = spawnCandidateFingerprint({ provider: req.provider, adapterVersion: adapter.adapterVersion, account, policy });
+    const fresh = spawnCandidateFingerprint({ provider: req.provider, adapterVersion: adapter.adapterVersion, account, policy, observation: candidate.observation });
     if (fresh !== candidate.fingerprint) {
       throw new BrokerError(
         "POLICY_UNSUPPORTED",
@@ -572,10 +619,12 @@ export class BrokerCore {
       owner_coordinator_id: coordinatorId,
       provider: req.provider,
       // §13.3: bound to the revalidated adapter version and the REGISTERED
-      // account auth_mode. Effective model/effort and cli_version stay null —
-      // never fabricated from requested values before real native evidence.
+      // account auth_mode. cli_version is persisted ONLY from the observed
+      // readiness evidence (unknown stays null). Effective model/effort stay
+      // null — never fabricated from requested values before real native
+      // execution evidence.
       adapter_version: candidate.adapterVersion,
-      cli_version: null,
+      cli_version: candidate.observation?.cli_version ?? null,
       account_profile_id: req.account_profile_id,
       auth_mode: candidate.account.auth_mode,
       requested_model: req.model,
@@ -613,11 +662,15 @@ export class BrokerCore {
       turn_id: null,
       state: "pending",
       // §12.1 durable binding: requested restrictions + profile config/
-      // fingerprint + normalized effective policy, captured at admission.
+      // fingerprint + normalized effective policy, captured at admission —
+      // plus the §13.3 provider binding (registered account tuple, adapter
+      // version, observed readiness evidence). Immutable afterwards; later
+      // turns refuse on drift instead of migrating.
       payload: JSON.stringify({
         request_hash: payloadHash,
         instructions: req.instructions,
         effective_policy: effectivePolicy,
+        provider_binding: durableProviderBinding(candidate),
       }),
       created_at: now,
       updated_at: now,
@@ -947,6 +1000,11 @@ export class BrokerCore {
       throw new BrokerError("SESSION_BLOCKED", session0.block_reason ?? "Session is blocked.");
     }
     this.assertAdmissionOpen();
+    // §13.3 later-turn readiness revalidation (outside the tx): a session with
+    // a durably bound readiness fingerprint refuses on observed CLI/profile/
+    // catalog drift BEFORE any accepted state. Authorization and idempotent
+    // replay already ran; the authoritative transaction below never probes.
+    this.sendReadinessRevalidation(session0);
     // §7.2 step 3 preflight: expensive filesystem hashing outside the tx.
     this.sendSnapshotPreflight(session0, req);
     // A05 preflight: the writer lease target's physical checkout identity is
@@ -981,6 +1039,11 @@ export class BrokerCore {
 
         this.sendPreflight(req);
         this.sendAdmissionChecks(session, req);
+        // §13.3 durable provider binding re-check: live account rows must
+        // still match the immutable spawn-time grant (registered account
+        // tuple). Drift refuses with zero accepted resources — no migration,
+        // no fresh-session fallback; historical grants/leases are preserved.
+        this.assertDurableProviderBinding(session);
         this.assertAdmissionOpen();
         // Re-validate immutable snapshot records inside the authoritative
         // boundary (cheap record reads; §9.5 binding rules).
@@ -1344,6 +1407,103 @@ export class BrokerCore {
     }
   }
 
+  /**
+   * §13.3 durable provider binding re-check (inside the authoritative tx):
+   * pure record reads only. A live account row that no longer matches the
+   * immutable spawn-time tuple (provider/auth_mode/quota scope) refuses the
+   * turn before acceptance — zero accepted resources, key freed as a mutable
+   * rejection, no migration and no fresh-session fallback.
+   */
+  private assertDurableProviderBinding(session: SessionRecord): void {
+    const lookup = readSessionProviderBinding(this.db, session.session_id);
+    if (lookup.kind === "malformed") {
+      throw new BrokerError("POLICY_UNSUPPORTED", `Session provider binding is unusable: ${lookup.reason}`, {
+        executionStarted: false,
+      });
+    }
+    const isNative = ["claude", "codex", "cursor", "antigravity", "zcode"].includes(session.provider);
+    if (lookup.kind !== "bound") {
+      if (isNative) {
+        throw new BrokerError(
+          "PROVIDER_INCOMPATIBLE",
+          "Native legacy session lacks durable provider binding; replacement session required (§13.3).",
+          { executionStarted: false },
+        );
+      }
+      return; // legacy sessions keep their established contract
+    }
+    const binding = lookup.binding;
+    const account = getAccount(this.db, session.account_profile_id);
+    if (!account) {
+      throw new BrokerError("INVALID_REQUEST", `Account profile '${session.account_profile_id}' is not registered.`, {
+        executionStarted: false,
+      });
+    }
+    if (
+      account.account_profile_id !== binding.account.account_profile_id ||
+      account.provider !== binding.account.provider ||
+      account.auth_mode !== binding.account.auth_mode ||
+      account.quota_scope_id !== binding.account.quota_scope_id
+    ) {
+      throw new BrokerError(
+        "PROVIDER_INCOMPATIBLE",
+        "Registered account binding drifted from the session's durable grant (account profile ID, provider, auth mode or quota scope); refusing the turn — spawn a replacement session (historical grants are preserved).",
+        { executionStarted: false },
+      );
+    }
+  }
+
+  /**
+   * §13.3 later-turn readiness revalidation (OUTSIDE the tx, §7.2 step 3):
+   * sessions with a durably bound readiness fingerprint re-run the adapter's
+   * (adapter-side cached, freshness-bounded) preflight and compare the pure
+   * observation fingerprint. Observed CLI/profile/catalog drift refuses
+   * BEFORE acceptance. Sessions without observed readiness (void-compatible
+   * adapters, legacy sessions) are unchanged.
+   */
+  private sendReadinessRevalidation(session: SessionRecord): void {
+    const lookup = readSessionProviderBinding(this.db, session.session_id);
+    if (lookup.kind !== "bound" || lookup.binding.readiness === null) return;
+    const adapter = this.adapters.get(session.provider);
+    if (!adapter) {
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", `Provider '${session.provider}' is not available.`, {
+        executionStarted: false,
+      });
+    }
+    const account = getAccount(this.db, session.account_profile_id);
+    if (!account || account.provider !== session.provider) {
+      throw new BrokerError(
+        "PROVIDER_INCOMPATIBLE",
+        `Account profile '${session.account_profile_id}' is not available for provider '${session.provider}'.`,
+        { executionStarted: false },
+      );
+    }
+    const policyLookup = loadSessionWritePolicy(this.db, session);
+    if (policyLookup.kind !== "effective") return; // execution's established fail-closed path owns this refusal
+    const returned = adapter.preflight({
+      provider: session.provider,
+      model: session.requested_model,
+      effort: session.requested_effort,
+      role: session.role,
+      workspace_mode: session.workspace_mode,
+      account: {
+        account_profile_id: account.account_profile_id,
+        auth_mode: account.auth_mode,
+        quota_scope_id: account.quota_scope_id,
+      },
+      effective_policy: cloneFrozenPolicy(policyLookup.policy),
+    } satisfies AdapterPreflightContext);
+    const observation = readReadinessObservation(returned, adapter.providerId);
+    const fingerprint = observation ? fingerprintReadinessObservation(observation) : null;
+    if (fingerprint !== lookup.binding.readiness.fingerprint) {
+      throw new BrokerError(
+        "PROVIDER_INCOMPATIBLE",
+        "Observed provider readiness drifted from the session's durable binding (CLI version, catalog or config changed); refusing before acceptance — replacement session with revalidation required.",
+        { executionStarted: false, details: { bound_fingerprint: lookup.binding.readiness.fingerprint } },
+      );
+    }
+  }
+
   private writerTurn(req: SendRequest): boolean {
     return "workspace_precondition" in req;
   }
@@ -1392,6 +1552,13 @@ export class BrokerCore {
   }
 
   private quotaScopeFor(session: SessionRecord): string {
+    // §13.3: the DURABLE account tuple bound at spawn decides quota scope — a
+    // later live account-row change must never retarget an existing grant
+    // (quota alias drift refuses at admission instead).
+    const lookup = readSessionProviderBinding(this.db, session.session_id);
+    if (lookup.kind === "bound") {
+      return lookup.binding.account.quota_scope_id ?? `shared:${lookup.binding.account.provider}`;
+    }
     // Quota scope resolution from account profiles; conservative shared
     // default per provider when unconfirmed (§12.3).
     return getAccount(this.db, session.account_profile_id)?.quota_scope_id ?? `shared:${session.provider}`;
@@ -1945,6 +2112,55 @@ export class BrokerCore {
     return this.authorizeSession(coordinatorId, sessionId);
   }
 
+  /**
+   * Additive session_status binding/readiness metadata (§10.1): the durable
+   * provider binding (registered account tuple, adapter version, observed
+   * readiness evidence). NO credentials, NO native history, NO settings —
+   * unknown stays null, never false, never a request echo. Legacy/unbound
+   * sessions report nulls with the session row's own observed values.
+   */
+  sessionProviderBinding(coordinatorId: string, sessionId: string): {
+    binding_version: number | null;
+    account: { account_profile_id: string; provider: string; auth_mode: string; quota_scope_id: string | null } | null;
+    adapter_version: string | null;
+    cli_version: string | null;
+    authenticated: boolean | null;
+    readiness_fingerprint: string | null;
+    readiness_observed_at: number | null;
+    readiness_source: string | null;
+    model_catalog_size: number | null;
+  } {
+    const session = this.authorizeSession(coordinatorId, sessionId);
+    const lookup = readSessionProviderBinding(this.db, session.session_id);
+    if (lookup.kind !== "bound") {
+      return {
+        binding_version: null,
+        account: null,
+        adapter_version: session.adapter_version,
+        cli_version: session.cli_version,
+        authenticated: null,
+        readiness_fingerprint: null,
+        readiness_observed_at: null,
+        readiness_source: null,
+        model_catalog_size: null,
+      };
+    }
+    const binding = lookup.binding;
+    return {
+      binding_version: binding.binding_version,
+      account: { ...binding.account },
+      adapter_version: binding.adapter_version ?? session.adapter_version,
+      cli_version: binding.cli_version ?? session.cli_version,
+      // CLI-owned auth status as OBSERVED at admission; null = unknown —
+      // distinct from a registered auth_mode and never reported as false.
+      authenticated: binding.readiness?.authenticated ?? null,
+      readiness_fingerprint: binding.readiness?.fingerprint ?? null,
+      readiness_observed_at: binding.readiness?.observed_at ?? null,
+      readiness_source: binding.readiness?.source ?? null,
+      model_catalog_size: binding.readiness?.model_catalog_size ?? null,
+    };
+  }
+
   sessionsList(coordinatorId: string, projectId: string): SessionRecord[] {
     authorizeProjectAccess(this.db, { coordinatorId, projectId });
     return listSessionsByOwner(this.db, projectId, coordinatorId);
@@ -2131,8 +2347,9 @@ function namespaceOf(project_id: string, owner: string, op: OperationName, key: 
 
 /**
  * Pure comparable fingerprint over every externally-observed spawn input
- * (§7.2): provider, adapter version, registered account binding and the
- * narrowed effective policy. Recomputed inside the admission transaction from
+ * (§7.2): provider, adapter version, registered account binding, the narrowed
+ * effective policy and the captured readiness observation (null for
+ * void-compatible adapters). Recomputed inside the admission transaction from
  * fresh pure reads — an unequal fingerprint rejects the spawn instead of
  * admitting stale preflight observations. The profile config itself is
  * covered by its `profile_fingerprint` (sha256 over the config text).
@@ -2142,6 +2359,7 @@ function spawnCandidateFingerprint(parts: {
   adapterVersion: string;
   account: Pick<AccountProfileRecord, "account_profile_id" | "provider" | "auth_mode" | "quota_scope_id">;
   policy: EffectiveWritePolicy;
+  observation: ProviderReadinessObservation | null;
 }): string {
   return sha256Hex(JSON.stringify({
     provider: parts.provider,
@@ -2161,7 +2379,120 @@ function spawnCandidateFingerprint(parts: {
       profile_fingerprint: parts.policy.profile_fingerprint,
       requested_restrictions: parts.policy.requested_restrictions,
     },
+    readiness_fingerprint: parts.observation ? fingerprintReadinessObservation(parts.observation) : null,
   }));
+}
+
+/** Seal the spawn candidate's durable provider binding (§12.1/§13.3 intent). */
+function durableProviderBinding(candidate: SpawnPreflightCandidate): {
+  binding_version: number;
+  account: { account_profile_id: string; provider: string; auth_mode: string; quota_scope_id: string | null };
+  adapter_version: string;
+  cli_version: string | null;
+  readiness: {
+    fingerprint: string;
+    observed_at: number;
+    source: string;
+    authenticated: boolean | null;
+    model_catalog_size: number | null;
+  } | null;
+} {
+  return {
+    binding_version: 1,
+    account: {
+      account_profile_id: candidate.account.account_profile_id,
+      provider: candidate.account.provider,
+      auth_mode: candidate.account.auth_mode,
+      quota_scope_id: candidate.account.quota_scope_id,
+    },
+    adapter_version: candidate.adapterVersion,
+    cli_version: candidate.observation?.cli_version ?? null,
+    readiness: candidate.observation
+      ? {
+          fingerprint: fingerprintReadinessObservation(candidate.observation),
+          observed_at: candidate.observation.observed_at,
+          source: candidate.observation.source,
+          authenticated: candidate.observation.authenticated,
+          model_catalog_size: candidate.observation.model_catalog?.length ?? null,
+        }
+      : null,
+  };
+}
+
+/**
+ * Read a session's durable provider binding from its provision_session
+ * intent. Missing legacy keys are unbound; native callers refuse replacement.
+ * A corrupt or unknown binding version fails closed as malformed.
+ */
+export function readSessionProviderBinding(db: RegistryDb, sessionId: string): ProviderBindingLookup {
+  let row: { payload: string | null } | undefined;
+  try {
+    row = db.raw
+      .prepare("SELECT payload FROM intents WHERE kind='provision_session' AND session_id=? ORDER BY created_at LIMIT 1")
+      .get(sessionId) as { payload: string | null } | undefined;
+  } catch {
+    return { kind: "unbound" };
+  }
+  if (!row || !row.payload) return { kind: "unbound" };
+  try {
+    const payload = JSON.parse(row.payload) as Record<string, unknown>;
+    const raw = payload.provider_binding;
+    if (raw === undefined) return { kind: "unbound" };
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return { kind: "malformed", reason: "provider binding is not an object" };
+    }
+    const b = raw as Record<string, unknown>;
+    if (b.binding_version !== 1 || typeof b.adapter_version !== "string" || b.adapter_version.length === 0 || b.adapter_version.length > 128 || (b.cli_version !== null && (typeof b.cli_version !== "string" || b.cli_version.length > 128))) {
+      return {kind:"malformed",reason:"provider binding version metadata is invalid"};
+    }
+    const account = b.account;
+    if (!account || typeof account !== "object" || Array.isArray(account)) {
+      return { kind: "malformed", reason: "provider binding account is missing" };
+    }
+    const a = account as Record<string, unknown>;
+    if (typeof a.account_profile_id !== "string" || typeof a.provider !== "string" || typeof a.auth_mode !== "string") {
+      return { kind: "malformed", reason: "provider binding account tuple is invalid" };
+    }
+    if (a.quota_scope_id !== null && typeof a.quota_scope_id !== "string") {
+      return { kind: "malformed", reason: "provider binding quota scope is invalid" };
+    }
+    if (b.readiness === undefined || (["cursor","antigravity","zcode"].includes(String(a.provider)) && b.readiness === null)) return {kind:"malformed",reason:"provider binding required readiness is missing"};
+    let readiness: DurableReadinessMetadata | null = null;
+    if (b.readiness !== undefined && b.readiness !== null) {
+      if (typeof b.readiness !== "object" || Array.isArray(b.readiness)) {
+        return { kind: "malformed", reason: "provider binding readiness is invalid" };
+      }
+      const r = b.readiness as Record<string, unknown>;
+      if (typeof r.fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(r.fingerprint)) {
+        return { kind: "malformed", reason: "provider binding readiness fingerprint is invalid" };
+      }
+      if (typeof r.observed_at !== "number" || !Number.isSafeInteger(r.observed_at) || r.observed_at < 0 || (r.source !== "cli_metadata_probe" && r.source !== "config_catalog") || (r.authenticated !== null && typeof r.authenticated !== "boolean") || (r.model_catalog_size !== null && (typeof r.model_catalog_size !== "number" || !Number.isSafeInteger(r.model_catalog_size) || r.model_catalog_size < 0 || r.model_catalog_size > 4096))) return {kind:"malformed",reason:"provider readiness metadata is invalid"};
+      readiness = {
+        fingerprint: r.fingerprint,
+        observed_at: r.observed_at,
+        source: r.source,
+        authenticated: typeof r.authenticated === "boolean" ? r.authenticated : null,
+        model_catalog_size: typeof r.model_catalog_size === "number" && Number.isSafeInteger(r.model_catalog_size) ? r.model_catalog_size : null,
+      };
+    }
+    return {
+      kind: "bound",
+      binding: {
+        binding_version: 1,
+        account: {
+          account_profile_id: a.account_profile_id,
+          provider: a.provider,
+          auth_mode: a.auth_mode,
+          quota_scope_id: typeof a.quota_scope_id === "string" ? a.quota_scope_id : null,
+        },
+        adapter_version: typeof b.adapter_version === "string" ? b.adapter_version : null,
+        cli_version: typeof b.cli_version === "string" ? b.cli_version : null,
+        readiness,
+      },
+    };
+  } catch (e) {
+    return { kind: "malformed", reason: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 function assertTurnTransitionSafe(from: TurnState, trigger: string): void {

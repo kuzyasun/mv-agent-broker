@@ -102,13 +102,13 @@ function assertCmdBoundarySafe(tokens: string[]): void {
   }
 }
 
-type WindowsLaunchTarget =
+export type WindowsLaunchTarget =
   | { kind: "direct"; binary: string }
   | { kind: "cmd-shim"; binary: string }
   | { kind: "powershell-shim"; binary: string }
   | { kind: "unsupported"; binary: string };
 
-function classifyWindowsTarget(binary: string): WindowsLaunchTarget {
+export function classifyWindowsTarget(binary: string): WindowsLaunchTarget {
   const lower = binary.toLowerCase();
   if (lower.endsWith(".cmd") || lower.endsWith(".bat")) return { kind: "cmd-shim", binary };
   if (lower.endsWith(".ps1")) return { kind: "powershell-shim", binary };
@@ -119,7 +119,7 @@ function classifyWindowsTarget(binary: string): WindowsLaunchTarget {
 }
 
 /** Resolve a bare command via where.exe on Windows (PATH + PATHEXT aware). */
-function resolveWindowsBinary(binary: string): string {
+export function resolveWindowsBinary(binary: string): string {
   if (path.isAbsolute(binary)) return binary;
   const root = Object.entries(process.env).find(([key]) => key.toUpperCase() === "SYSTEMROOT")?.[1] ?? "C:\\Windows";
   const probe = spawnSync(path.join(root, "System32", "where.exe"), [binary], { timeout: 2000, encoding: "utf8" });

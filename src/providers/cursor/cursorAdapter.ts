@@ -17,6 +17,16 @@ import type {
 } from "../../runtime/adapter.ts";
 import { boundAgentReport } from "../../runtime/adapter.ts";
 import { runHeadlessCli, type HeadlessCliEvents, type HeadlessSpawnSpec } from "../common/headless.ts";
+import {
+  boundedSanitizedDetail,
+  fingerprintBinaryTarget,
+  fingerprintReadinessObservation,
+  resolveBinaryPath,
+  runMetadataProbe,
+  sha256Canonical,
+  ReadinessObservationCache,
+  type ProviderReadinessObservation,
+} from "../common/readiness.ts";
 import { BrokerError } from "../../shared/errors.ts";
 import {
   parseCursorStreamLine,
@@ -68,6 +78,88 @@ export function cursorNativeChatStorePath(configDir: string, workspaceCwd: strin
   }
   const workspaceKey = createHash("md5").update(path.resolve(workspaceCwd)).digest("hex");
   return path.join(configDir, "chats", workspaceKey, nativeConversationId, "store.db");
+}
+
+/**
+ * Conservative before-gate chat-store path budget (Windows): the owned
+ * store.db path plus the longest SQLite sidecar suffix ("-journal") must fit
+ * the classic 260-char budget. A 275-char owned store verifiably fails with
+ * SQLITE_CANTOPEN (150 chars opens fine); the failure only surfaces after
+ * inference is spent, so the projected worst case is refused BEFORE dispatch
+ * with a precise shorter-AB_STATE_DIR hint. Enforced for the operator-owned
+ * stateRoot layout (native UUIDs projected at 36 chars for fresh
+ * conversations); the last-resort temp fallback has no operator-owned layout,
+ * so its limits stay unknown instead of guessed.
+ */
+export const CURSOR_CHAT_STORE_PATH_BUDGET = 260;
+const CURSOR_CHAT_STORE_LONGEST_SIDECAR = "-journal";
+const NATIVE_WINDOWS_UUID_CHARS = 36;
+
+export function cursorChatStorePathBudgetViolation(
+  configDir: string,
+  workspaceCwd: string,
+  nativeConversationId: string | null,
+): string | null {
+  const projectedId = nativeConversationId ?? "0".repeat(NATIVE_WINDOWS_UUID_CHARS);
+  let storePath: string;
+  try {
+    storePath = cursorNativeChatStorePath(configDir, workspaceCwd, projectedId);
+  } catch {
+    return null; // unsafe-id refusal is owned by the store/resume guards
+  }
+  const projected = storePath.length + CURSOR_CHAT_STORE_LONGEST_SIDECAR.length;
+  if (projected <= CURSOR_CHAT_STORE_PATH_BUDGET) return null;
+  return (
+    `Cursor private chat-store path exceeds the conservative Windows budget before dispatch: ` +
+    `projected ${projected} chars (store ${storePath.length} + SQLite "${CURSOR_CHAT_STORE_LONGEST_SIDECAR}" sidecar) ` +
+    `> ${CURSOR_CHAT_STORE_PATH_BUDGET} for ${storePath}. Shorten AB_STATE_DIR (the broker state directory) ` +
+    `so the owned session config path fits; an oversized store verifiably fails with SQLITE_CANTOPEN. Refused before dispatch with zero inference (unsupported native path does not prove quota usage).`
+  );
+}
+
+/**
+ * Observed Cursor CLI version must parse as the verified date-prefixed
+ * PROGRAM scheme and must not predate the chat-store layout this adapter
+ * implements. Older natives require an upgrade plus session replacement and
+ * revalidation; unverifiable versions fail closed (unknown is never treated
+ * as compatible).
+ */
+const CURSOR_VERIFIED_MIN_VERSION = { year: 2026, month: 9, day: 28 } as const;
+
+export function assertCursorVersionSupported(observedVersion: string): void {
+  const match = /^(\d{4})\.(\d{2})\.(\d{2})/.exec(observedVersion.trim());
+  if (!match) {
+    throw new BrokerError(
+      "PROVIDER_INCOMPATIBLE",
+      `Observed Cursor CLI version '${boundedSanitizedDetail(observedVersion, 64)}' does not declare the verified version scheme; refusing readiness (replacement/revalidation required).`,
+      { executionStarted: false },
+    );
+  }
+  const observed = { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+  const older =
+    observed.year !== CURSOR_VERIFIED_MIN_VERSION.year
+      ? observed.year < CURSOR_VERIFIED_MIN_VERSION.year
+      : observed.month !== CURSOR_VERIFIED_MIN_VERSION.month
+        ? observed.month < CURSOR_VERIFIED_MIN_VERSION.month
+        : observed.day < CURSOR_VERIFIED_MIN_VERSION.day;
+  if (older) {
+    throw new BrokerError(
+      "PROVIDER_INCOMPATIBLE",
+      `Observed Cursor CLI ${observedVersion} predates the verified 2026.09.28 chat-store layout; a native upgrade requiring session replacement and revalidation is needed.`,
+      { executionStarted: false },
+    );
+  }
+}
+
+/** Catalog ids from the verified `--list-models` line scheme ("id - Name"). */
+export function parseCursorModelCatalog(stdout: string): string[] {
+  const ids: string[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^([a-z0-9][a-z0-9.-]*) - .+$/i.exec(line.trim());
+    if (match) ids.push(match[1]!);
+    if (ids.length >= 4096) break;
+  }
+  return ids;
 }
 
 function hasSafeNativeStore(storePath: string): boolean {
@@ -124,13 +216,14 @@ function assertRegularOwnedFileOrAbsent(filePath: string, fieldName: string): vo
 
 export class CursorAdapter implements ProviderAdapter {
   readonly providerId = "cursor";
-  readonly adapterVersion = "0.2.7";
+  readonly adapterVersion = "0.2.8";
 
   readonly stateRoot?: string;
   private readonly binary: string;
   private readonly defaultModel: string;
   private readonly turnPermissionAcquired = new Map<string, boolean>();
   private readonly sessionConfigOwners = new Map<string, string>();
+  private readonly readinessCache = new ReadinessObservationCache();
   private fallbackStateRoot: string | null = null;
 
   constructor(opts: CursorAdapterOptions = {}) {
@@ -143,9 +236,90 @@ export class CursorAdapter implements ProviderAdapter {
     return this.turnPermissionAcquired.get(turnId) ?? false;
   }
 
-  preflight(config: Record<string, unknown>): void {
+  /**
+   * Pinned non-inference metadata probes ONLY: `--version`, `--list-models`,
+   * `status` (CLI-owned auth; output discarded, never persisted). No prompt,
+   * no login/logout, no inference, scrubbed env, bounded output/timeouts.
+   * The requested model must appear EXACTLY in the observed catalog ("auto"
+   * is an explicit catalog entry) — no fallback route.
+   *
+   * A context WITHOUT a requested model (direct inspection, legacy callers)
+   * keeps the historical no-throw checks and returns no observation; the
+   * broker always supplies the model, so session admission always validates.
+   */
+  preflight(config: Record<string, unknown>): ProviderReadinessObservation | void {
     const fail = config.failPreflight;
     if (fail instanceof BrokerError) throw fail;
+    if (typeof config.model !== "string") return;
+    const model = config.model.trim();
+    if (!model) {
+      throw new BrokerError("MODEL_UNAVAILABLE", "Cursor requires an explicit model from its CLI catalog.", { executionStarted: false });
+    }
+    const resolvedBinary = resolveBinaryPath(this.binary);
+    if (!resolvedBinary) {
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", `Cursor binary '${this.binary}' not found.`, { executionStarted: false });
+    }
+    const binaryFingerprint = fingerprintBinaryTarget(resolvedBinary);
+    const probes: ReadonlyArray<readonly string[]> = [["--version"], ["--list-models"], ["status"]];
+    const inputFingerprint = sha256Canonical({
+      provider: this.providerId,
+      binary_fingerprint: binaryFingerprint,
+      probes,
+    });
+    const cached = this.readinessCache.get(inputFingerprint, Date.now());
+    if (cached) {
+      if (!cached.model_catalog?.includes(model)) {
+        throw new BrokerError("MODEL_UNAVAILABLE", `Requested Cursor model '${model}' is not in the observed CLI catalog.`, { executionStarted: false });
+      }
+      return cached;
+    }
+    const probe = (argv: readonly string[]): ReturnType<typeof runMetadataProbe> =>
+      runMetadataProbe({ binary: resolvedBinary, argv, cwd: process.cwd(), envAllowlist: CURSOR_ENV_ALLOWLIST });
+    const versionProbe = probe(["--version"]);
+    if (!versionProbe.ok) {
+      throw new BrokerError(
+        "PROVIDER_INCOMPATIBLE",
+        `Cursor CLI --version probe failed: ${versionProbe.detail || "no output"}`,
+        { executionStarted: false },
+      );
+    }
+    const cliVersion = versionProbe.stdout.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? "";
+    assertCursorVersionSupported(cliVersion);
+    const modelsProbe = probe(["--list-models"]);
+    if (!modelsProbe.ok) {
+      throw new BrokerError(
+        "PROVIDER_INCOMPATIBLE",
+        `Cursor CLI --list-models probe failed: ${modelsProbe.detail || "no output"}`,
+        { executionStarted: false },
+      );
+    }
+    const catalog = parseCursorModelCatalog(modelsProbe.stdout);
+    if (catalog.length === 0) {
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", "Cursor CLI catalog probe returned no models.", { executionStarted: false });
+    }
+    if (!catalog.includes(model)) {
+      throw new BrokerError(
+        "MODEL_UNAVAILABLE",
+        `Requested Cursor model '${model}' is not in the observed CLI catalog (includes '${catalog[0]}', ${catalog.length} entries).`,
+        { executionStarted: false },
+      );
+    }
+    // CLI-owned auth status: only an explicit "logged in" marker proves true;
+    // anything else stays unknown (null), never inferred as false.
+    const statusProbe = probe(["status"]);
+    const authenticated = statusProbe.ok && /(?:^|\n)\s*(?:[✓✔]\s*)?logged in as\b/i.test(statusProbe.stdout.replace(/\x1b\[[0-9;]*m/g, "")) ? true : null;
+    const observation: ProviderReadinessObservation = {
+      provider: this.providerId,
+      cli_version: cliVersion,
+      model_catalog: catalog,
+      authenticated,
+      input_fingerprint: inputFingerprint,
+      observed_at: Date.now(),
+      source: "cli_metadata_probe",
+      probe_argv: probes.flat(),
+    };
+    this.readinessCache.put(inputFingerprint, observation);
+    return observation;
   }
 
   async executeTurn(
@@ -248,6 +422,17 @@ export class CursorAdapter implements ProviderAdapter {
         ensurePrivateDirectory(turnPolicyDir);
 
         const spawnCwd = req.workspace_path ?? process.cwd();
+        // Before-gate budget for the operator-owned stateRoot layout: the
+        // chat-store path (native Windows UUID + SQLite journal sidecars)
+        // must fit the conservative Windows budget or the run is refused with
+        // a precise hint — inference is never consumed only to fail late
+        // with SQLITE_CANTOPEN.
+        const budgetViolation = this.stateRoot !== undefined
+          ? cursorChatStorePathBudgetViolation(stableConfigDir, spawnCwd, req.native_conversation_ref)
+          : null;
+        if (budgetViolation !== null) {
+          throw new BrokerError("PROVIDER_INCOMPATIBLE", budgetViolation, { executionStarted: false });
+        }
         if (req.native_conversation_ref !== null && req.native_conversation_ref !== undefined && req.native_conversation_ref.length > 0) {
           // Metadata-only availability: exact PROGRAM path contract, immutable cwd bytes, never read store contents.
           const storePath = cursorNativeChatStorePath(stableConfigDir, spawnCwd, req.native_conversation_ref);
@@ -312,6 +497,8 @@ export class CursorAdapter implements ProviderAdapter {
       };
 
       gate.acquireDispatchPermission();
+      const launchBinary = resolveBinaryPath(this.binary);
+      if (!launchBinary) throw new BrokerError("PROVIDER_INCOMPATIBLE", "Cursor launched binary identity unavailable", {executionStarted:false});
       this.turnPermissionAcquired.set(req.turn_id, true);
       checkCancellation();
       if (ac.signal.aborted) {
@@ -328,7 +515,7 @@ export class CursorAdapter implements ProviderAdapter {
 
       // 4. Headless spawn spec and stream event handlers.
       const spec: HeadlessSpawnSpec = {
-        binary: this.binary,
+        binary: launchBinary,
         args,
         promptStdin: req.task_envelope,
         cwd: req.workspace_path ?? process.cwd(),
@@ -441,7 +628,8 @@ export class CursorAdapter implements ProviderAdapter {
         retainTurnEvidence = true;
         const message = cliResult.timedOut ? `Cursor timed out (${cliResult.timedOut}).`
           : cliResult.killed ? `Cursor execution interrupted: ${cancelReason ?? "cancelled"}.`
-          : cliResult.stderrTail || `Cursor exited with code ${cliResult.exitCode}.`;
+          : cliResult.stderrTail ? `Cursor exited with code ${cliResult.exitCode}: ${boundedSanitizedDetail(cliResult.stderrTail)}`
+          : `Cursor exited with code ${cliResult.exitCode}.`;
         throw new BrokerError("PROVIDER_PROTOCOL_ERROR", message, { executionStarted: true });
       }
       if (identityMismatch || (req.native_conversation_ref !== null && observedRef === null)) {
@@ -463,7 +651,7 @@ export class CursorAdapter implements ProviderAdapter {
 
       if (summary.sawResult && summary.isError) {
         retainTurnEvidence = true;
-        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", summary.resultText || "cursor execution failed", {
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", boundedSanitizedDetail(summary.resultText || "cursor execution failed"), {
           executionStarted: true,
         });
       }

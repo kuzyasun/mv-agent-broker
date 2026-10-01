@@ -148,3 +148,15 @@ that development scenario, not a full native worker security profile.
 | Windows (dev, native Node) | partial model/resume smoke for all five providers: agy 1.2.1, ZCode CLI 0.16.9, Cursor 2026.09.28-64d2043, Claude 2.1.285, Codex 0.157.0; Codex additionally exercised external MCP caller/bridge/daemon; full worker/reviewer profiles unverified |
 | macOS / Linux | unverified |
 | Windows via WSL2 | unverified |
+
+## Readiness observations and durable binding
+
+See the [native readiness checkpoint](native-smoke/2026-10-01-native-readiness/report.md).
+Current contracts are Cursor 0.2.8, Antigravity 0.2.3 and ZCode 0.2.5.
+Cursor reports observed version/catalog and a recognized CLI authentication marker;
+Agy reports its model catalog; ZCode reports its installed PROGRAM model catalog.
+Unavailable CLI versions or authentication stay null. Runtime/config fingerprints
+and the registered account tuple are immutable session grants and are rechecked
+before admission and dispatch. Registered account metadata is not proof of native
+account identity, and captured authentication can be stale within the cache window.
+None of these observations promotes full native role/profile enforcement.

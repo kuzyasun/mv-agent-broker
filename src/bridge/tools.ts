@@ -241,6 +241,13 @@ function sessionDto(s: SessionRecord) {
     latest_snapshot_id: s.latest_snapshot_id,
     coverage_profile_id: s.coverage_profile_id,
     policy_profile_id: s.policy_profile_id,
+    // Additive binding metadata: the REGISTERED auth mode stays distinct from
+    // observed readiness, cli_version is only ever an OBSERVED value, and
+    // effective model/effort stay null until native execution evidence.
+    auth_mode: s.auth_mode,
+    cli_version: s.cli_version,
+    effective_model: s.effective_model,
+    effective_effort: s.effective_effort,
     created_at: s.created_at,
     updated_at: s.updated_at,
   };
@@ -395,7 +402,13 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
     }
     case "agent_session_status": {
       rejectUnknownKeys(rawArgs, ["session_id"]);
-      return sessionDto(core.sessionStatus(ctx.coordinatorId, requireString(rawArgs, "session_id")));
+      const session = core.sessionStatus(ctx.coordinatorId, requireString(rawArgs, "session_id"));
+      // Additive binding/readiness metadata (§10.1): durable provider binding
+      // and observed readiness evidence — no credentials, unknown stays null.
+      return {
+        ...sessionDto(session),
+        provider_binding: core.sessionProviderBinding(ctx.coordinatorId, session.session_id),
+      };
     }
     case "agent_session_send": {
       rejectUnknownKeys(rawArgs, [

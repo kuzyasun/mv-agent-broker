@@ -14,6 +14,7 @@ import type { RegistryDb } from "../storage/db.ts";
 import {
   appendEvent,
   expireArtifact,
+  getAccount,
   getArtifact,
   getCoverageProfile,
   getDaemonState,
@@ -65,6 +66,7 @@ import {
   AGENT_PROVENANCE_CHAR_LIMIT,
   AGENT_SUMMARY_CHAR_LIMIT,
   DEFAULT_MAX_REPORT_BYTES,
+  type AdapterPreflightContext,
   type AgentReportedResult,
 } from "../runtime/adapter.ts";
 import type {
@@ -73,6 +75,11 @@ import type {
   TurnExecutionRequest,
   TurnExecutionResult,
 } from "../runtime/adapter.ts";
+import { readSessionProviderBinding } from "./broker.ts";
+import {
+  fingerprintReadinessObservation,
+  readReadinessObservation,
+} from "../providers/common/readiness.ts";
 import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, diffManifests, readManifest, type ManifestDelta } from "../snapshots/capture.ts";
 import { diffSnapshots, renderCompleteDiffDocument } from "../snapshots/diff.ts";
@@ -100,6 +107,20 @@ class DispatchRefusedError extends Error {
   constructor(readonly reason: string) {
     super(`dispatch refused: cancellation accepted (${reason})`);
   }
+}
+
+/**
+ * The continuation ROUTE THIS TURN REQUESTS, judged from the session state at
+ * dispatch time — distinct from whatever native context was merely observed
+ * mid-run. A fresh initial request stays "new_native_conversation" even when
+ * the turn later failed after a native ref was observed; recording
+ * "native_resume" from ref presence alone would mislabel the failed first
+ * turn's continuation.
+ */
+function requestedContinuationFor(session: SessionRecord): "new_native_conversation" | "native_resume" {
+  return session.native_conversation_ref === null && session.context_status === "not_started"
+    ? "new_native_conversation"
+    : "native_resume";
 }
 
 /**
@@ -319,12 +340,15 @@ export class TurnExecutor {
       const t = getTurn(this.db, turnId);
       if (t && t.state === "CANCELLING" && t.execution_started !== true) {
         const s = getSession(this.db, t.session_id);
-        if (s) this.finalizeCancelledPreDispatch(t, s, "cancelled");
+        if (s) this.finalizeCancelledPreDispatch(t, s, "cancelled", requestedContinuationFor(s));
       }
       return;
     }
 
     const { session, turn, adapter } = started;
+    // The requested continuation route, fixed at dispatch time from the
+    // session state BEFORE any native evidence of THIS turn exists.
+    const continuation = requestedContinuationFor(session);
     const watch: CancelWatch = { reason: null };
     this.cancelWatches.set(turnId, watch);
 
@@ -335,7 +359,7 @@ export class TurnExecutor {
     if (turn.baseline_snapshot_id && session.workspace_id && session.workspace_mode !== "review_slot") {
       const drift = this.checkBaselineDrift(turn, session);
       if (drift) {
-        this.finalizePreStartKnown(turn, session, "WORKSPACE_CHANGED", drift);
+        this.finalizePreStartKnown(turn, session, "WORKSPACE_CHANGED", drift, continuation);
         return;
       }
     }
@@ -345,7 +369,7 @@ export class TurnExecutor {
     if (!turnNow) return;
     if (turnNow.state === "CANCELLING") {
       // Cancel accepted before dispatch permission: no inference at all.
-      this.finalizeCancelledPreDispatch(turnNow, session, watch.reason ?? "cancelled");
+      this.finalizeCancelledPreDispatch(turnNow, session, watch.reason ?? "cancelled", continuation);
       return;
     }
     if (turnNow.state !== "STARTING") return; // concurrent transition happened
@@ -357,7 +381,7 @@ export class TurnExecutor {
     // above. Cancel priority is preserved: the CANCELLING re-check wins first.
     const leaseDrift = this.workspaceLeaseBindingDrift(turnId, session);
     if (leaseDrift) {
-      this.finalizePreStartKnown(turnNow, session, "WORKSPACE_CHANGED", leaseDrift);
+      this.finalizePreStartKnown(turnNow, session, "WORKSPACE_CHANGED", leaseDrift, continuation);
       return;
     }
 
@@ -366,7 +390,7 @@ export class TurnExecutor {
     try {
       this.persistedTaskContext(session, turnNow);
     } catch (error) {
-      this.finalizePreStartKnown(turnNow, session, "INPUT_DELIVERY_FAILED", error instanceof Error ? error.message : String(error));
+      this.finalizePreStartKnown(turnNow, session, "INPUT_DELIVERY_FAILED", error instanceof Error ? error.message : String(error), continuation);
       return;
     }
 
@@ -379,7 +403,7 @@ export class TurnExecutor {
       const reason = policyLookup.kind === "malformed"
         ? `effective write-policy binding unusable: ${policyLookup.reason}`
         : "Legacy session has no immutable write-policy binding; spawn a replacement session.";
-      this.finalizePreStartKnown(turnNow, session, "POLICY_UNSUPPORTED", reason);
+      this.finalizePreStartKnown(turnNow, session, "POLICY_UNSUPPORTED", reason, continuation);
       return;
     }
     // Adapters receive a frozen defensive copy: mutating the request cannot
@@ -395,7 +419,7 @@ export class TurnExecutor {
     // context and history are retained (no fresh-conversation fallback).
     const pinned = this.resolvePinnedDispatchCwd(turnId, session);
     if (!pinned.ok) {
-      this.finalizePreStartKnown(turnNow, session, pinned.code, pinned.message);
+      this.finalizePreStartKnown(turnNow, session, pinned.code, pinned.message, continuation);
       return;
     }
 
@@ -423,7 +447,7 @@ export class TurnExecutor {
             ? e.code
             : "INPUT_DELIVERY_FAILED";
       const message = e instanceof Error ? e.message : String(e);
-      this.finalizePreStartKnown(turnNow, session, code, message);
+      this.finalizePreStartKnown(turnNow, session, code, message, continuation);
       return;
     }
 
@@ -435,6 +459,66 @@ export class TurnExecutor {
         if (!current || current.state === "CANCELLING") {
           throw new DispatchRefusedError(watch.reason ?? "cancelled");
         }
+
+        // §13.3 native dispatch recheck: verify durable lifetime binding,
+        // account drift, and config/binary readiness fingerprint AFTER admission
+        // BEFORE permission/native launch, including restarted accepted queue.
+        const bindingLookup = readSessionProviderBinding(this.db, session.session_id);
+        if (bindingLookup.kind === "malformed") {
+          throw new BrokerError("POLICY_UNSUPPORTED", `Session provider binding is unusable: ${bindingLookup.reason}`, {
+            executionStarted: false,
+          });
+        }
+        const isNative = ["claude", "codex", "cursor", "antigravity", "zcode"].includes(session.provider);
+        if (bindingLookup.kind !== "bound") {
+          if (isNative) {
+            throw new BrokerError(
+              "PROVIDER_INCOMPATIBLE",
+              "Native legacy session lacks durable provider binding; replacement session required (§13.3).",
+              { executionStarted: false },
+            );
+          }
+        }
+        let freshObservationFingerprint: string | null = null;
+        if (bindingLookup.kind === "bound" && bindingLookup.binding.readiness !== null) {
+          // Establish observation OUTSIDE the authoritative transaction (§13.3):
+          // runs non-inference metadata probe or config inspection.
+          const account = getAccount(this.db, session.account_profile_id);
+          if (!account || account.provider !== session.provider) {
+            throw new BrokerError(
+              "PROVIDER_INCOMPATIBLE",
+              `Account profile '${session.account_profile_id}' is not available for provider '${session.provider}'.`,
+              { executionStarted: false },
+            );
+          }
+          const policyLookup = loadSessionWritePolicy(this.db, session);
+          if (policyLookup.kind !== "effective") {
+            throw new BrokerError("POLICY_UNSUPPORTED", "Session write policy is not effective.", { executionStarted: false });
+          }
+          const returned = adapter.preflight({
+            provider: session.provider,
+            model: session.requested_model,
+            effort: session.requested_effort,
+            role: session.role,
+            workspace_mode: session.workspace_mode,
+            account: {
+              account_profile_id: account.account_profile_id,
+              auth_mode: account.auth_mode,
+              quota_scope_id: account.quota_scope_id,
+            },
+            effective_policy: cloneFrozenPolicy(policyLookup.policy),
+          } satisfies AdapterPreflightContext);
+          const observation = readReadinessObservation(returned, adapter.providerId);
+          freshObservationFingerprint = observation ? fingerprintReadinessObservation(observation) : null;
+          if (freshObservationFingerprint !== bindingLookup.binding.readiness.fingerprint) {
+            throw new BrokerError(
+              "PROVIDER_INCOMPATIBLE",
+              "Provider binary, config or catalog drifted between admission and dispatch; refusing native launch — replacement session required (§13.3).",
+              { executionStarted: false, details: { bound_fingerprint: bindingLookup.binding.readiness.fingerprint, fresh_fingerprint: freshObservationFingerprint } },
+            );
+          }
+        }
+
         // Durable dispatch-permission record before native handoff (§14.3).
         const now = this.clock.now();
         this.db.tx(() => {
@@ -454,6 +538,34 @@ export class TurnExecutor {
           if (scope.kind === "invalid") {
             throw new BrokerError("POLICY_UNSUPPORTED", scope.reason, { executionStarted: false });
           }
+
+          // Atomic recheck of account binding drift inside the serialized boundary
+          if (bindingLookup.kind === "bound") {
+            const freshAccount = getAccount(this.db, session.account_profile_id);
+            if (!freshAccount) {
+              throw new BrokerError("INVALID_REQUEST", `Account profile '${session.account_profile_id}' is not registered.`, { executionStarted: false });
+            }
+            if (
+              freshAccount.account_profile_id !== bindingLookup.binding.account.account_profile_id ||
+              freshAccount.provider !== bindingLookup.binding.account.provider ||
+              freshAccount.auth_mode !== bindingLookup.binding.account.auth_mode ||
+              freshAccount.quota_scope_id !== bindingLookup.binding.account.quota_scope_id
+            ) {
+              throw new BrokerError(
+                "PROVIDER_INCOMPATIBLE",
+                "Registered account binding drifted after admission; refusing dispatch — replacement session required (§13.3).",
+                { executionStarted: false },
+              );
+            }
+            if (bindingLookup.binding.readiness !== null && freshObservationFingerprint !== bindingLookup.binding.readiness.fingerprint) {
+              throw new BrokerError(
+                "PROVIDER_INCOMPATIBLE",
+                "Provider readiness drifted after admission; refusing dispatch — replacement session required (§13.3).",
+                { executionStarted: false },
+              );
+            }
+          }
+
           // A05 authoritative re-check inside the serialized boundary: the
           // durable lease must still match the workspace's live physical
           // checkout (realpath/stat syscall, never a subprocess). A retargeted
@@ -474,10 +586,6 @@ export class TurnExecutor {
       },
       cancellationRequested: () => watch.reason,
     };
-
-    const continuation = session.native_conversation_ref === null && session.context_status === "not_started"
-      ? "new_native_conversation"
-      : "native_resume";
 
     const request: TurnExecutionRequest = {
       turn_id: turnId,
@@ -535,7 +643,7 @@ export class TurnExecutor {
       }
       // Cancel accepted before dispatch: FINALIZING → CANCELLED with
       // execution_started=false (journal proves no dispatch, §14.6).
-      this.finalizeCancelledPreDispatch(after, session, watch.reason ?? failure.reason);
+      this.finalizeCancelledPreDispatch(after, session, watch.reason ?? failure.reason, continuation);
       return;
     }
 
@@ -560,7 +668,7 @@ export class TurnExecutor {
             native_conversation_ref: after.native_conversation_ref,
           });
         }
-        this.finalizeWithFailure(after, session, failure, preDispatchStartup, watch.reason);
+        this.finalizeWithFailure(after, session, failure, preDispatchStartup, watch.reason, continuation);
         return;
       }
       // Non-contract failure (process crash window, supervisor death):
@@ -683,6 +791,27 @@ export class TurnExecutor {
     if (this.expectedIncarnation === null) return false;
     const ds = getDaemonState(this.db);
     return ds !== null && ds.incarnation !== this.expectedIncarnation;
+  }
+
+  /**
+   * The continuation route the turn REQUESTED, journaled in its pending
+   * launch_turn intent at STARTING — authoritative for recovery because the
+   * session row may since have gained a native ref the failed turn only
+   * observed mid-run. Null when the journal is unreadable/absent.
+   */
+  private requestedContinuationFromLaunchIntent(turnId: string, sessionId: string): "new_native_conversation" | "native_resume" | null {
+    const matches = listPendingIntents(this.db, "launch_turn").filter(
+      (i) => i.turn_id === turnId && i.session_id === sessionId,
+    );
+    if (matches.length !== 1 || !matches[0]!.payload) return null;
+    try {
+      const payload = JSON.parse(matches[0]!.payload!) as Record<string, unknown>;
+      if (payload.continuation === "new") return "new_native_conversation";
+      if (payload.continuation === "resume") return "native_resume";
+    } catch {
+      // fall through to the session-state heuristic
+    }
+    return null;
   }
 
   /** Read the report subjournal from the turn's pending launch_turn intent. */
@@ -1751,7 +1880,12 @@ export class TurnExecutor {
 
   // ─── terminal paths ────────────────────────────────────────────────────────
 
-  private finalizeCancelledPreDispatch(turn: TurnRecord, session: SessionRecord, reason: string): void {
+  private finalizeCancelledPreDispatch(
+    turn: TurnRecord,
+    session: SessionRecord,
+    reason: string,
+    continuation?: "new_native_conversation" | "native_resume",
+  ): void {
     this.commitTerminal(turn, session, {
       candidate: "CANCELLED",
       native_outcome: null,
@@ -1760,7 +1894,7 @@ export class TurnExecutor {
       finalization_error: null,
       error_code: null,
       detail: { reason },
-    });
+    }, continuation);
   }
 
   private finalizePreStartFailure(turn: TurnRecord, session: SessionRecord, error: BrokerError): void {
@@ -1768,7 +1902,13 @@ export class TurnExecutor {
   }
 
   /** Known pre-dispatch failure with journaled no-dispatch evidence. */
-  private finalizePreStartKnown(turn: TurnRecord, session: SessionRecord, code: string, message: string): void {
+  private finalizePreStartKnown(
+    turn: TurnRecord,
+    session: SessionRecord,
+    code: string,
+    message: string,
+    continuation?: "new_native_conversation" | "native_resume",
+  ): void {
     this.commitTerminal(turn, session, {
       candidate: "FAILED",
       native_outcome: "failed",
@@ -1777,7 +1917,7 @@ export class TurnExecutor {
       finalization_error: null,
       error_code: code,
       detail: { message },
-    });
+    }, continuation);
   }
 
   /**
@@ -1909,6 +2049,7 @@ export class TurnExecutor {
     error: BrokerError,
     preDispatchStartup: boolean,
     cancelReason: string | null,
+    continuation?: "new_native_conversation" | "native_resume",
   ): void {
     // §14.6: a durably recorded deadline reason survives finalization — the
     // final status may be TIMED_OUT, not CANCELLED, and the reason is kept.
@@ -1921,7 +2062,7 @@ export class TurnExecutor {
       finalization_error: null,
       error_code: cancelReason !== null ? null : error.code,
       detail: { message: error.message, cancel_reason: cancelReason },
-    });
+    }, continuation);
   }
 
   private finalizeWithOutcome(
@@ -2444,9 +2585,10 @@ export class TurnExecutor {
         session = getSession(this.db, session.session_id)!;
       }
 
-      const continuation = session.native_conversation_ref === null && session.context_status === "not_started"
-        ? "new_native_conversation"
-        : "native_resume";
+      // The journaled requested continuation wins; ref presence alone is only
+      // the fallback for legacy journals without the launch intent route.
+      const continuation = this.requestedContinuationFromLaunchIntent(turn.turn_id, turn.session_id)
+        ?? requestedContinuationFor(session);
 
       if (forceReportFailure) {
         // Missing/corrupt/foreign report evidence: explicit EVIDENCE_CAPTURE_FAILED

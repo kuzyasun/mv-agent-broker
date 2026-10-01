@@ -44,6 +44,7 @@ const result = { sessionId: prompt === 'mismatch' ? 'sess_wrong' : resume || 'se
 if (prompt === 'missing-id') delete result.sessionId;
 process.stdout.write(JSON.stringify(result, null, 2) + '\\n');
 if (prompt === 'nonzero') process.exitCode = 7;
+if (prompt === 'sensitive-stderr') { console.error('Set-Cookie: PRIVATE_SENTINEL; Authorization: Bearer PRIVATE_SENTINEL'); process.exitCode = 7; }
 if (prompt === 'hang') setTimeout(() => {}, 30000);
 `);
   const adapter = new ZcodeAdapter({ bundlePath: bundle, builtinProviderConfigPath: builtin, nodeBinary: process.execPath, mode: "plan" });
@@ -181,12 +182,19 @@ describe("ZCode adapter", () => {
     expect(g.count()).toBe(0);
     expect(() => createZcodePersonalConfig(f.builtin, "account:other/GLM-5.3-Flash", "max")).toThrow(/Unsupported/);
   });
-  it("wires built-in config override through bootstrap", async () => {
+  it("wires built-in config override through bootstrap and observes the installed catalog", async () => {
     const { daemonEnvFromProcess, buildAdapters } = await import("../../src/daemon/bootstrap.ts");
     const f = fixture();
     const env = daemonEnvFromProcess({ AB_ZCODE_BUNDLE: f.bundle, AB_ZCODE_NODE: process.execPath, AB_ZCODE_BUILTIN_CONFIG: f.builtin });
     expect(env.zcodeBuiltinProviderConfigPath).toBe(f.builtin);
-    expect(() => buildAdapters(env).get("zcode")!.preflight({})).not.toThrow();
+    const observation = buildAdapters(env).get("zcode")!.preflight({ model: `${ZCODE_ACCOUNT_PROVIDER}/GLM-5.3-Flash`, effort: "low" }) as Exclude<ReturnType<ZcodeAdapter["preflight"]>, void>;
+    expect(observation.provider).toBe("zcode");
+    expect(observation.source).toBe("config_catalog");
+    expect(observation.model_catalog).toEqual([`${ZCODE_ACCOUNT_PROVIDER}/GLM-5.3`, `${ZCODE_ACCOUNT_PROVIDER}/GLM-5.3-Flash`]);
+    // No non-inference metadata CLI exists: version and auth stay unknown null.
+    expect(observation.cli_version).toBeNull();
+    expect(observation.authenticated).toBeNull();
+    expect(observation.probe_argv).toBeNull();
   });
   it("exposes transportEnvelopeLimit descriptor of 6000 chars and retains defensive cap", async () => {
     const f = fixture();
@@ -197,4 +205,18 @@ describe("ZCode adapter", () => {
     ).rejects.toMatchObject({ code: "INPUT_LIMIT", executionStarted: false });
     expect(g.count()).toBe(0);
   });
+});
+
+
+it("withholds HTTP headers and cookies from native failure events", async () => {
+  const f=fixture();
+  try {
+    await f.adapter.executeTurn(request({task_envelope:"sensitive-stderr"}),gate(),()=>{});
+    expect.unreachable("expected failure");
+  } catch(error) {
+    expect(error).toMatchObject({code:"PROVIDER_PROTOCOL_ERROR",executionStarted:true});
+    expect((error as Error).message).toContain("code 7");
+    expect((error as Error).message).not.toContain("PRIVATE_SENTINEL");
+    expect((error as Error).message).not.toContain("Set-Cookie");
+  }
 });

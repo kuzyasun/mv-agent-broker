@@ -1,4 +1,5 @@
 /** Launch configuration for the verified ZCode 0.16.9 standalone route. */
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { BrokerError } from "../../shared/errors.ts";
@@ -10,6 +11,61 @@ const PLAN_MODES = new Map([
 ]);
 const VERIFIED_MODEL_FAMILY = new Set(["GLM-5.3", "GLM-5.3-Flash"]);
 const REASONING_LEVELS = new Set(["low", "high", "max"]);
+
+interface ZcodeBuiltinConfig {
+  schemaVersion?: number;
+  config?: {
+    providerConfigRules?: { providerRules?: { providerId: string; config?: { builtinModelIds?: string[]; visibility?: string; access?: { type?: string; mode?: string; accountType?: string } } }[] };
+    modelConfigRules?: { builtinProviderModelRules?: { providerId: string; modelId: string; config?: { enabled?: boolean } }[] };
+  };
+}
+
+/**
+ * Read + schema-check the installed built-in PROGRAM provider config. This is
+ * the vendor's own installed model catalog — never user settings, credentials
+ * or history. Read errors and schema mismatch keep the established errors.
+ */
+function readZcodeBuiltin(builtinPath: string): { builtin: ZcodeBuiltinConfig; configSha256: string } {
+  let raw: string;
+  try { raw = readFileSync(builtinPath, "utf8"); }
+  catch { throw new BrokerError("PROVIDER_INCOMPATIBLE", "Cannot read ZCode built-in provider config.", { executionStarted: false }); }
+  let builtin: ZcodeBuiltinConfig;
+  try { builtin = JSON.parse(raw) as ZcodeBuiltinConfig; }
+  catch { throw new BrokerError("PROVIDER_INCOMPATIBLE", "Cannot read ZCode built-in provider config.", { executionStarted: false }); }
+  const providers = builtin?.config?.providerConfigRules?.providerRules;
+  if (builtin?.schemaVersion !== 1 || !Array.isArray(providers) || providers.some((provider) => !provider || typeof provider.providerId !== "string")) {
+    throw new BrokerError("PROVIDER_INCOMPATIBLE", "Unsupported ZCode built-in provider schema.", { executionStarted: false });
+  }
+  return { builtin, configSha256: createHash("sha256").update(raw, "utf8").digest("hex") };
+}
+
+/** The installed built-in catalog projected for readiness observation. */
+export interface ZcodeInstalledCatalog {
+  provider_ids: string[];
+  /** Qualified ids ("account:.../model") of the only usable account route. */
+  individual_catalog: string[];
+  config_sha256: string;
+}
+
+/**
+ * Metadata-only catalog inspection for preflight. NO subprocess, NO /model —
+ * the installed built-in PROGRAM config IS the observed catalog. Bundle
+ * version comes from adjacent bundle metadata only; unknown stays null.
+ */
+export function readZcodeInstalledCatalog(builtinPath: string): ZcodeInstalledCatalog {
+  const { builtin, configSha256 } = readZcodeBuiltin(builtinPath);
+  const providers = builtin.config!.providerConfigRules!.providerRules!;
+  const individual = providers.find((provider) => provider.providerId === ZCODE_ACCOUNT_PROVIDER);
+  const access = individual?.config?.access;
+  const models = access?.type === "zhipu-account" && access.mode === "individual-coding-plan" && access.accountType === "zai"
+    ? (individual?.config?.builtinModelIds ?? []).filter((id): id is string => typeof id === "string")
+    : [];
+  return {
+    provider_ids: providers.map((provider) => provider.providerId),
+    individual_catalog: models.map((id) => `${ZCODE_ACCOUNT_PROVIDER}/${id}`),
+    config_sha256: configSha256,
+  };
+}
 
 export function resolveZcodeBuiltinPath(bundle: string, override?: string): string {
   const candidates = override ? [path.resolve(override)] : [
@@ -39,19 +95,8 @@ export function createZcodePersonalConfig(builtinPath: string, model: string, ef
   if (!REASONING_LEVELS.has(reasoningLevel)) {
     throw new BrokerError("MODEL_UNAVAILABLE", "ZCode reasoning level must be low, high or max.", { executionStarted: false });
   }
-  let builtin: {
-    schemaVersion?: number;
-    config?: {
-      providerConfigRules?: { providerRules?: { providerId: string; config?: { builtinModelIds?: string[]; visibility?: string; access?: { type?: string; mode?: string; accountType?: string } } }[] };
-      modelConfigRules?: { builtinProviderModelRules?: { providerId: string; modelId: string; config?: { enabled?: boolean } }[] };
-    };
-  };
-  try { builtin = JSON.parse(readFileSync(builtinPath, "utf8")); }
-  catch { throw new BrokerError("PROVIDER_INCOMPATIBLE", "Cannot read ZCode built-in provider config.", { executionStarted: false }); }
-  const providers = builtin?.config?.providerConfigRules?.providerRules;
-  if (builtin?.schemaVersion !== 1 || !Array.isArray(providers) || providers.some((provider) => !provider || typeof provider.providerId !== "string")) {
-    throw new BrokerError("PROVIDER_INCOMPATIBLE", "Unsupported ZCode built-in provider schema.", { executionStarted: false });
-  }
+  const { builtin } = readZcodeBuiltin(builtinPath);
+  const providers = builtin.config!.providerConfigRules!.providerRules!;
   const selected = providers.find((provider) => provider.providerId === providerId);
   const access = selected?.config?.access;
   if (access?.type !== "zhipu-account" || access.mode !== planMode || access.accountType !== "zai" || !Array.isArray(selected?.config?.builtinModelIds) || !selected.config.builtinModelIds.includes(modelId)) {

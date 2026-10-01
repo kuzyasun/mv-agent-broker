@@ -10,6 +10,7 @@ import type { AgentRole, WorkspaceMode } from "../shared/api-types.ts";
 import type { Clock } from "../shared/clock.ts";
 import { BrokerError } from "../shared/errors.ts";
 import type { EffectiveWritePolicy } from "../core/policy.ts";
+import type { ProviderReadinessObservation } from "../providers/common/readiness.ts";
 
 export interface AdapterEvent {
   type: string;
@@ -302,8 +303,15 @@ export interface ProviderAdapter {
    * policy). Throws BrokerError (e.g. PROVIDER_INCOMPATIBLE, AUTH_REQUIRED) on
    * failure. Never performs inference and never runs inside a broker
    * transaction.
+   *
+   * MAY return a ProviderReadinessObservation describing what the vendor's own
+   * non-inference metadata channel actually showed (observed CLI version,
+   * model catalog, CLI-owned auth status — unknown stays null, never a request
+   * echo). Returning nothing (void) stays fully compatible: the core then
+   * records no readiness metadata for the session. The core validates the
+   * shape and treats a malformed return as no observation.
    */
-  preflight(config: Record<string, unknown>): void;
+  preflight(config: Record<string, unknown>): ProviderReadinessObservation | void;
 
   /**
    * Execute one broker turn. Must:

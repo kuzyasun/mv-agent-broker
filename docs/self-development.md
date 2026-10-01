@@ -158,3 +158,8 @@ records Antigravity authorship, retained Cursor SQLite failure, explicit renewed
 GLM review and coordinator repairs. It separates preview diffs from required
 complete diffs and measures the full transport envelope before input publication.
 Native input enforcement and readiness/binding are still separate gates.
+
+The [readiness and provider-binding checkpoint](native-smoke/2026-10-01-native-readiness/report.md)
+records the retained GLM five-hour quota failure, Gemini repair, independent Cursor reviews,
+and primary complete-program/launch/account-binding repairs. Observed metadata remains
+separate from requests and actual native account identity; mandatory profiles stay unverified.

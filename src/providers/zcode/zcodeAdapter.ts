@@ -1,12 +1,20 @@
 /** ZCode standalone --json adapter, based on the native 0.16.9 smoke. */
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderAdapter, AdapterEvent, DispatchGate, RuntimeObservation, TurnExecutionRequest, TurnExecutionResult } from "../../runtime/adapter.ts";
 import { boundAgentReport } from "../../runtime/adapter.ts";
 import { runHeadlessCli } from "../common/headless.ts";
+import {
+  hashFileBounded,
+  resolveBinaryPath,
+  sha256Canonical,
+  ReadinessObservationCache,
+  type ProviderReadinessObservation,
+} from "../common/readiness.ts";
 import { BrokerError } from "../../shared/errors.ts";
-import { createZcodePersonalConfig, resolveZcodeBuiltinPath } from "./nativeConfig.ts";
+import { createZcodePersonalConfig, readZcodeInstalledCatalog, resolveZcodeBuiltinPath } from "./nativeConfig.ts";
 import { parseZcodeResult } from "./resultParser.ts";
 
 const ZCODE_PROMPT_ARG_MAX = 6000;
@@ -30,17 +38,82 @@ export interface ZcodeAdapterOptions {
 
 export class ZcodeAdapter implements ProviderAdapter {
   readonly providerId = "zcode";
-  readonly adapterVersion = "0.2.4";
+  readonly adapterVersion = "0.2.5";
   readonly transportEnvelopeLimit = { maxChars: ZCODE_PROMPT_ARG_MAX };
   private readonly opts: ZcodeAdapterOptions;
+  private readonly readinessCache = new ReadinessObservationCache();
   constructor(opts: ZcodeAdapterOptions) { this.opts = opts; }
 
-  preflight(config: Record<string, unknown>): void {
+  /**
+   * Config-catalog readiness with NO metadata subprocess: the /model CLI
+   * route under --prompt consumes quota and is NEVER invoked, and no
+   * non-inference status command is verified for this CLI. The installed
+   * built-in PROGRAM provider config IS the observed catalog; the bundle
+   * version comes from adjacent bundle metadata (null = unknown); native
+   * auth status stays unknown (null) — never inferred from the registered
+   * auth_mode. The requested model+effort route is validated exactly against
+   * the installed catalog before any session acceptance.
+   *
+   * A context WITHOUT a requested model (direct inspection, legacy callers)
+   * keeps the historical no-throw checks and returns no observation; the
+   * broker always supplies the model, so session admission always validates.
+   */
+  preflight(config: Record<string, unknown>): ProviderReadinessObservation | void {
     if (config.failPreflight instanceof BrokerError) throw config.failPreflight;
     if (!this.opts.bundlePath || !existsSync(this.opts.bundlePath)) {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", "ZCode bundle path does not exist.", { executionStarted: false });
     }
-    resolveZcodeBuiltinPath(this.opts.bundlePath, this.opts.builtinProviderConfigPath);
+    const builtinPath = resolveZcodeBuiltinPath(this.opts.bundlePath, this.opts.builtinProviderConfigPath);
+    if (typeof config.model !== "string") return;
+    const model = config.model.trim();
+    if (!model) {
+      throw new BrokerError("MODEL_UNAVAILABLE", "ZCode requires an explicit qualified model route.", { executionStarted: false });
+    }
+    const effort = typeof config.effort === "string" && config.effort.length > 0 ? config.effort : null;
+    // Full route validation (account plan, model family, installed catalog,
+    // disabled/hidden rules) with no files written.
+    createZcodePersonalConfig(builtinPath, model, effort);
+    const nodeExecutable = this.opts.nodeBinary ?? process.execPath;
+    const resolvedNode = resolveBinaryPath(nodeExecutable);
+    if (!resolvedNode) {
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", `ZCode Node executable '${nodeExecutable}' not found.`, { executionStarted: false });
+    }
+    const nodeFingerprint = hashFileBounded(resolvedNode);
+    const bundleCanonical = realpathSync(this.opts.bundlePath);
+    const bundleFingerprint = hashFileBounded(bundleCanonical);
+    const builtinCanonical = realpathSync(builtinPath);
+    const builtinCatalog = readZcodeInstalledCatalog(builtinPath);
+
+    const inputFingerprint = sha256Canonical({
+      provider: this.providerId,
+      node: {
+        canonical_path: resolvedNode,
+        file_bytes_sha256: nodeFingerprint,
+      },
+      bundle: {
+        canonical_path: bundleCanonical,
+        file_bytes_sha256: bundleFingerprint,
+      },
+      builtin: {
+        canonical_path: builtinCanonical,
+        config_sha256: builtinCatalog.config_sha256,
+      },
+    });
+    const now = Date.now();
+    const cached = this.readinessCache.get(inputFingerprint, now);
+    if (cached) return cached;
+    const observation: ProviderReadinessObservation = {
+      provider: this.providerId,
+      cli_version: null,
+      model_catalog: builtinCatalog.individual_catalog,
+      authenticated: null,
+      input_fingerprint: inputFingerprint,
+      observed_at: now,
+      source: "config_catalog",
+      probe_argv: null,
+    };
+    this.readinessCache.put(inputFingerprint, observation);
+    return observation;
   }
 
   async executeTurn(req: TurnExecutionRequest, gate: DispatchGate, onEvent: (ev: AdapterEvent) => void): Promise<TurnExecutionResult> {
@@ -50,7 +123,7 @@ export class ZcodeAdapter implements ProviderAdapter {
     if (req.native_conversation_ref !== null && !/^sess_[a-zA-Z0-9_-]+$/.test(req.native_conversation_ref)) {
       throw new BrokerError("SESSION_NOT_RESUMABLE", "ZCode native conversation reference must be a sess_ ID.", { executionStarted: false });
     }
-    this.preflight({});
+    this.preflight({ model: req.requested_model, effort: req.requested_effort });
     const builtin = resolveZcodeBuiltinPath(this.opts.bundlePath, this.opts.builtinProviderConfigPath);
     const config = createZcodePersonalConfig(builtin, req.requested_model, req.requested_effort);
     const controller = new AbortController();
@@ -108,7 +181,7 @@ export class ZcodeAdapter implements ProviderAdapter {
           : outputTooLarge ? "ZCode JSON output exceeds the adapter limit."
           : result.timedOut ? `ZCode timed out (${result.timedOut}).`
           : result.killed ? "ZCode execution interrupted."
-          : result.stderrTail || `ZCode exited with code ${result.exitCode}.`;
+          : `ZCode exited with code ${result.exitCode}; native stderr withheld.`;
         throw new BrokerError("PROVIDER_PROTOCOL_ERROR", message, { executionStarted: true });
       }
       const parsed = parseZcodeResult(text);

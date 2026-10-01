@@ -306,8 +306,8 @@ describe("Cursor adapter", () => {
     expect(existsSync(path.join(f.stateRoot, "sessions", sessionHash, "config", "chats"))).toBe(false);
     expect(existsSync(f.sentinel)).toBe(false);
   });
-  it("bumps adapter version to 0.2.7", () => {
-    expect(new CursorAdapter().adapterVersion).toBe("0.2.7");
+  it("bumps adapter version to 0.2.8", () => {
+    expect(new CursorAdapter().adapterVersion).toBe("0.2.8");
   });
   it.each(["root", "sessions", "data"])("refuses a private history %s junction before native launch", async component => {
     const f = fixture(); const g = gate();

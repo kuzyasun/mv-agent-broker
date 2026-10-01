@@ -16,6 +16,15 @@ import type {
 } from "../../runtime/adapter.ts";
 import { boundAgentReport } from "../../runtime/adapter.ts";
 import { runHeadlessCli, type HeadlessCliEvents, type HeadlessSpawnSpec } from "../common/headless.ts";
+import {
+  boundedSanitizedDetail,
+  fingerprintBinaryTarget,
+  resolveBinaryPath,
+  runMetadataProbe,
+  sha256Canonical,
+  ReadinessObservationCache,
+  type ProviderReadinessObservation,
+} from "../common/readiness.ts";
 import { BrokerError } from "../../shared/errors.ts";
 import {
   parseAntigravityStreamLine,
@@ -49,6 +58,36 @@ export interface AntigravityAdapterOptions {
 const VALID_ANTIGRAVITY_EFFORTS = new Set(["low", "medium", "high", "max"]);
 const MAX_RETAINED_EVENTS = 10_000;
 
+/**
+ * Observed `agy models` catalog ids (verified output scheme: "id\tName",
+ * effort-suffixed Gemini ids like gemini-3.8-flash-high).
+ */
+export function parseAntigravityModelCatalog(stdout: string): string[] {
+  const ids: string[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^([a-z0-9][a-z0-9.-]*)\t.+$/i.exec(line.trim());
+    if (match) ids.push(match[1]!);
+    if (ids.length >= 4096) break;
+  }
+  return ids;
+}
+
+/** Exact requested model+effort route in the observed catalog — no fallback. */
+function assertAntigravityRouteObserved(
+  observation: ProviderReadinessObservation,
+  model: string,
+  effort: string | null,
+): void {
+  const candidate = effort !== null ? `${model}-${effort}` : model;
+  if (!observation.model_catalog?.includes(candidate)) {
+    throw new BrokerError(
+      "MODEL_UNAVAILABLE",
+      `Requested Antigravity model route '${candidate}' is not in the observed agy catalog (${observation.model_catalog?.length ?? 0} entries).`,
+      { executionStarted: false },
+    );
+  }
+}
+
 function agyProvenance(response: string | null, text: string): string | undefined {
   const sample = `${response ?? ""}\n${text}`;
   if (/agent-broker context envelope|\[session instructions\]|\[task contract JSON\]|broker-eor/i.test(sample)) {
@@ -59,11 +98,12 @@ function agyProvenance(response: string | null, text: string): string | undefine
 
 export class AntigravityAdapter implements ProviderAdapter {
   readonly providerId = "antigravity";
-  readonly adapterVersion = "0.2.2";
+  readonly adapterVersion = "0.2.3";
 
   private readonly binary: string;
   private readonly defaultModel?: string;
   private readonly turnPermissionAcquired = new Map<string, boolean>();
+  private readonly readinessCache = new ReadinessObservationCache();
 
   constructor(opts: AntigravityAdapterOptions = {}) {
     this.binary = opts.binary ?? "agy";
@@ -74,12 +114,73 @@ export class AntigravityAdapter implements ProviderAdapter {
     return this.turnPermissionAcquired.get(turnId) ?? false;
   }
 
-  preflight(config: Record<string, unknown>): void {
+  /**
+   * Pinned non-inference metadata probe ONLY: `agy models` (the one metadata
+   * subcommand verified as actually supported). No --version/status probes
+   * are invented, no prompt, no login/logout, no inference; the requested
+   * model+effort route must appear EXACTLY in the observed catalog (effort
+   * suffixed, e.g. gemini-3.8-flash-high) — no fallback. CLI version and auth
+   * status have no verified non-inference channel and stay unknown (null).
+   *
+   * A context WITHOUT a requested model (direct inspection, legacy callers)
+   * keeps the historical no-throw checks and returns no observation; the
+   * broker always supplies the model, so session admission always validates.
+   */
+  preflight(config: Record<string, unknown>): ProviderReadinessObservation | void {
     const fail = config.failPreflight;
     if (fail instanceof BrokerError) throw fail;
     if (!this.binary || this.binary.trim().length === 0) {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", "Antigravity binary is not configured.");
     }
+    if (typeof config.model !== "string") return;
+    const model = config.model.trim();
+    if (!model) {
+      throw new BrokerError("MODEL_UNAVAILABLE", "Antigravity requires an explicit model.", { executionStarted: false });
+    }
+    const effort = typeof config.effort === "string" && config.effort.length > 0 ? config.effort : null;
+    if (effort !== null && !VALID_ANTIGRAVITY_EFFORTS.has(effort)) {
+      throw new BrokerError("INVALID_REQUEST", `Antigravity effort must be low, medium, high, or max; received ${JSON.stringify(effort)}.`, { executionStarted: false });
+    }
+    const resolvedBinary = resolveBinaryPath(this.binary);
+    if (!resolvedBinary) {
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", `Antigravity binary '${this.binary}' not found.`, { executionStarted: false });
+    }
+    const binaryFingerprint = fingerprintBinaryTarget(resolvedBinary);
+    const inputFingerprint = sha256Canonical({
+      provider: this.providerId,
+      binary_fingerprint: binaryFingerprint,
+      probe: ["models"],
+    });
+    const cached = this.readinessCache.get(inputFingerprint, Date.now());
+    if (cached) {
+      assertAntigravityRouteObserved(cached, model, effort);
+      return cached;
+    }
+    const probe = runMetadataProbe({ binary: resolvedBinary, argv: ["models"], cwd: process.cwd(), envAllowlist: ANTIGRAVITY_ENV_ALLOWLIST });
+    if (!probe.ok) {
+      throw new BrokerError(
+        "PROVIDER_INCOMPATIBLE",
+        `Antigravity model catalog probe (agy models) failed: ${probe.detail || "no output"}`,
+        { executionStarted: false },
+      );
+    }
+    const catalog = parseAntigravityModelCatalog(probe.stdout);
+    if (catalog.length === 0) {
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", "Antigravity model catalog probe returned no models.", { executionStarted: false });
+    }
+    const observation: ProviderReadinessObservation = {
+      provider: this.providerId,
+      cli_version: null,
+      model_catalog: catalog,
+      authenticated: null,
+      input_fingerprint: inputFingerprint,
+      observed_at: Date.now(),
+      source: "cli_metadata_probe",
+      probe_argv: ["models"],
+    };
+    assertAntigravityRouteObserved(observation, model, effort);
+    this.readinessCache.put(inputFingerprint, observation);
+    return observation;
   }
 
   async executeTurn(
@@ -138,6 +239,8 @@ export class AntigravityAdapter implements ProviderAdapter {
 
       // Gate acquired after argument validation and prompt-file preparation
       gate.acquireDispatchPermission();
+      const launchBinary = resolveBinaryPath(this.binary);
+      if (!launchBinary) throw new BrokerError("PROVIDER_INCOMPATIBLE", "Antigravity launched binary identity unavailable", {executionStarted:false});
       this.turnPermissionAcquired.set(req.turn_id, true);
 
       // AbortController wired to gate: poll cancellationRequested every 100ms.
@@ -160,7 +263,7 @@ export class AntigravityAdapter implements ProviderAdapter {
 
       // Headless spawn spec and stream event handlers.
       const spec: HeadlessSpawnSpec = {
-        binary: this.binary,
+        binary: launchBinary,
         args,
         promptStdin: "",
         promptArgv: promptArg,
@@ -252,13 +355,13 @@ export class AntigravityAdapter implements ProviderAdapter {
 
         if (summary.status === "FAILED") {
           const msg = summary.error || summary.response || "antigravity execution failed";
-          throw new BrokerError("PROVIDER_PROTOCOL_ERROR", msg, {
+          throw new BrokerError("PROVIDER_PROTOCOL_ERROR", boundedSanitizedDetail(msg), {
             executionStarted: true,
           });
         }
 
         const msg = summary.error || summary.response || `antigravity turn ended with status: ${summary.status}`;
-        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", msg, {
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", boundedSanitizedDetail(msg), {
           executionStarted: true,
         });
       }
@@ -272,7 +375,7 @@ export class AntigravityAdapter implements ProviderAdapter {
 
       if (cliResult.exitCode !== 0) {
         const msg = cliResult.stderrTail.trim().length > 0
-          ? cliResult.stderrTail
+          ? boundedSanitizedDetail(cliResult.stderrTail)
           : cancelReason
             ? `antigravity cancelled: ${cancelReason}`
             : `antigravity process exited with code ${cliResult.exitCode}`;
