@@ -58,6 +58,17 @@ Primary validation:
   workspace/state path overrides. Turn `turn-b375b35e98ab4878cd25c425`, `SUCCEEDED`.
 - Native two-child probes for Cursor and Antigravity succeeded separately;
   [identity/receipt/file evidence](../../native-subagents.md) records their exact scope.
+- A fresh Cursor base-model/effort smoke through accepted runtime
+  `7928be5ff077e6e9d840419c587621085aae2442` requested `gpt-5.6-luna` plus
+  `high`, resolved the catalog variant, and returned `NATIVE_EFFORT_OK` through
+  public MCP. Turn `turn-23a28ef0526bde6ac27c0e34`, native parent
+  `d4463558-2948-4473-9004-f1b0c14d41a1`, `SUCCEEDED`, normal owned quiescence,
+  no provider error. This validates dispatch and response for the requested
+  variant, not the provider's internal reasoning effort or child settings.
+- The prepared personal operator configuration started successfully and exposed
+  all eight named routes through MCP discovery, without native inference. Its
+  daemon then closed cleanly. Editable JSON and client snippets are retained
+  privately under `.state/operator/`.
 - Three longer Antigravity author attempts returned explicit native server 500,
   made no source changes, and retained owned quiescence evidence;
   [incident log](../../pilot-issues.md). There was no silent model fallback.
