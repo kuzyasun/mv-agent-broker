@@ -28,6 +28,7 @@ import type {
   TurnExecutionResult,
 } from "../../src/runtime/adapter.ts";
 import {
+  insertAccount,
   insertCoordinator,
   insertCoverageProfile,
   insertPolicyProfile,
@@ -106,6 +107,7 @@ async function setupFixture(opts?: {
     revoked: false,
     config_revision: 1,
   });
+  insertAccount(daemon.db, { account_profile_id: "acct-dl", provider: "mock", auth_mode: "native", quota_scope_id: "shared:mock" });
   insertCoverageProfile(daemon.db, {
     coverage_profile_id: "cov-dl",
     version: "1",

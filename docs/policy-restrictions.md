@@ -20,7 +20,8 @@ prefixes are rejected. `[]` and `read_only` permit no source writes.
 Malformed values and widening requests return `INVALID_REQUEST`. Unknown
 restriction keys return `POLICY_UNSUPPORTED`; they are never silently ignored.
 Missing or unreadable operator profiles also fail before session admission.
-The broker repeats policy derivation inside the admission transaction before
+The broker calls provider preflight once outside the admission transaction,
+then repeats pure account, adapter and policy checks inside it before
 reserving resources or recording an accepted idempotency key. Reusing that key
 with different restrictions returns `IDEMPOTENCY_CONFLICT`.
 
@@ -38,6 +39,10 @@ there is no automatic migration or native-context import. Malformed bindings
 also fail closed. The executor checks policy before input preparation and again
 inside dispatch permission. Caller-contract corruption retains the established
 `INPUT_DELIVERY_FAILED` classification.
+
+Adapters receive a recursively frozen defensive copy of the durable grant
+and a frozen list of exact materialized input bindings from the sealed manifest.
+These internal fields convey authority; they do not establish native enforcement.
 
 For writer workspaces, admission checks source coverage against the effective
 scope. After native completion, changes outside that scope produce

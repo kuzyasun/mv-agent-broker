@@ -27,6 +27,7 @@ import {
 import { DaemonRpcClient, DaemonRpcError } from "../../src/bridge/rpcClient.ts";
 import { sha256Hex } from "../../src/shared/ids.ts";
 import {
+  insertAccount,
   insertCoordinator,
   insertCoverageProfile,
   insertPolicyProfile,
@@ -70,6 +71,7 @@ async function setupDaemonRpc(): Promise<DaemonRpcFixture> {
     revoked: false,
     config_revision: 1,
   });
+  insertAccount(daemon.db, { account_profile_id: "acct-rpc", provider: "mock", auth_mode: "native", quota_scope_id: "shared:mock" });
   insertCoverageProfile(daemon.db, {
     coverage_profile_id: "cov-rpc",
     version: "1",

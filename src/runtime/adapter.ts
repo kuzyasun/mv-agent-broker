@@ -8,7 +8,8 @@
  */
 import type { AgentRole, WorkspaceMode } from "../shared/api-types.ts";
 import type { Clock } from "../shared/clock.ts";
-import type { BrokerError } from "../shared/errors.ts";
+import { BrokerError } from "../shared/errors.ts";
+import type { EffectiveWritePolicy } from "../core/policy.ts";
 
 export interface AdapterEvent {
   type: string;
@@ -49,6 +50,56 @@ export interface TurnExecutionRequest {
   workspace_path: string | null;
   deadline_at: number;
   clock: Clock;
+  /**
+   * §12.1 durable immutable effective write policy bound at spawn and
+   * revalidated before dispatch. The core ALWAYS supplies a validated,
+   * defensively frozen binding; direct adapter callers/tests may omit it.
+   */
+  effective_policy?: EffectiveWritePolicy;
+  /**
+   * §7.1.1 read-only input locations, copied from the sealed TurnInputManifest:
+   * exact broker-generated materialized bindings only — never paths derived
+   * from goal/artifact text. Frozen; adapters must not treat them as writable.
+   */
+  read_only_input_paths?: readonly string[];
+}
+
+/**
+ * Broker-supplied preflight context (§13.2): everything an adapter needs to
+ * decide readiness WITHOUT any inference — request shape, registered account
+ * binding, and the session's immutable effective write policy. The broker
+ * passes this as the `preflight(config)` record; the type alias (not an
+ * interface) keeps it assignable to the `Record<string, unknown>` signature
+ * that existing adapters implement.
+ */
+export type AdapterPreflightContext = {
+  provider: string;
+  model: string;
+  effort: string | null;
+  role: AgentRole;
+  workspace_mode: WorkspaceMode;
+  account: {
+    account_profile_id: string;
+    auth_mode: string;
+    quota_scope_id: string;
+  };
+  effective_policy: EffectiveWritePolicy;
+};
+
+/**
+ * Defensive copy of an effective write policy with frozen arrays/objects:
+ * adapters receive the durable grant's content but cannot mutate it (the
+ * spawn-time binding and the gate's fresh DB reads stay authoritative).
+ */
+export function cloneFrozenPolicy(policy: EffectiveWritePolicy): EffectiveWritePolicy {
+  const clone = structuredClone(policy);
+  const freeze = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return;
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+  };
+  freeze(clone);
+  return clone;
 }
 
 /**
@@ -78,8 +129,11 @@ export interface ProviderAdapter {
 
   /**
    * Inspection/preflight: verify CLI presence/version/config compatibility.
-   * Throws BrokerError (e.g. PROVIDER_INCOMPATIBLE, AUTH_REQUIRED) on failure.
-   * Never performs inference.
+   * Receives an AdapterPreflightContext record from the broker (model, effort,
+   * role, workspace_mode, registered account binding, immutable effective
+   * policy). Throws BrokerError (e.g. PROVIDER_INCOMPATIBLE, AUTH_REQUIRED) on
+   * failure. Never performs inference and never runs inside a broker
+   * transaction.
    */
   preflight(config: Record<string, unknown>): void;
 
@@ -114,5 +168,5 @@ export interface ProviderAdapter {
 }
 
 export function isBrokerError(e: unknown): e is BrokerError {
-  return e instanceof Error && e.name === "BrokerError";
+  return e instanceof BrokerError;
 }

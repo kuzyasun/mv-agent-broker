@@ -1,0 +1,58 @@
+{
+  "runtime_files": 48,
+  "schema_version": 1,
+  "checkpoint": "provider-preflight",
+  "validation": {
+    "post_review_targeted": 47,
+    "full_suite_files": 31,
+    "full_suite": 387,
+    "diff_check": "passed",
+    "real_claude_launched": false,
+    "typecheck": "passed",
+    "focused_before_review": 87
+  },
+  "limitations": [
+    "Native CLI/auth/catalog readiness not implemented",
+    "CLI version/effective model/effort remain unknown",
+    "Full native profile enforcement unverified",
+    "Integrated capture precedes two reviewed coordinator fixes; accepted Git commit is authoritative"
+  ],
+  "integrated_capture": {
+    "state": "SUCCEEDED",
+    "turn_id": "turn-f22dc7e67f24f289078d30ee",
+    "target_snapshot_id": "snap-b136908ac9c7335383f37aed"
+  },
+  "runtime_commit": "4044b482f6ec10246e08f844770718542c977b3f",
+  "independent_review": {
+    "provider": "cursor",
+    "turn_id": "turn-4923a000ea90c65e5e017a63",
+    "state": "SUCCEEDED",
+    "native_ref": "cdd2b870-4f22-41bc-8f2f-ed2e1b1571c4",
+    "model": "auto",
+    "coordinator_verified": true,
+    "findings": [
+      {
+        "file": "src/runtime/adapter.ts",
+        "resolution": "Actual BrokerError instanceof check",
+        "severity": "low",
+        "issue": "Name-only error helper accepted spoofed Error"
+      },
+      {
+        "file": "src/core/broker.ts",
+        "resolution": "Message identifies instance or version drift",
+        "severity": "low",
+        "issue": "Same-version adapter replacement refusal message inaccurate"
+      }
+    ]
+  },
+  "author": {
+    "provider": "zcode",
+    "author_snapshot_id": "snap-cd8255b14434a8a562a70c32",
+    "turn_id": "turn-0e694979067887f168b05911",
+    "model": "account:zai-individual-coding-plan/GLM-5.3-Flash",
+    "state": "SUCCEEDED",
+    "effort": "max",
+    "native_ref": "sess_8ecb7650-5fe1-4905-ac7d-2c8cdcc6bba8",
+    "baseline_snapshot_id": "snap-388a4e192a61e0ce4acdb09c"
+  }
+}

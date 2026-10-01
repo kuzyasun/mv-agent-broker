@@ -48,6 +48,7 @@ import { canonicalRequestHash } from "../shared/canonicalize.ts";
 import { newId, ID_PREFIX, sha256Hex } from "../shared/ids.ts";
 import type { Clock } from "../shared/clock.ts";
 import type {
+  AccountProfileRecord,
   AgentRole,
   ArtifactRecord,
   CloseState,
@@ -72,7 +73,11 @@ import {
 } from "./transitions.ts";
 import type { TurnExecutor } from "./execution.ts";
 import { computeEffectiveWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
-import type { ProviderAdapter } from "../runtime/adapter.ts";
+import {
+  cloneFrozenPolicy,
+  type AdapterPreflightContext,
+  type ProviderAdapter,
+} from "../runtime/adapter.ts";
 import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, CaptureError } from "../snapshots/capture.ts";
 import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
@@ -131,6 +136,23 @@ export interface CancelRequest {
 export interface StopRequest {
   session_id: string;
   idempotency_key: string;
+}
+
+/**
+ * Everything the non-authoritative spawn preflight observed about external
+ * state (§7.2 step 3): the adapter version, the registered account binding
+ * and the narrowed effective policy. Carried into the authoritative
+ * transaction where a pure fingerprint re-comparison decides whether the
+ * observations are still fresh — stale observations are rejected, never
+ * admitted.
+ */
+interface SpawnPreflightCandidate {
+  adapter: ProviderAdapter;
+  provider: string;
+  adapterVersion: string;
+  account: AccountProfileRecord;
+  policy: EffectiveWritePolicy;
+  fingerprint: string;
 }
 
 // ─── Public response shapes ─────────────────────────────────────────────────
@@ -243,13 +265,16 @@ export class BrokerCore {
       idempotency_key: req.idempotency_key,
     };
 
-    // Fast path (step 2): committed lookup only — an optimization.
+    // Fast path (step 2): committed lookup only — an optimization. An
+    // accepted same-key replay NEVER re-runs readiness (§7.2 ordering).
     const fast = getIdempotencyRecord(this.db, namespace);
     if (fast) return this.replaySpawn(fast, payloadHash);
     this.assertAdmissionOpen();
 
-    // Step 3: non-authoritative preflight (no inference).
-    this.spawnPreflight(req);
+    // Step 3: non-authoritative preflight (no inference): account binding,
+    // policy narrowing, adapter.preflight. Any failure here creates no
+    // accepted state and leaves the key free for a corrected retry (§7.3).
+    const candidate = this.spawnPreflight(req);
 
     // Steps 4–6: authoritative serialized decision + effects in one tx.
     let sessionId: string | null = null;
@@ -264,13 +289,16 @@ export class BrokerCore {
               retryGuidance: "new_key_required",
             });
           }
-          sessionId = existing.resolved_id;
+          sessionId = existing.resolved_id; // committed winner: no readiness re-run
           return;
         }
         this.assertAdmissionOpen();
-        this.spawnPreflight(req); // re-run: config may have changed concurrently
+        // Revalidate the candidate against fresh pure reads (§7.2): config
+        // that drifted during admission is rejected instead of admitting the
+        // stale preflight observation. No external process runs here.
+        this.revalidateSpawnCandidate(req, candidate);
 
-        const created = this.createProvisioningSession(coordinatorId, req, payloadHash);
+        const created = this.createProvisioningSession(coordinatorId, req, payloadHash, candidate);
         sessionId = created.sessionId;
         provisionIntentId = created.provisionIntentId;
       });
@@ -327,7 +355,14 @@ export class BrokerCore {
     };
   }
 
-  private spawnPreflight(req: SpawnRequest): void {
+  /**
+   * Non-authoritative spawn preflight (§7.2 step 3, §13.2): input shape,
+   * provider availability, registered account binding, §12.1 policy
+   * narrowing, then adapter.preflight WITHOUT inference — always OUTSIDE the
+   * admission transaction (no external process inside a tx). Returns the
+   * candidate binding the transaction must revalidate.
+   */
+  private spawnPreflight(req: SpawnRequest): SpawnPreflightCandidate {
     if (Buffer.byteLength(req.instructions, "utf8") > 64 * 1024) {
       throw new BrokerError("INPUT_LIMIT", "Session instructions exceed 64 KiB.");
     }
@@ -335,15 +370,123 @@ export class BrokerCore {
       throw new BrokerError("INVALID_REQUEST", "Invalid idempotency key.");
     }
     if (!req.model) throw new BrokerError("INVALID_REQUEST", "Explicit provider model is required.");
-    if (!this.adapters.has(req.provider)) {
+    const adapter = this.adapters.get(req.provider);
+    if (!adapter) {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", `Provider '${req.provider}' is not available.`);
     }
     if (req.role === "reviewer" && req.workspace.mode !== "review_slot") {
       throw new BrokerError("INVALID_REQUEST", "role=reviewer requires workspace.mode=review_slot (§8.1).");
     }
+    // §13.3 account binding: a registered account of the matching provider is
+    // required BEFORE any accepted session/reservation exists.
+    const account = getAccount(this.db, req.account_profile_id);
+    if (!account) {
+      throw new BrokerError(
+        "INVALID_REQUEST",
+        `Account profile '${req.account_profile_id}' is not registered.`,
+        { executionStarted: false },
+      );
+    }
+    if (account.provider !== req.provider) {
+      throw new BrokerError(
+        "PROVIDER_INCOMPATIBLE",
+        `Account profile '${account.account_profile_id}' is registered for provider '${account.provider}', not '${req.provider}'.`,
+        { executionStarted: false },
+      );
+    }
     // §12.1 policy preflight: requested restrictions validated and narrowed
     // against the operator profile BEFORE any session/reservation exists.
-    this.spawnPolicyPreflight(req);
+    const policy = cloneFrozenPolicy(this.spawnPolicyPreflight(req));
+    const candidate: SpawnPreflightCandidate = {
+      adapter,
+      provider: req.provider,
+      adapterVersion: adapter.adapterVersion,
+      account,
+      policy,
+      fingerprint: spawnCandidateFingerprint({ provider: req.provider, adapterVersion: adapter.adapterVersion, account, policy }),
+    };
+
+    // §13.2 provider readiness: the adapter decides from the broker-supplied
+    // context (model/effort/role/workspace/account/policy) with zero
+    // inference. Known no-dispatch failures keep their code/message with
+    // executionStarted=false; anything unexpected is PROVIDER_INCOMPATIBLE.
+    try {
+      adapter.preflight({
+        provider: req.provider,
+        model: req.model,
+        effort: req.effort,
+        role: req.role,
+        workspace_mode: req.workspace.mode,
+        account: {
+          account_profile_id: account.account_profile_id,
+          auth_mode: account.auth_mode,
+          quota_scope_id: account.quota_scope_id,
+        },
+        effective_policy: candidate.policy,
+      } satisfies AdapterPreflightContext);
+    } catch (e) {
+      if (e instanceof BrokerError) {
+        throw new BrokerError(e.code, e.message, {
+          phase: e.phase,
+          retryGuidance: e.retryGuidance,
+          executionStarted: false,
+          details: e.details,
+        });
+      }
+      throw new BrokerError(
+        "PROVIDER_INCOMPATIBLE",
+        `Provider preflight failed: ${e instanceof Error ? e.message : String(e)}`,
+        { executionStarted: false },
+      );
+    }
+    return candidate;
+  }
+
+  /**
+   * Authoritative revalidation INSIDE the admission transaction (§7.2): pure
+   * record reads and in-memory adapter fields compared against the captured
+   * candidate fingerprint. adapter.preflight (external process) is never
+   * re-run here; drifted configuration is rejected rather than admitted with
+   * stale observations.
+   */
+  private revalidateSpawnCandidate(req: SpawnRequest, candidate: SpawnPreflightCandidate): void {
+    const adapter = this.adapters.get(req.provider);
+    if (!adapter) {
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", `Provider '${req.provider}' is not available.`, {
+        executionStarted: false,
+      });
+    }
+    if (adapter !== candidate.adapter || adapter.adapterVersion !== candidate.adapterVersion) {
+      throw new BrokerError(
+        "PROVIDER_INCOMPATIBLE",
+        `Provider adapter instance or version changed during admission ('${candidate.adapterVersion}' → '${adapter.adapterVersion}'); preflight observations are stale.`,
+        { executionStarted: false },
+      );
+    }
+    const account = getAccount(this.db, req.account_profile_id);
+    if (!account) {
+      throw new BrokerError("INVALID_REQUEST", `Account profile '${req.account_profile_id}' is not registered.`, {
+        executionStarted: false,
+      });
+    }
+    if (account.provider !== req.provider) {
+      throw new BrokerError(
+        "PROVIDER_INCOMPATIBLE",
+        `Account profile '${account.account_profile_id}' is registered for provider '${account.provider}', not '${req.provider}'.`,
+        { executionStarted: false },
+      );
+    }
+    // Re-derive the effective policy from the live profile row (pure DB read);
+    // a changed config yields a different fingerprint and refuses admission.
+    const policy = cloneFrozenPolicy(this.spawnPolicyPreflight(req));
+    const fresh = spawnCandidateFingerprint({ provider: req.provider, adapterVersion: adapter.adapterVersion, account, policy });
+    if (fresh !== candidate.fingerprint) {
+      throw new BrokerError(
+        "POLICY_UNSUPPORTED",
+        "Provider account or policy configuration changed during admission; refusing stale preflight observations.",
+        { executionStarted: false },
+      );
+    }
   }
 
   /**
@@ -374,22 +517,24 @@ export class BrokerCore {
 
   /**
    * Creates the durable PROVISIONING session with its reservations, intent
-   * and idempotency record — called INSIDE the admission transaction.
+   * and idempotency record — called INSIDE the admission transaction with the
+   * revalidated preflight candidate.
    */
   private createProvisioningSession(
     coordinatorId: string,
     req: SpawnRequest,
     payloadHash: string,
+    candidate: SpawnPreflightCandidate,
   ): { sessionId: string; provisionIntentId: string } {
     const now = this.now();
     const sessionId = newId(ID_PREFIX.session);
-    const provisionIntent = newId(ID_PREFIX.intent);
+    const provisionIntentId = newId(ID_PREFIX.intent);
 
-    // §12.1: the effective write policy is computed inside the authoritative
-    // admission tx from the profile version the session will bind, and is
-    // then immutable for the session's lifetime (stored in the provision
+    // §12.1: the effective write policy was computed by the policy helpers
+    // from the profile version the session binds and revalidated moments ago;
+    // it is immutable for the session's lifetime (stored in the provision
     // intent payload; the live profile config never re-widens it).
-    const effectivePolicy = this.spawnPolicyPreflight(req);
+    const effectivePolicy = candidate.policy;
 
     // Coverage binding resolves at spawn from the registered workspace
     // profile (§5.2) and is immutable for the session afterwards.
@@ -409,10 +554,13 @@ export class BrokerCore {
       project_id: req.project_id,
       owner_coordinator_id: coordinatorId,
       provider: req.provider,
-      adapter_version: null,
+      // §13.3: bound to the revalidated adapter version and the REGISTERED
+      // account auth_mode. Effective model/effort and cli_version stay null —
+      // never fabricated from requested values before real native evidence.
+      adapter_version: candidate.adapterVersion,
       cli_version: null,
       account_profile_id: req.account_profile_id,
-      auth_mode: null,
+      auth_mode: candidate.account.auth_mode,
       requested_model: req.model,
       requested_effort: req.effort,
       effective_model: null,
@@ -442,7 +590,7 @@ export class BrokerCore {
     };
     insertSession(this.db, session);
     insertIntent(this.db, {
-      intent_id: provisionIntent,
+      intent_id: provisionIntentId,
       kind: "provision_session",
       session_id: sessionId,
       turn_id: null,
@@ -473,7 +621,7 @@ export class BrokerCore {
       payload: { state: "PROVISIONING" },
       created_at: now,
     });
-    return { sessionId, provisionIntentId: provisionIntent };
+    return { sessionId, provisionIntentId };
   }
 
   /** Resolve the workspace's coverage profile binding (latest version). */
@@ -1772,6 +1920,41 @@ function namespaceOf(project_id: string, owner: string, op: OperationName, key: 
     operation_name: op,
     idempotency_key: key,
   };
+}
+
+/**
+ * Pure comparable fingerprint over every externally-observed spawn input
+ * (§7.2): provider, adapter version, registered account binding and the
+ * narrowed effective policy. Recomputed inside the admission transaction from
+ * fresh pure reads — an unequal fingerprint rejects the spawn instead of
+ * admitting stale preflight observations. The profile config itself is
+ * covered by its `profile_fingerprint` (sha256 over the config text).
+ */
+function spawnCandidateFingerprint(parts: {
+  provider: string;
+  adapterVersion: string;
+  account: Pick<AccountProfileRecord, "account_profile_id" | "provider" | "auth_mode" | "quota_scope_id">;
+  policy: EffectiveWritePolicy;
+}): string {
+  return sha256Hex(JSON.stringify({
+    provider: parts.provider,
+    adapter_version: parts.adapterVersion,
+    account: {
+      account_profile_id: parts.account.account_profile_id,
+      provider: parts.account.provider,
+      auth_mode: parts.account.auth_mode,
+      quota_scope_id: parts.account.quota_scope_id,
+    },
+    policy: {
+      binding_version: parts.policy.binding_version,
+      access: parts.policy.access,
+      write_scope: parts.policy.write_scope,
+      policy_profile_id: parts.policy.policy_profile_id,
+      policy_profile_version: parts.policy.policy_profile_version,
+      profile_fingerprint: parts.policy.profile_fingerprint,
+      requested_restrictions: parts.policy.requested_restrictions,
+    },
+  }));
 }
 
 function assertTurnTransitionSafe(from: TurnState, trigger: string): void {

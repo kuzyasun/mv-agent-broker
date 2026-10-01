@@ -46,6 +46,7 @@ import {
   assertTurnTransition,
   isNonterminalTurnState,
 } from "./transitions.ts";
+import { cloneFrozenPolicy } from "../runtime/adapter.ts";
 import type {
   DispatchGate,
   ProviderAdapter,
@@ -56,7 +57,7 @@ import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, diffManifests, readManifest, type ManifestDelta } from "../snapshots/capture.ts";
 import { diffSnapshots, renderDiffDocument } from "../snapshots/diff.ts";
 import { CoverageError, matchesPrefix, type CoverageConfig } from "../workspaces/coverage.ts";
-import { sessionWriteScope } from "./policy.ts";
+import { loadSessionWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
 import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
 import {
   buildTurnInputManifest,
@@ -231,20 +232,36 @@ export class TurnExecutor {
 
     // The intent may have become unreadable after admission. Every role must
     // validate the immutable grant before preparing inputs or invoking native.
-    const policyScope = sessionWriteScope(this.db, session);
-    if (policyScope.kind === "invalid") {
-      this.finalizePreStartKnown(turnNow, session, "POLICY_UNSUPPORTED", policyScope.reason);
+    // The FULL durable binding (not just the scope) is carried into the
+    // execution request; missing/corrupt grants fail closed exactly as before.
+    const policyLookup = loadSessionWritePolicy(this.db, session);
+    if (policyLookup.kind !== "effective") {
+      const reason = policyLookup.kind === "malformed"
+        ? `effective write-policy binding unusable: ${policyLookup.reason}`
+        : "Legacy session has no immutable write-policy binding; spawn a replacement session.";
+      this.finalizePreStartKnown(turnNow, session, "POLICY_UNSUPPORTED", reason);
       return;
     }
+    // Adapters receive a frozen defensive copy: mutating the request cannot
+    // touch the durable grant or the gate's fresh DB reads (§12.1).
+    const effectivePolicy: EffectiveWritePolicy = cloneFrozenPolicy(policyLookup.policy);
 
     // Required input delivery BEFORE dispatch (§7.1.1, §13.2.1): resolve →
     // plan → materialize read-only views → seal the TurnInputManifest. Any
     // failure here is a journaled pre-dispatch failure — inference never
     // starts with a missing required input.
     let envelope = `agent-broker envelope turn=${turnId} session=${session.session_id}`;
+    let readOnlyInputPaths: readonly string[] = Object.freeze([]);
     try {
       const prep = this.prepareInputs(turnNow, session);
       envelope = this.buildEnvelope(session, turnNow, prep.manifest);
+      // §7.1.1: ONLY the exact broker-generated materialized bindings from the
+      // sealed manifest — never paths derived from goal/artifact text.
+      readOnlyInputPaths = Object.freeze(
+        prep.manifest.inputs
+          .filter((entry) => entry.delivery === "read_only_path")
+          .map((entry) => entry.binding),
+      );
     } catch (e) {
       const code =
         e instanceof InputPlanError
@@ -321,6 +338,10 @@ export class TurnExecutor {
             : null,
       deadline_at: turn.deadline_at ?? 0,
       clock: this.clock,
+      // Validated durable binding + sealed manifest bindings; both frozen so
+      // adapters cannot mutate the grant or the gate policy.
+      effective_policy: effectivePolicy,
+      read_only_input_paths: readOnlyInputPaths,
     };
 
     let result: TurnExecutionResult | null = null;

@@ -12,6 +12,7 @@ import { runStdioBridge, type McpToolContext } from "../../src/bridge/server.ts"
 import { bridgeToolDefs, callBridgeTool } from "../../src/bridge/tools.ts";
 import { startDaemon } from "../../src/daemon/bootstrap.ts";
 import {
+  insertAccount,
   insertCoordinator,
   insertCoverageProfile,
   insertPolicyProfile,
@@ -54,6 +55,9 @@ async function withBridge(
     insertCoordinator(daemon.db, {
       coordinator_id: "coord-e2e", display_name: "E2E", allowed_project_ids: allowedProjects, revoked: false, config_revision: 1,
     });
+    for (const account_profile_id of ["acct", "acct-e2e"]) {
+      insertAccount(daemon.db, { account_profile_id, provider: "mock", auth_mode: "native", quota_scope_id: "shared:mock" });
+    }
     insertCoverageProfile(daemon.db, {
       coverage_profile_id: "cov-e2e", version: "1",
       config: JSON.stringify(coverage), contract_hash: coverageContractHash(coverage),

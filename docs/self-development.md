@@ -81,7 +81,7 @@ Production adapters do not rely on reading Desktop chat caches for reports.
 |---|---|
 | Effective policy and inputs | Core narrowing and immutable binding completed; native mandatory enforcement, read/search-only reviewer and required-input enforcement remain open |
 | Runtime supervision | Durable launch/process ownership, managed descendant quiescence, crash/disconnect/restart cases and explicit UNKNOWN reconciliation |
-| Preflight and binding | Native CLI/auth/catalog readiness without inference; honest CLI/model/effort/account bindings and error classification |
+| Preflight and binding | Core admission preflight and immutable handoff completed; native CLI/auth/catalog readiness and lifetime account/config binding remain open |
 | Workspaces/resources | Broker-created Git worktrees, total storage admission including staging, bounded output and event wait behavior |
 | Complete native feedback loop | Worker → review findings artifact → fix → review, R1/S1/R2/S2 continuity, cancellation during native tools |
 | Operator setup | Validated registry configuration, runnable startup packaging, practical recovery/triage workflow |
@@ -97,3 +97,6 @@ separate integrated capture, Cursor review and coordinator acceptance.
 The [adapter permission/effort checkpoint](native-smoke/2026-10-01-adapter-controls/report.md)
 records Antigravity implementation, independent Cursor review, coordinator
 repairs and 371 passing offline tests. Full native isolation remains open.
+The [provider preflight checkpoint](native-smoke/2026-10-01-provider-preflight/report.md)
+records ZCode implementation and coordinator integration with 387 passing
+offline tests. Native readiness and mandatory enforcement remain open.
