@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { closeSync, chmodSync, existsSync, lstatSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { readdir as readdirAsync, realpath as realpathAsync, stat as statAsync } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateOperatorConfig, type OperatorConfig } from "./config.ts";
@@ -10,6 +11,7 @@ import { boundedSanitizedDetail, resolveBinaryPath, runMetadataProbe } from "../
 import { createZcodePersonalConfig, readZcodeInstalledCatalog, resolveZcodeBuiltinPath } from "../providers/zcode/nativeConfig.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_FOLDER_ENTRIES = 2000;
 const DEFAULT_PORT = 4318;
 const TOKEN_HEADER = "x-operator-token";
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "ui");
@@ -175,6 +177,63 @@ function parseJsonBody(body: Buffer): unknown {
 
 function expectedOrigin(port: number): string {
   return `http://127.0.0.1:${port}`;
+}
+
+function folderRoots(): string[] {
+  if (process.platform !== "win32") return [path.parse(path.resolve("/")).root];
+  const roots: string[] = [];
+  for (let code = 65; code <= 90; code += 1) {
+    const root = `${String.fromCharCode(code)}:\\`;
+    if (existsSync(root)) roots.push(root);
+  }
+  return roots;
+}
+
+function startupFolder(configPath: string, config: OperatorConfig): string {
+  const workspace = config.workspaces.find(item =>
+    item.mode === "current" && typeof item.canonical_path === "string" && existsSync(item.canonical_path) &&
+    statSync(item.canonical_path, { throwIfNoEntry: false })?.isDirectory(),
+  );
+  return workspace?.canonical_path ? path.resolve(workspace.canonical_path) : path.dirname(path.resolve(configPath));
+}
+
+async function listFolder(body: unknown, fallback: string): Promise<{
+  path: string;
+  parent: string | null;
+  directories: Array<{ name: string; path: string }>;
+  entries: Array<{ name: string; kind: "directory" | "file" }>;
+  roots: string[];
+}> {
+  if (body !== undefined && (!isRecord(body) || (body.path !== undefined && typeof body.path !== "string"))) {
+    throw new Error("path must be an absolute directory path");
+  }
+  const requested: unknown = isRecord(body) && body.path !== undefined ? body.path : fallback;
+  if (typeof requested !== "string" || !path.isAbsolute(requested) || requested.trim().length === 0) {
+    throw new Error("path must be an absolute directory path");
+  }
+  const canonical = await realpathAsync(requested);
+  const folderStat = await statAsync(canonical);
+  if (!folderStat.isDirectory()) throw new Error("path must be an existing directory");
+  const dirents = await readdirAsync(canonical, { withFileTypes: true });
+  if (dirents.length > MAX_FOLDER_ENTRIES) throw new Error(`directory contains more than ${MAX_FOLDER_ENTRIES} entries`);
+  const entries = dirents
+    .filter(entry => !entry.isSymbolicLink())
+    .map(entry => ({
+      name: entry.name,
+      kind: entry.isDirectory() ? "directory" as const : "file" as const,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const directories = entries
+    .filter(entry => entry.kind === "directory")
+    .map(entry => ({ name: entry.name, path: path.join(canonical, entry.name) }));
+  const root = path.parse(canonical).root;
+  return {
+    path: canonical,
+    parent: canonical === root ? null : path.dirname(canonical),
+    directories,
+    entries,
+    roots: folderRoots(),
+  };
 }
 
 function checkRequest(request: IncomingMessage, token: string, port: number): number | null {
@@ -364,6 +423,7 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
   let actualPort = 0;
   const scriptPath = options.scriptPath ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "main.ts");
   const readCatalog = options.readCatalog ?? defaultCatalogReader;
+  const initialFolder = startupFolder(configPath, validated);
 
   server.on("request", (request, response) => {
     void (async () => {
@@ -426,6 +486,15 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
           };
           saveChain = saveChain.then(runSave, runSave);
           await saveChain;
+        } catch (error) {
+          sendJson(response, error instanceof Error && /exceeds 1 MiB/.test(error.message) ? 413 : 400, { error: safeError(error) });
+        }
+        return;
+      }
+      if (request.method === "POST" && pathName === "/api/folders") {
+        try {
+          const body = parseJsonBody(await readBody(request));
+          sendJson(response, 200, await listFolder(body, initialFolder));
         } catch (error) {
           sendJson(response, error instanceof Error && /exceeds 1 MiB/.test(error.message) ? 413 : 400, { error: safeError(error) });
         }

@@ -76,6 +76,18 @@ textarea { min-height: 7rem; resize: vertical; }
 .wizard { margin-top: 1rem; padding: 1rem; border: 1px dashed #a8b8cf; border-radius: 12px; background: #f8fbff; }
 .wizard h3 { margin-top: 0; }
 .wizard .actions { display: flex; gap: .6rem; margin-top: .8rem; }
+.wizard-status { margin: .7rem 0; }
+.folder-picker { margin: .8rem 0; padding: .8rem; border: 1px solid #d8e3f5; border-radius: 10px; background: #fff; }
+.folder-picker-current { margin: 0 0 .7rem; color: var(--muted); overflow-wrap: anywhere; }
+.folder-picker-controls { display: grid; gap: .7rem; }
+.folder-children { display: flex; flex-wrap: wrap; gap: .45rem; }
+.code-folder-choices { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: .5rem .9rem; align-items: center; color: #435167; font-size: .82rem; }
+.code-folder-choices strong { flex-basis: 100%; }
+.code-folder-choices label { display: flex; grid-template-columns: auto auto; gap: .35rem; align-items: center; font-weight: 400; }
+.code-folder-choices input { width: auto; }
+.wizard-advanced { grid-column: 1 / -1; margin-top: .8rem; }
+.manual-folder { display: flex; gap: .7rem; align-items: end; margin-top: .8rem; }
+.manual-folder label { flex: 1; }
 .hidden { display: none; }
 .small-note { font-size: .78rem; color: var(--muted); line-height: 1.4; }
 .pill { display: inline-flex; padding: .2rem .45rem; border-radius: 999px; background: #e9f0ff; color: #2457c5; font-size: .72rem; font-weight: 700; }
@@ -84,4 +96,5 @@ textarea { min-height: 7rem; resize: vertical; }
   .topbar, .intro { display: block; }
   .top-actions { margin-top: 1rem; }
   .field-grid, .advanced-grid, .snippet-grid, .project-card .project-fields { grid-template-columns: 1fr; }
+  .manual-folder { display: grid; align-items: stretch; }
 }

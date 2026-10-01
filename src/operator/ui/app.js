@@ -467,16 +467,30 @@
   function renderWizard() {
     const wizard = $("project-wizard");
     wizard.replaceChildren();
-    const title = make("h3", "Create a new project and two fresh workspace bindings");
-    wizard.append(title);
-    const grid = make("div");
-    grid.className = "field-grid";
+    wizard.append(make("h3", "Add a project"));
+    const wizardStatus = make("div");
+    wizardStatus.className = "wizard-status status";
+    wizardStatus.setAttribute("role", "status");
+    wizardStatus.setAttribute("aria-live", "polite");
+    wizard.append(wizardStatus);
+
+    let selectedFolder = "";
+    let selectedListing = null;
+    let folderListing = null;
+    let pickerRequest = 0;
+    let pickerLoading = false;
+    let displayTouched = false;
+    let scopeMode = "project";
+    const ignoredNames = new Set([".git", ".state", "node_modules", "dist", "build", "coverage", ".next", ".nuxt", ".cache", ".venv", "venv", "__pycache__", ".DS_Store"]);
+    const commonCodeDirectories = new Set(["src", "app", "apps", "lib", "libs", "packages", "tests", "test", "scripts", "docs", "include", "public"]);
+    const selectedCodeDirectories = new Set();
     const display = document.createElement("input");
     display.placeholder = "Project display name";
     const workspacePath = document.createElement("input");
-    workspacePath.placeholder = "Current workspace path";
+    workspacePath.placeholder = "Choose a project folder";
+    workspacePath.readOnly = true;
     const source = document.createElement("textarea");
-    source.placeholder = "Source prefixes, one per line (required)";
+    source.placeholder = "Source prefixes, one per line";
     const excluded = document.createElement("textarea");
     excluded.placeholder = "Excluded prefixes, one per line";
     const nonSource = document.createElement("textarea");
@@ -484,15 +498,107 @@
     const writeScope = document.createElement("textarea");
     writeScope.placeholder = "Write scope, one per line";
     const access = document.createElement("select");
-    access.append(option("read_only", "read_only", true), option("workspace_write", "workspace_write", false));
+    access.append(
+      option("workspace_write", "Allow workers to edit selected files (recommended)", true),
+      option("read_only", "Read only", false),
+    );
     const copy = document.createElement("select");
-    copy.append(option("", "Do not copy an existing route", true));
-    (state.routes || []).forEach((route) => copy.append(option(route.route_id, `Copy ${route.route_id}`, false)));
-    grid.append(textField("Display name", "", (value) => { display.value = value; }), textField("Current path", "", (value) => { workspacePath.value = value; }));
-    const wrap = (label, node) => { const labelNode = make("label", label); labelNode.append(node); return labelNode; };
-    grid.append(wrap("Source prefixes", source), wrap("Excluded prefixes", excluded), wrap("Non-source prefixes", nonSource), wrap("Write scope", writeScope), wrap("Access policy", access), wrap("Copy route", copy));
+    const defaultCopyProject = projectFilter || state.projects?.[0]?.project_id || "";
+    copy.append(option("", "None", !defaultCopyProject));
+    (state.projects || []).forEach((project) => copy.append(option(
+      project.project_id,
+      `All profiles from ${project.display_name || project.project_id}`,
+      project.project_id === defaultCopyProject,
+    )));
+
+    const help = (text) => {
+      const node = make("span", text);
+      node.className = "field-help";
+      return node;
+    };
+    const field = (labelText, node, helpText = "") => {
+      const label = make("label");
+      label.append(make("span", labelText));
+      if (helpText) label.append(help(helpText));
+      label.append(node);
+      return label;
+    };
+    const grid = make("div");
+    grid.className = "field-grid";
+    grid.append(
+      field("Display name", display, "Suggested from the folder name; edit it to use a different project name."),
+      field("Project folder", workspacePath, "Choose the repository folder where your agents will work."),
+    );
+    display.addEventListener("input", () => { displayTouched = true; });
+    const browse = make("button", "Browse folders");
+    browse.className = "button secondary";
+    browse.type = "button";
+    const browseActions = make("div");
+    browseActions.className = "actions";
+    browseActions.append(browse);
+    grid.append(browseActions);
     wizard.append(grid);
-    const explanation = make("p", "The wizard creates unique project/workspace/policy/coverage IDs, with current and review_slot workspaces. Source, exclusion, and access arrays are explicit.");
+
+    const picker = make("div");
+    picker.className = "folder-picker hidden";
+    const pickerCurrent = make("p");
+    pickerCurrent.className = "folder-picker-current";
+    const pickerControls = make("div");
+    pickerControls.className = "folder-picker-controls";
+    picker.append(pickerCurrent, pickerControls);
+    wizard.append(picker);
+
+    const scopeSelect = document.createElement("select");
+    scopeSelect.append(
+      option("project", "Project files (recommended)", true),
+      option("code", "Code folders and root files", false),
+      option("custom", "Custom", false),
+    );
+    const scopeGrid = make("div");
+    scopeGrid.className = "field-grid";
+    scopeGrid.append(field("Scope preset", scopeSelect, "Generated folders are excluded. Add new files or folders in the project root to coverage later."));
+    const scopeHelp = make("p", "Project files includes every scanned top-level file and folder except ignored generated folders. Code folders and root files lets you choose existing common code folders.");
+    scopeHelp.className = "small-note";
+    scopeGrid.append(scopeHelp);
+    const scopeSummary = make("p");
+    scopeSummary.className = "small-note";
+    scopeGrid.append(scopeSummary);
+    const codeChoices = make("div");
+    codeChoices.className = "code-folder-choices";
+    scopeGrid.append(codeChoices);
+    const advancedScopeGrid = make("div");
+    advancedScopeGrid.className = "field-grid";
+    advancedScopeGrid.append(
+      field("Source prefixes", source, "Editable relative top-level names; do not use '.' or '*'."),
+      field("Excluded prefixes", excluded, "Ignored existing top-level names are excluded by the presets."),
+      field("Non-source prefixes", nonSource, "Optional generated or non-source areas not covered as source."),
+      field("Write scope", writeScope, "Workers can write only these source-covered prefixes."),
+    );
+    wizard.append(scopeGrid);
+
+    const advanced = document.createElement("details");
+    advanced.className = "wizard-advanced";
+    advanced.append(make("summary", "Advanced folder and scope settings"));
+    const manualPath = document.createElement("input");
+    manualPath.placeholder = "Absolute folder path";
+    const loadFolder = make("button", "Load folder");
+    loadFolder.className = "button secondary";
+    loadFolder.type = "button";
+    const manualRow = make("div");
+    manualRow.className = "manual-folder";
+    manualRow.append(field("Manual folder path", manualPath, "Optional alternative to Browse folders; it uses the same validation and scan."));
+    manualRow.append(loadFolder);
+    advanced.append(manualRow, advancedScopeGrid);
+    wizard.append(advanced);
+
+    const policyGrid = make("div");
+    policyGrid.className = "field-grid";
+    policyGrid.append(
+      field("Access", access, "Reviewer profiles are always read only; worker access controls the new worker policy."),
+      field("Copy agent profiles", copy, "Reuse providers, models, effort, roles, and subagent preferences from another project."),
+    );
+    wizard.append(policyGrid);
+    const explanation = make("p", "Create adds the project to your draft. Save configuration afterwards, then restart MCP to use it.");
     explanation.className = "small-note";
     wizard.append(explanation);
     const actions = make("div");
@@ -500,9 +606,235 @@
     const create = make("button", "Create project");
     create.className = "button primary";
     create.type = "button";
+    const cancel = make("button", "Cancel");
+    cancel.className = "button secondary";
+    cancel.type = "button";
+    actions.append(create, cancel);
+    wizard.append(actions);
+
+    function wizardMessage(message, kind = "") {
+      wizardStatus.textContent = message;
+      wizardStatus.className = `wizard-status status ${kind}`;
+    }
+
+    function listValue(node) {
+      return node.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+    }
+
+    function setList(node, values) {
+      node.value = values.join("\n");
+    }
+
+    function currentSourceList() {
+      return listValue(source);
+    }
+
+    function syncWriteScope() {
+      writeScope.disabled = access.value === "read_only";
+      if (access.value === "read_only") setList(writeScope, []);
+      else if (scopeMode !== "custom") setList(writeScope, currentSourceList());
+    }
+
+    function renderCodeChoices() {
+      codeChoices.replaceChildren();
+      if (scopeMode !== "code") return;
+      codeChoices.append(make("strong", "Existing common code folders"));
+      const entries = Array.isArray(selectedListing?.entries) ? selectedListing.entries : [];
+      const choices = entries.filter((entry) => entry.kind === "directory" && commonCodeDirectories.has(entry.name) && !ignoredNames.has(entry.name));
+      if (!choices.length) {
+        codeChoices.append(make("p", "No common code folders were found. Add root files or edit Source prefixes; an empty source scope cannot be created."));
+        return;
+      }
+      for (const entry of choices) {
+        const label = make("label");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = selectedCodeDirectories.has(entry.name);
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) selectedCodeDirectories.add(entry.name);
+          else selectedCodeDirectories.delete(entry.name);
+          syncScopeLists("code");
+        });
+        label.append(checkbox, make("span", entry.name));
+        codeChoices.append(label);
+      }
+    }
+
+    function syncScopeLists(kind) {
+      const enteringCodePreset = kind === "code" && scopeMode !== "code";
+      scopeMode = kind;
+      if (!selectedListing) return;
+      const entries = Array.isArray(selectedListing.entries) ? selectedListing.entries : [];
+      const names = entries.map((entry) => entry.name).filter(Boolean);
+      setList(excluded, names.filter((name) => ignoredNames.has(name)));
+      setList(nonSource, []);
+      if (kind === "project") {
+        setList(source, names.filter((name) => !ignoredNames.has(name)));
+      } else if (kind === "code") {
+        if (enteringCodePreset) {
+          entries.filter((entry) => entry.kind === "directory" && commonCodeDirectories.has(entry.name) && !ignoredNames.has(entry.name))
+            .forEach((entry) => selectedCodeDirectories.add(entry.name));
+        }
+        for (const name of [...selectedCodeDirectories]) {
+          if (!names.includes(name) || !commonCodeDirectories.has(name)) selectedCodeDirectories.delete(name);
+        }
+        setList(source, names.filter((name) => !ignoredNames.has(name) && (
+          entries.find((entry) => entry.name === name)?.kind === "file" || selectedCodeDirectories.has(name)
+        )));
+      }
+      syncWriteScope();
+      renderCodeChoices();
+      updateCreateState();
+    }
+
+    function updateCreateState() {
+      const sources = currentSourceList();
+      const invalid = sources.some((value) => value === "." || value === "*");
+      create.disabled = pickerLoading || !selectedFolder || sources.length === 0 || invalid;
+      scopeSummary.textContent = selectedFolder
+        ? `Included (${sources.length}): ${sources.slice(0, 12).join(", ") || "none"}${sources.length > 12 ? ", …" : ""}. Excluded (${listValue(excluded).length}): ${listValue(excluded).slice(0, 12).join(", ") || "none"}.`
+        : "Choose a project folder to populate this preset.";
+    }
+
+    function chooseFolder(listing) {
+      selectedFolder = listing.path;
+      selectedListing = listing;
+      selectedCodeDirectories.clear();
+      if (scopeMode === "code") {
+        listing.entries.filter((entry) => entry.kind === "directory" && commonCodeDirectories.has(entry.name))
+          .forEach((entry) => selectedCodeDirectories.add(entry.name));
+      }
+      workspacePath.value = listing.path;
+      manualPath.value = listing.path;
+      if (!displayTouched) display.value = listing.path.split(/[\\/]/).filter(Boolean).pop() || listing.path;
+      if (scopeMode !== "custom") {
+        scopeSelect.value = scopeMode;
+        syncScopeLists(scopeMode);
+      }
+      updateCreateState();
+    }
+
+    function renderPicker() {
+      pickerCurrent.textContent = folderListing ? `Current folder: ${folderListing.path}` : "Choose a folder to inspect its top-level entries.";
+      pickerControls.replaceChildren();
+      if (!folderListing) return;
+      const up = make("button", "Up");
+      up.className = "button secondary";
+      up.type = "button";
+      up.disabled = pickerLoading || folderListing.parent === null;
+      up.addEventListener("click", () => void loadFolderPath(folderListing.parent));
+      const roots = document.createElement("select");
+      roots.setAttribute("aria-label", "Drive or root");
+      roots.append(option("", "Choose drive or root", true));
+      (folderListing.roots || []).forEach((root) => roots.append(option(root, root, false)));
+      roots.disabled = pickerLoading;
+      roots.addEventListener("change", () => { if (roots.value) void loadFolderPath(roots.value); });
+      pickerControls.append(up, roots);
+      const children = make("div");
+      children.className = "folder-children";
+      for (const directory of folderListing.directories || []) {
+        const button = make("button", directory.name);
+        button.className = "button secondary";
+        button.type = "button";
+        button.disabled = pickerLoading;
+        button.addEventListener("click", () => void loadFolderPath(directory.path));
+        children.append(button);
+      }
+      pickerControls.append(children);
+      const use = make("button", "Use this folder");
+      use.className = "button primary";
+      use.type = "button";
+      use.disabled = pickerLoading;
+      use.addEventListener("click", () => {
+        chooseFolder(folderListing);
+        picker.classList.add("hidden");
+      });
+      pickerControls.append(use);
+      const closePicker = make("button", "Cancel folder selection");
+      closePicker.className = "button secondary";
+      closePicker.type = "button";
+      closePicker.addEventListener("click", () => {
+        pickerRequest += 1;
+        pickerLoading = false;
+        picker.classList.add("hidden");
+        updateCreateState();
+      });
+      pickerControls.append(closePicker);
+    }
+
+    async function loadFolderPath(requested, selectAfter = false) {
+      const requestId = ++pickerRequest;
+      pickerLoading = true;
+      updateCreateState();
+      renderPicker();
+      try {
+        const body = await api("/api/folders", {
+          method: "POST",
+          body: JSON.stringify(requested ? { path: requested } : {}),
+        });
+        if (requestId !== pickerRequest) return;
+        folderListing = body;
+        if (selectAfter) chooseFolder(body);
+        renderPicker();
+        wizardMessage(`Scanned ${body.entries.length} top-level entr${body.entries.length === 1 ? "y" : "ies"}.`, "success");
+      } catch (error) {
+        if (requestId === pickerRequest) wizardMessage(error.message, "error");
+      } finally {
+        if (requestId === pickerRequest) {
+          pickerLoading = false;
+          updateCreateState();
+          renderPicker();
+        }
+      }
+    }
+
+    browse.addEventListener("click", () => {
+      picker.classList.remove("hidden");
+      void withButtonBusy(browse, () => loadFolderPath(selectedFolder || undefined));
+    });
+    loadFolder.addEventListener("click", () => {
+      if (!manualPath.value.trim()) {
+        wizardMessage("Enter an absolute folder path to load.", "error");
+        return;
+      }
+      void withButtonBusy(loadFolder, () => loadFolderPath(manualPath.value.trim(), true));
+    });
+    scopeSelect.addEventListener("change", () => {
+      if (scopeSelect.value !== "custom") syncScopeLists(scopeSelect.value);
+      else scopeMode = "custom";
+      renderCodeChoices();
+      updateCreateState();
+    });
+    for (const node of [source, excluded, nonSource, writeScope]) {
+      node.addEventListener("input", () => {
+        scopeMode = "custom";
+        scopeSelect.value = "custom";
+        updateCreateState();
+      });
+    }
+    access.addEventListener("change", () => {
+      syncWriteScope();
+      updateCreateState();
+    });
+    cancel.addEventListener("click", () => {
+      pickerRequest += 1;
+      wizard.classList.add("hidden");
+    });
+
     create.addEventListener("click", () => {
-      if (!display.value.trim() || !source.value.trim() || !workspacePath.value.trim()) {
-        status("Project name, current path, and at least one source prefix are required.", "error");
+      const sourcePrefixes = currentSourceList();
+      if (!display.value.trim() || !sourcePrefixes.length || !selectedFolder) {
+        wizardMessage("Choose a project folder, enter a display name, and select at least one source prefix.", "error");
+        return;
+      }
+      if (sourcePrefixes.some((value) => value === "." || value === "*")) {
+        wizardMessage("Source prefixes must name concrete relative top-level entries; '.' and '*' are not allowed.", "error");
+        return;
+      }
+      try {
+        syncAdvanced();
+      } catch (error) {
+        wizardMessage(`Fix advanced configuration before creating the project: ${error.message}`, "error");
         return;
       }
       const projectId = uniqueId("project");
@@ -510,40 +842,40 @@
       const policyId = uniqueId("worker-policy");
       const reviewerPolicyId = uniqueId("review-policy");
       state.projects.push({ project_id: projectId, display_name: display.value.trim() });
-      state.workspaces.push({ workspace_id: uniqueId("workspace"), project_id: projectId, mode: "current", canonical_path: workspacePath.value.trim(), coverage_profile_id: coverageId });
+      state.workspaces.push({ workspace_id: uniqueId("workspace"), project_id: projectId, mode: "current", canonical_path: selectedFolder, coverage_profile_id: coverageId });
       state.workspaces.push({ workspace_id: uniqueId("workspace"), project_id: projectId, mode: "review_slot", canonical_path: null, coverage_profile_id: coverageId });
       state.coverage_profiles.push({
         coverage_profile_id: coverageId,
         version: "1",
         config: {
-          source_prefixes: source.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
-          non_source_prefixes: nonSource.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
-          excluded_prefixes: excluded.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+          source_prefixes: sourcePrefixes,
+          non_source_prefixes: listValue(nonSource),
+          excluded_prefixes: listValue(excluded),
         },
       });
       state.policy_profiles.push({ policy_profile_id: policyId, version: "1", config: {
         access: access.value,
-        write_scope: writeScope.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+        write_scope: access.value === "read_only" ? [] : listValue(writeScope),
       } });
       state.policy_profiles.push({ policy_profile_id: reviewerPolicyId, version: "1", config: { access: "read_only", write_scope: [] } });
       const coordinator = find(state.coordinators, "coordinator_id", state.coordinator_id);
       if (coordinator && !coordinator.allowed_project_ids.includes(projectId)) coordinator.allowed_project_ids.push(projectId);
-      if (copy.value) {
-        const sourceRoute = find(state.routes, "route_id", copy.value);
-        if (sourceRoute) state.routes.push({ ...JSON.parse(JSON.stringify(sourceRoute)), route_id: uniqueId(sourceRoute.route_id), project_id: projectId, policy_profile_id: sourceRoute.role === "reviewer" ? reviewerPolicyId : policyId });
-      }
+      (state.routes || []).filter((route) => route.project_id === copy.value).forEach((sourceRoute) => {
+        const copied = JSON.parse(JSON.stringify(sourceRoute));
+        copied.route_id = uniqueId(sourceRoute.route_id || "route");
+        copied.project_id = projectId;
+        copied.policy_profile_id = sourceRoute.role === "reviewer" ? reviewerPolicyId : policyId;
+        state.routes.push(copied);
+      });
       wizard.classList.add("hidden");
       projectFilter = projectId;
       markDirty();
       render();
       status("New project staged with new bindings. Save, then restart the operator.", "success");
     });
-    const cancel = make("button", "Cancel");
-    cancel.className = "button secondary";
-    cancel.type = "button";
-    cancel.addEventListener("click", () => wizard.classList.add("hidden"));
-    actions.append(create, cancel);
-    wizard.append(actions);
+    renderPicker();
+    renderCodeChoices();
+    updateCreateState();
   }
 
   async function load() {

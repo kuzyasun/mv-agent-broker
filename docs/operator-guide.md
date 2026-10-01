@@ -66,10 +66,23 @@ that encourages native children, and `*_reviewer` describes an independent
 review; explicit policy still controls permissions. A model refresh is an
 explicit metadata-only action and supports manual model entry when a provider
 is unavailable. Observed catalog timestamps are informational:
-they do not prove authentication or quota. The Projects wizard creates unique
-project, current-workspace, review-slot, policy, and coverage IDs with
-explicit source/exclusion/write-scope arrays. Existing sessions retain their
-old bindings; use a new project and state directory for another repository.
+they do not prove authentication or quota. Use **New project wizard** to add
+another repository. Browse local folders, select the repository folder, choose
+file coverage and worker permissions, and copy agent profiles from an existing
+project. Models, efforts, accounts, and native-subagent preferences are copied;
+reviewers receive a separate read-only policy. You can also start without
+profiles and add them afterwards.
+
+The recommended coverage includes existing top-level files and folders, except
+generated folders and broker/Git state. The narrower code-folder preset includes
+common code folders and root files. Advanced fields allow explicit coverage
+and write scopes. Newly introduced top-level files or folders need adding to
+coverage; the presets are a snapshot of the folder, not an unrestricted wildcard.
+Folder browsing lists names only and does not run an agent or spend quota.
+Creation stages new project, workspace, policy, and coverage IDs locally;
+**Save** writes the configuration, then restart MCP to use the new project.
+Existing sessions retain their bindings. The new project can share the current
+configuration and state; a separate configuration/state is optional.
 
 The Connection section emits MCP JSON and Codex TOML using the same absolute
 config path, node executable, and operator script. Restart a client after

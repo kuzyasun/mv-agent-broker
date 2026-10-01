@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -84,6 +84,66 @@ describe("operator settings UI service", () => {
     expect((await fetch(`${service.url.replace("127.0.0.1", "localhost")}/api/config`, {
       headers: { "x-operator-token": service.token, host: new URL(service.url).host },
     })).status).toBe(403);
+  });
+
+  it("lists one authenticated folder level without exposing file contents", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "operator-ui-folders-"));
+    roots.push(root);
+    const child = path.join(root, "child");
+    mkdirSync(child);
+    writeFileSync(path.join(root, "secret.txt"), "private file contents");
+    writeFileSync(path.join(child, "nested.txt"), "nested private contents");
+    const configPath = path.join(root, "operator.json");
+    writeFileSync(configPath, JSON.stringify({
+      ...config(),
+      workspaces: [{ workspace_id: "ws-main", project_id: "project-main", mode: "current", canonical_path: root }],
+    }));
+    const service = await startOperatorUi({ configPath, port: 0 });
+    services.push(service);
+
+    expect((await fetch(`${service.url}/api/folders`)).status).toBe(401);
+    expect((await request(service, "POST", "/api/folders", {}, {
+      "x-operator-token": service.token,
+      origin: "http://evil.example",
+    })).status).toBe(403);
+    const response = await request(service, "POST", "/api/folders", {}, { "x-operator-token": service.token });
+    expect(response.status).toBe(200);
+    const listing = await response.json() as {
+      path: string;
+      parent: string | null;
+      directories: Array<{ name: string; path: string }>;
+      entries: Array<{ name: string; kind: string }>;
+      roots: string[];
+    };
+    expect(listing.path).toBe(path.resolve(root));
+    expect(listing.parent).toBe(path.dirname(path.resolve(root)));
+    expect(listing.directories).toEqual([{ name: "child", path: path.resolve(child) }]);
+    expect(listing.entries).toEqual([
+      { name: "child", kind: "directory" },
+      { name: "operator.json", kind: "file" },
+      { name: "secret.txt", kind: "file" },
+    ]);
+    expect(JSON.stringify(listing)).not.toContain("private file contents");
+    expect(listing.roots.length).toBeGreaterThan(0);
+  });
+
+  it("rejects relative, missing, and file folder paths", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "operator-ui-folders-"));
+    roots.push(root);
+    const file = path.join(root, "file.txt");
+    writeFileSync(file, "not a folder");
+    const configPath = path.join(root, "operator.json");
+    writeFileSync(configPath, JSON.stringify({
+      ...config(),
+      workspaces: [{ workspace_id: "ws-main", project_id: "project-main", mode: "current", canonical_path: root }],
+    }));
+    const service = await startOperatorUi({ configPath, port: 0 });
+    services.push(service);
+
+    for (const folderPath of ["relative", path.join(root, "missing"), file]) {
+      const response = await request(service, "POST", "/api/folders", { path: folderPath }, { "x-operator-token": service.token });
+      expect(response.status).toBe(400);
+    }
   });
 
   it("rejects invalid updates without creating a backup or changing the raw file", async () => {
