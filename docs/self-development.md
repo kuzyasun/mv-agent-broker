@@ -100,3 +100,6 @@ repairs and 371 passing offline tests. Full native isolation remains open.
 The [provider preflight checkpoint](native-smoke/2026-10-01-provider-preflight/report.md)
 records ZCode implementation and coordinator integration with 387 passing
 offline tests. Native readiness and mandatory enforcement remain open.
+The [Cursor reviewer configuration checkpoint](native-smoke/2026-10-01-cursor-profile/report.md)
+records Antigravity implementation, managed session history, scoped read config
+and 426 passing offline tests. Configuration is not native enforcement proof.

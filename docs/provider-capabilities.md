@@ -64,7 +64,7 @@ User startup hooks can run, although broker hook/permission integration is
 unwired. Worker writes, reviewer enforcement and live tool cancellation remain
 unverified. Native rate-limit status was allowed; quota rejection was not tested.
 
-## cursor (adapter 0.2.2; model/resume smoke on 0.2.0, `src/providers/cursor/`)
+## cursor (adapter 0.2.3; model/resume smoke on 0.2.0, `src/providers/cursor/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
@@ -75,13 +75,16 @@ unverified. Native rate-limit status was allowed; quota rejection was not tested
 | Windows PowerShell shim launch | native | smoke_tested | shared runner now preserves PATHEXT; Cursor passes Windows profile variables; metadata-only probe reproduces silent exit without PATHEXT |
 | Windows cmd shim boundary checks | native | documented | common infra; Cursor native run used .ps1, not .cmd |
 | cancellation + inactivity timeouts | native | documented | common infra/fake process cancellation; native tool-tree cancellation and quiescence unverified |
-| reviewer read-only / worker writes | unknown | configured | not exercised; --trust is workspace trust, not role enforcement |
+| reviewer read-only / worker writes | unknown | configured | 0.2.3 private per-session home/history plus explicit workspace/input read config; native read control can be feature-gated; --trust is workspace trust, not enforcement |
 | quota-error classification | unknown | configured | four successful requests; quota exhaustion not observed; startup timeout no longer mislabeled RATE_LIMITED |
 | structured final output | unsupported | documented | text_only |
 
 Cursor auto ask-mode review delivered its final report through MCP on adapter
 0.2.1 ([checkpoint](native-smoke/2026-10-01-dogfood/report.md)). Read/search-only
 enforcement remains unknown; report delivery does not promote the role profile.
+The [0.2.3 checkpoint](native-smoke/2026-10-01-cursor-profile/report.md) records
+offline config/path/history checks. The earlier broad-read private-HOME probe
+had contaminated marker recall and remains rejected evidence.
 
 ## zcode (adapter 0.2.1; model/resume smoke on 0.2.0, `src/providers/zcode/`) — standalone JSON (ADR-0002 amendment)
 
@@ -101,6 +104,10 @@ out; it is not a successful native worker acceptance. Start Plan model creation
 failed on standalone 0.16.9; current adapter rejects that route before dispatch
 without account fallback. [Evidence and limits](native-smoke/2026-10-01-dogfood/report.md),
 [Start Plan research](zcode-start-plan.md).
+Subsequently Flash/max completed the bounded core preflight package through
+public MCP; [integrated acceptance](native-smoke/2026-10-01-provider-preflight/report.md)
+includes independent Cursor review and coordinator repairs. This establishes
+that development scenario, not a full native worker security profile.
 
 ## antigravity (adapter 0.2.0; native smoke on 0.1.0, `src/providers/antigravity/`)
 

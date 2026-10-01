@@ -1,0 +1,61 @@
+{
+  "checkpoint": "cursor-reviewer-profile",
+  "runtime_commit": "27a9eb21d49005da516ca7352a5ff41a9a72492b",
+  "validation": {
+    "targeted_before_junction_regressions": 96,
+    "real_claude_launched": false,
+    "post_review_targeted": 85,
+    "diff_check": "passed",
+    "typecheck": "passed",
+    "full_suite_files": 32,
+    "full_suite_before_post_review_fixes": 426
+  },
+  "author": {
+    "native_ref": "dc31fa0d-4405-4c92-9861-fb399fa9103b",
+    "state": "SUCCEEDED",
+    "provider": "antigravity",
+    "effort": "high",
+    "turn_id": "turn-a1aabff3570b41ce7b2f6089",
+    "report_length": 4000,
+    "report_assessment": "partial: progress/task wrappers in capped report; not test proof",
+    "baseline_snapshot_id": "snap-dff3ef79129fa4a2257749c1",
+    "author_snapshot_id": "snap-3f7b8fab067cbd483fe4dcce",
+    "model": "gemini-3.8-flash-high"
+  },
+  "limitations": [
+    "New configuration has not yet received native falsification proof",
+    "Feature-gated read control and first-party plugins remain unverified",
+    "Native tool denial receipts not normalized yet",
+    "Earlier private-HOME marker recall rejected as contaminated",
+    "Integrated capture precedes reviewed coordinator repairs; accepted Git commit authoritative"
+  ],
+  "runtime_files": 48,
+  "independent_review": {
+    "model": "auto",
+    "native_ref": "b246470e-a1fc-41b1-826e-8735786490fb",
+    "state": "SUCCEEDED",
+    "provider": "cursor",
+    "turn_id": "turn-cffcd8a30de49eec27cb94cd",
+    "findings": [
+      {
+        "issue": "EEXIST between directory inspection and creation",
+        "assessment": "Same-event-loop calls are synchronous; external creation remains possible",
+        "resolution": "Fresh lstat/realpath check after guarded EEXIST",
+        "reported_severity": "medium"
+      },
+      {
+        "issue": "Trusted system temp aliases rejected by full path walk",
+        "assessment": "Confirmed for symlinked temp root",
+        "resolution": "Physical private fallback via realpath of trusted os.tmpdir; managed links still fail",
+        "reported_severity": "medium"
+      }
+    ],
+    "coordinator_verified": true
+  },
+  "integrated_capture": {
+    "turn_id": "turn-2027de5662cf40c031717ed1",
+    "state": "SUCCEEDED",
+    "target_snapshot_id": "snap-049cdf65cfe290ba76c2a32b"
+  },
+  "schema_version": 1
+}

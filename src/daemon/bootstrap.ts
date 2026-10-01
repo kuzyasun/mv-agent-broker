@@ -66,7 +66,12 @@ export function buildAdapters(env: DaemonEnv): Map<string, ProviderAdapter> {
   adapters.set("mock", new MockAdapter());
   if (env.codexBinary) adapters.set("codex", new CodexAdapter({ binary: env.codexBinary }));
   if (env.claudeBinary) adapters.set("claude-code", new ClaudeAdapter({ binary: env.claudeBinary }));
-  if (env.cursorBinary) adapters.set("cursor", new CursorAdapter({ binary: env.cursorBinary }));
+  if (env.cursorBinary) {
+    adapters.set("cursor", new CursorAdapter({
+      binary: env.cursorBinary,
+      stateRoot: path.join(env.stateDir, "providers", "cursor"),
+    }));
+  }
   if (env.zcodeBundlePath) {
     adapters.set("zcode", new ZcodeAdapter({ bundlePath: env.zcodeBundlePath, nodeBinary: env.zcodeNodeBinary, builtinProviderConfigPath: env.zcodeBuiltinProviderConfigPath }));
   }

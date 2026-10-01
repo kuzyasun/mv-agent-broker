@@ -231,19 +231,28 @@ was cumulative: do not sum consecutive result counters as independent turns.
 
 ## Cursor
 
-Adapter 0.2.2 prepares a unique private `CURSOR_CONFIG_DIR` for each reviewer
+Adapter 0.2.3 prepares a unique private `CURSOR_CONFIG_DIR` for each reviewer
 turn, retaining Ask mode and denying `Write(**)`, `Shell(*)`, `WebFetch(*)`
 and `Mcp(*:*)`. Preparation precedes dispatch permission; cleanup covers
 success, failure, cancellation and gate refusal. Native authentication stays
 with the CLI; no user credential/settings files are copied or edited.
 See the official [permissions](https://cursor.com/docs/cli/reference/permissions)
 and [configuration](https://cursor.com/docs/cli/reference/configuration) contracts.
-This is partial adapter hardening, not a verified full reviewer profile:
-`Read(**)` is broad, home-based MCP/plugin discovery remains ambient, and
-native denial and configuration self-repair require falsification tests.
-No-inference probes on Windows retained authentication with private config,
-and also with private HOME/USERPROFILE/config/data; the latter is research
-evidence for further isolation, not behavior implemented by adapter 0.2.2.
+Reviewer HOME/USERPROFILE/XDG directories and `CURSOR_DATA_DIR` are isolated
+under the daemon state directory with a hashed session identity. Native history
+persists across turns and adapter reconstruction; ephemeral permission config
+is separate. Existing path components containing symlink/junctions fail before
+dispatch. Direct callers should provide `stateRoot` to preserve restart reuse.
+Windows APPDATA/LOCALAPPDATA authentication stays native-owned.
+
+The candidate config uses explicit workspace and sealed input path allowances
+and `sandbox.readBoundary=workspace`. It is partial hardening: the installed CLI
+can feature-gate read control, and first-party plugins can remain discoverable.
+Config self-repair, exact read/input-write denial and MCP/network restrictions
+require native falsification before the profile can be advertised as enforced.
+The earlier private-HOME continuity probe read broker evidence to find its
+marker; that memory-recall evidence was rejected, not counted as acceptance.
+See the [configuration checkpoint](native-smoke/2026-10-01-cursor-profile/report.md).
 
 Implementation: [adapter](../src/providers/cursor/cursorAdapter.ts).
 Set the pin to the agent launcher, which is separate from Desktop `cursor.cmd`:
