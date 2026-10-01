@@ -169,3 +169,9 @@ findings delivery to FIX, same worker/reviewer continuation, an active bridge
 disconnect, restart before FIX, actual foreign-coordinator ACL denial, and exact
 S2 review-slot files. Typecheck and the integrated full suite passed 649 tests
 with one platform skip. These offline results do not promote a mandatory native profile.
+
+The [native policy controls document](native-policy-controls.md) records bounded
+installed PROGRAM evidence and an independent Cursor sealed-tree review. ZCode
+hook failure is a static fail-open observation, not native denial validation;
+complete worker/reviewer policy profiles remain open. An incomplete Gemini
+background-search report and a failed GLM/high review are preserved separately.

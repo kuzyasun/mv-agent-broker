@@ -14,8 +14,8 @@ bridge/daemon processes ([evidence](native-smoke/2026-09-30-codex/report.md)).
 Setup, auth ownership, model/effort rules and limitations for every provider:
 [provider operations guide](providers.md).
 
-Current managed Windows transport versions are Cursor 0.2.7, ZCode 0.2.4 and
-Antigravity/Claude/Codex 0.2.2. Native smoke rows below retain their original
+Current managed Windows transport versions are Cursor 0.2.8, ZCode 0.2.5,
+Antigravity 0.2.3 and Claude/Codex 0.2.2. Native smoke rows below retain their original
 tested adapter versions; they do not validate a new version-bound profile.
 The [Windows supervision checkpoint](native-smoke/2026-10-01-windows-job/report.md)
 uses offline owned processes and makes no full native support claim.
@@ -26,6 +26,10 @@ The [complete input transport checkpoint](native-smoke/2026-10-01-transport-inpu
 adds complete diff delivery and measures the full envelope before publication.
 ZCode 0.2.4 retains its defensive 6000 UTF-16 code-unit prompt bound; this
 configured transport descriptor does not prove native required-input access.
+
+The [native policy evidence](native-policy-controls.md) separates host PROGRAM
+inspection, configured controls, individual native probes and unknown combined
+profiles. Readiness observations do not establish tool confinement.
 
 Legend — `support`: native | emulated | unsupported | unknown;
 `verification`: configured | documented | smoke_tested | failed.
