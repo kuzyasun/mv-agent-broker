@@ -45,9 +45,11 @@ export interface AntigravityAdapterOptions {
   model?: string;
 }
 
+const VALID_ANTIGRAVITY_EFFORTS = new Set(["low", "medium", "high", "max"]);
+
 export class AntigravityAdapter implements ProviderAdapter {
   readonly providerId = "antigravity";
-  readonly adapterVersion = "0.1.0";
+  readonly adapterVersion = "0.2.0";
 
   private readonly binary: string;
   private readonly defaultModel?: string;
@@ -75,18 +77,38 @@ export class AntigravityAdapter implements ProviderAdapter {
     gate: DispatchGate,
     onEvent: (ev: AdapterEvent) => void,
   ): Promise<TurnExecutionResult> {
-    // 1. Acquire dispatch permission first. Throws if cancelled early.
-    gate.acquireDispatchPermission();
-    this.turnPermissionAcquired.set(req.turn_id, true);
+    const model = (req.requested_model || this.defaultModel || "").trim();
+    if (!model) {
+      throw new BrokerError("MODEL_UNAVAILABLE", "Antigravity requires an explicit model.", { executionStarted: false });
+    }
+    if (req.native_conversation_ref !== null && !req.native_conversation_ref.trim()) {
+      throw new BrokerError("SESSION_NOT_RESUMABLE", "Antigravity resume requires a nonempty native conversation reference.", { executionStarted: false });
+    }
+    if (req.requested_effort !== null && !VALID_ANTIGRAVITY_EFFORTS.has(req.requested_effort)) {
+      throw new BrokerError("INVALID_REQUEST", `Antigravity effort must be low, medium, high, or max; received ${JSON.stringify(req.requested_effort)}.`, { executionStarted: false });
+    }
 
-    // 2. Build args per facts.
     const args = [
       "--dangerously-skip-permissions",
       "--output-format",
       "stream-json",
       "--print-timeout",
       "900s",
+      "--model",
+      model,
     ];
+
+    if (req.requested_effort !== null) {
+      args.push("--effort", req.requested_effort);
+    }
+
+    if (
+      req.native_conversation_ref !== null &&
+      req.native_conversation_ref !== undefined &&
+      req.native_conversation_ref.trim().length > 0
+    ) {
+      args.push("--conversation", req.native_conversation_ref.trim());
+    }
 
     let tmpDir: string | null = null;
     let pollInterval: NodeJS.Timeout | null = null;
@@ -103,20 +125,11 @@ export class AntigravityAdapter implements ProviderAdapter {
       }
       args.push("-p", promptArg);
 
-      const model = req.requested_model || this.defaultModel;
-      if (model && model.trim().length > 0) {
-        args.push("--model", model.trim());
-      }
+      // Gate acquired after argument validation and prompt-file preparation
+      gate.acquireDispatchPermission();
+      this.turnPermissionAcquired.set(req.turn_id, true);
 
-      if (
-        req.native_conversation_ref !== null &&
-        req.native_conversation_ref !== undefined &&
-        req.native_conversation_ref.trim().length > 0
-      ) {
-        args.push("--conversation", req.native_conversation_ref.trim());
-      }
-
-      // 3. AbortController wired to gate: poll cancellationRequested every 100ms.
+      // AbortController wired to gate: poll cancellationRequested every 100ms.
       const ac = new AbortController();
       let cancelReason: string | null = null;
 
@@ -129,9 +142,12 @@ export class AntigravityAdapter implements ProviderAdapter {
       };
 
       checkCancellation();
+      if (ac.signal.aborted) {
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "Antigravity cancelled before launch.", { executionStarted: false });
+      }
       pollInterval = setInterval(checkCancellation, 100);
 
-      // 4. Headless spawn spec and stream event handlers.
+      // Headless spawn spec and stream event handlers.
       const spec: HeadlessSpawnSpec = {
         binary: this.binary,
         args,

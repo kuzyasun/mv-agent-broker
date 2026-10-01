@@ -94,3 +94,6 @@ MVP acceptance gate remains open.
 The [effective write-policy checkpoint](native-smoke/2026-10-01-effective-policy/report.md)
 records the next portion, including the preserved failed native worker turn,
 separate integrated capture, Cursor review and coordinator acceptance.
+The [adapter permission/effort checkpoint](native-smoke/2026-10-01-adapter-controls/report.md)
+records Antigravity implementation, independent Cursor review, coordinator
+repairs and 371 passing offline tests. Full native isolation remains open.

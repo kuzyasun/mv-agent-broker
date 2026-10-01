@@ -64,7 +64,7 @@ User startup hooks can run, although broker hook/permission integration is
 unwired. Worker writes, reviewer enforcement and live tool cancellation remain
 unverified. Native rate-limit status was allowed; quota rejection was not tested.
 
-## cursor (adapter 0.2.1; model/resume smoke on 0.2.0, `src/providers/cursor/`)
+## cursor (adapter 0.2.2; model/resume smoke on 0.2.0, `src/providers/cursor/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
@@ -102,7 +102,7 @@ failed on standalone 0.16.9; current adapter rejects that route before dispatch
 without account fallback. [Evidence and limits](native-smoke/2026-10-01-dogfood/report.md),
 [Start Plan research](zcode-start-plan.md).
 
-## antigravity (adapter 0.1.0, `src/providers/antigravity/`)
+## antigravity (adapter 0.2.0; native smoke on 0.1.0, `src/providers/antigravity/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
@@ -110,6 +110,7 @@ without account fallback. [Evidence and limits](native-smoke/2026-10-01-dogfood/
 | resume (`--conversation <id>`) | native | smoke_tested | same observed init/result ID in both processes; second prompt omits random marker, response reproduces it |
 | conversation-id capture | native | smoke_tested | init.conversation_id observed; alternate nested-field capture remains parser-level only |
 | model selection (`--model <id>`) | native | smoke_tested | CLI init.model confirms gemini-3.8-flash-low on both turns; other models/effort unverified |
+| separate effort (`--effort low/medium/high/max`) | native | documented | adapter 0.2.0 fake-process mapping/zero-dispatch rejection; effective native reasoning unverified |
 | cancellation (taskkill/SIGKILL tree) | native | documented | common headless infra |
 | structured final output | unsupported | documented | text_only |
 

@@ -3,6 +3,9 @@
  *
  * Implements ProviderAdapter contract (§13.2, §14.3) using headless CLI runner.
  */
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   AdapterEvent,
   DispatchGate,
@@ -50,7 +53,7 @@ export interface CursorAdapterOptions {
 
 export class CursorAdapter implements ProviderAdapter {
   readonly providerId = "cursor";
-  readonly adapterVersion = "0.2.1";
+  readonly adapterVersion = "0.2.2";
 
   private readonly binary: string;
   private readonly defaultModel: string;
@@ -93,38 +96,71 @@ export class CursorAdapter implements ProviderAdapter {
       args.push("--resume", req.native_conversation_ref);
     }
 
-    // 3. AbortController wired to gate: poll cancellationRequested every 100ms.
-    const ac = new AbortController();
-    let cancelReason: string | null = null;
+    let configDir: string | null = null;
+    let pollInterval: NodeJS.Timeout | null = null;
 
-    const checkCancellation = () => {
-      const reason = gate.cancellationRequested();
-      if (reason !== null) {
-        cancelReason = reason;
-        ac.abort();
+    try {
+      if (req.role === "reviewer") {
+        configDir = mkdtempSync(path.join(os.tmpdir(), "agent-broker-cursor-"));
+        const configFile = path.join(configDir, "cli-config.json");
+        const config = {
+          version: 1,
+          editor: {
+            vimMode: false,
+          },
+          approvalMode: "allowlist",
+          permissions: {
+            allow: ["Read(**)"],
+            deny: [
+              "Write(**)",
+              "Shell(*)",
+              "WebFetch(*)",
+              "Mcp(*:*)",
+            ],
+          },
+        };
+        writeFileSync(configFile, JSON.stringify(config, null, 2), "utf8");
       }
-    };
 
-    gate.acquireDispatchPermission();
-    this.turnPermissionAcquired.set(req.turn_id, true);
-    checkCancellation();
-    if (ac.signal.aborted) {
-      throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "Cursor cancelled before launch.", { executionStarted: false });
-    }
-    const pollInterval = setInterval(checkCancellation, 100);
+      // 3. AbortController wired to gate: poll cancellationRequested every 100ms.
+      const ac = new AbortController();
+      let cancelReason: string | null = null;
 
-    // 4. Headless spawn spec and stream event handlers.
-    const spec: HeadlessSpawnSpec = {
-      binary: this.binary,
-      args,
-      promptStdin: req.task_envelope,
-      cwd: req.workspace_path ?? process.cwd(),
-      envAllowlist: CURSOR_ENV_ALLOWLIST,
-      inheritEnv: process.env,
-      firstLineTimeoutMs: 120_000,
-      inactivityTimeoutMs: 120_000,
-      signal: ac.signal,
-    };
+      const checkCancellation = () => {
+        const reason = gate.cancellationRequested();
+        if (reason !== null) {
+          cancelReason = reason;
+          ac.abort();
+        }
+      };
+
+      gate.acquireDispatchPermission();
+      this.turnPermissionAcquired.set(req.turn_id, true);
+      checkCancellation();
+      if (ac.signal.aborted) {
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "Cursor cancelled before launch.", { executionStarted: false });
+      }
+      pollInterval = setInterval(checkCancellation, 100);
+
+      const envAllowlist = configDir !== null
+        ? [...CURSOR_ENV_ALLOWLIST, "CURSOR_CONFIG_DIR"]
+        : CURSOR_ENV_ALLOWLIST;
+      const inheritEnv = configDir !== null
+        ? { ...process.env, CURSOR_CONFIG_DIR: configDir }
+        : process.env;
+
+      // 4. Headless spawn spec and stream event handlers.
+      const spec: HeadlessSpawnSpec = {
+        binary: this.binary,
+        args,
+        promptStdin: req.task_envelope,
+        cwd: req.workspace_path ?? process.cwd(),
+        envAllowlist,
+        inheritEnv,
+        firstLineTimeoutMs: 120_000,
+        inactivityTimeoutMs: 120_000,
+        signal: ac.signal,
+      };
 
     const events: CursorStreamEvent[] = [];
     let nativeRefEmitted = false;
@@ -186,7 +222,6 @@ export class CursorAdapter implements ProviderAdapter {
       },
     };
 
-    try {
       const cliResult = await runHeadlessCli(spec, cliEvents);
       const summary = summarizeCursorTurn(events);
       // A result record does not override an interrupted or failed process.
@@ -227,7 +262,16 @@ export class CursorAdapter implements ProviderAdapter {
         executionStarted: true,
       });
     } finally {
-      clearInterval(pollInterval);
+      if (pollInterval !== null) {
+        clearInterval(pollInterval);
+      }
+      if (configDir !== null) {
+        try {
+          rmSync(configDir, { recursive: true, force: true });
+        } catch {
+          // ignore cleanup failures
+        }
+      }
     }
   }
 

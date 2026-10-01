@@ -1,6 +1,6 @@
 /** Fake process tests only; no Cursor requests or quota use. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CursorAdapter } from "../../src/providers/cursor/cursorAdapter.ts";
@@ -27,9 +27,23 @@ process.stdin.on('end', () => {
   const args = process.argv.slice(2);
   const resume = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : null;
   const id = mode === 'resume-mismatch' ? 'wrong-native-id' : resume || 'cursor-native-id';
+  let configRaw = null;
+  let configParsed = null;
+  const configDir = process.env.CURSOR_CONFIG_DIR;
+  if (configDir && fs.existsSync(configDir + '/cli-config.json')) {
+    configRaw = fs.readFileSync(configDir + '/cli-config.json', 'utf8');
+    try { configParsed = JSON.parse(configRaw); } catch {}
+  }
+  if (configDir) {
+    try { fs.writeFileSync(${JSON.stringify(path.join(root, "observed-config-dir.txt"))}, configDir); } catch {}
+  }
   const inspection = { args, input, cwd: process.cwd(), profile: process.env.USERPROFILE,
     localAppData: process.env.LOCALAPPDATA, pathext: process.env.PATHEXT,
-    leaked: process.env.BROKER_TEST_SECRET !== undefined };
+    leaked: process.env.BROKER_TEST_SECRET !== undefined,
+    cursorConfigDir: configDir,
+    cursorConfigRaw: configRaw,
+    cursorConfig: configParsed,
+  };
   const emit = obj => console.log(JSON.stringify(obj));
   if (!['missing-id', 'empty-id', 'result-only'].includes(mode)) emit({ type: 'system', subtype: 'init', session_id: id, model: 'Fake Model' });
   if (mode !== 'missing-result') emit({ type: 'result', is_error: mode === 'result-error',
@@ -137,6 +151,93 @@ describe("Cursor adapter", () => {
     const f = fixture();
     await expect(f.adapter.executeTurn(request(), { acquireDispatchPermission: () => { throw new Error("gate denied"); }, cancellationRequested: () => null }, () => {})).rejects.toThrow("gate denied");
     await expect(f.adapter.executeTurn(request(), { acquireDispatchPermission: () => {}, cancellationRequested: () => "cancelled" }, () => {})).rejects.toMatchObject({ executionStarted: false });
+    expect(existsSync(f.sentinel)).toBe(false);
+  });
+  it("creates a unique private CURSOR_CONFIG_DIR with expected cli-config.json for reviewer and cleans up on success", async () => {
+    const f = fixture();
+    const result = await f.adapter.executeTurn(request({ role: "reviewer" }), gate(), () => {});
+    const inspection = JSON.parse(result.agent_reported!.summary);
+    expect(inspection.cursorConfigDir).toBeTruthy();
+    expect(inspection.cursorConfig).toEqual({
+      version: 1,
+      editor: { vimMode: false },
+      approvalMode: "allowlist",
+      permissions: {
+        allow: ["Read(**)"],
+        deny: ["Write(**)", "Shell(*)", "WebFetch(*)", "Mcp(*:*)"],
+      },
+    });
+    // Private directory cleaned up after successful completion
+    expect(existsSync(inspection.cursorConfigDir)).toBe(false);
+    expect(process.env.CURSOR_CONFIG_DIR).toBeUndefined();
+  });
+  it("isolates reviewer from ambient CURSOR_CONFIG_DIR and preserves process.env", async () => {
+    const f = fixture();
+    const ambientDir = path.join(f.root, "ambient-cursor-config");
+    vi.stubEnv("CURSOR_CONFIG_DIR", ambientDir);
+    const result = await f.adapter.executeTurn(request({ role: "reviewer" }), gate(), () => {});
+    const inspection = JSON.parse(result.agent_reported!.summary);
+    expect(inspection.cursorConfigDir).toBeTruthy();
+    expect(inspection.cursorConfigDir).not.toBe(ambientDir);
+    expect(existsSync(inspection.cursorConfigDir)).toBe(false);
+    // Original process.env untouched
+    expect(process.env.CURSOR_CONFIG_DIR).toBe(ambientDir);
+  });
+  it("leaves worker invocation unchanged without CURSOR_CONFIG_DIR even with ambient env", async () => {
+    const f = fixture();
+    const ambientDir = path.join(f.root, "ambient-cursor-config");
+    vi.stubEnv("CURSOR_CONFIG_DIR", ambientDir);
+    const result = await f.adapter.executeTurn(request({ role: "worker" }), gate(), () => {});
+    const inspection = JSON.parse(result.agent_reported!.summary);
+    expect(inspection.args).not.toContain("--mode");
+    expect(inspection.cursorConfigDir).toBeUndefined();
+    expect(inspection.cursorConfig).toBeNull();
+    expect(process.env.CURSOR_CONFIG_DIR).toBe(ambientDir);
+  });
+  it("cleans up private config after process error", async () => {
+    const f = fixture();
+    await expect(f.adapter.executeTurn(request({ role: "reviewer", task_envelope: "nonzero" }), gate(), () => {}))
+      .rejects.toMatchObject({ code: "PROVIDER_PROTOCOL_ERROR", executionStarted: true });
+    const observedPath = path.join(f.root, "observed-config-dir.txt");
+    expect(existsSync(observedPath)).toBe(true);
+    const observedDir = readFileSync(observedPath, "utf8");
+    expect(existsSync(observedDir)).toBe(false);
+  });
+  it("cleans up private config after cancellation", async () => {
+    const f = fixture();
+    let cancelReason: string | null = null;
+    await expect(f.adapter.executeTurn(request({ role: "reviewer", task_envelope: "hang" }), {
+      acquireDispatchPermission: () => {},
+      cancellationRequested: () => cancelReason,
+    }, ev => {
+      if (ev.type === "native_ref_obtained") cancelReason = "operator";
+    })).rejects.toMatchObject({ code: "PROVIDER_PROTOCOL_ERROR", executionStarted: true });
+    const observedPath = path.join(f.root, "observed-config-dir.txt");
+    expect(existsSync(observedPath)).toBe(true);
+    const observedDir = readFileSync(observedPath, "utf8");
+    expect(existsSync(observedDir)).toBe(false);
+  });
+  it("cleans up private config on gate denial", async () => {
+    const f = fixture();
+    vi.spyOn(os, "tmpdir").mockReturnValue(f.root);
+    const beforeDirs = new Set(readdirSync(os.tmpdir()).filter(n => n.startsWith("agent-broker-cursor-")));
+    let createdConfigDir: string | null = null;
+    const denyingGate = {
+      acquireDispatchPermission: () => {
+        const currentDirs = readdirSync(os.tmpdir()).filter(n => n.startsWith("agent-broker-cursor-"));
+        const diff = currentDirs.filter(d => !beforeDirs.has(d));
+        if (diff.length > 0) {
+          createdConfigDir = path.join(os.tmpdir(), diff[0]);
+          expect(existsSync(path.join(createdConfigDir, "cli-config.json"))).toBe(true);
+        }
+        throw new Error("gate denied");
+      },
+      cancellationRequested: () => null,
+    };
+    await expect(f.adapter.executeTurn(request({ role: "reviewer" }), denyingGate, () => {}))
+      .rejects.toThrow("gate denied");
+    expect(createdConfigDir).not.toBeNull();
+    expect(existsSync(createdConfigDir!)).toBe(false);
     expect(existsSync(f.sentinel)).toBe(false);
   });
 });

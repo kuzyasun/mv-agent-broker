@@ -208,9 +208,12 @@ Set `AB_ANTIGRAVITY_BIN` to `agy.exe`; the tested path is
 `%LOCALAPPDATA%\agy\bin\agy.exe`. Authentication is owned by agy.
 
 The adapter uses `--dangerously-skip-permissions --output-format stream-json
---print-timeout 900s -p <prompt>`, optional `--model` and exact
-`--conversation <native_ID>` for resume. `requested_effort` has no separate
-mapping; the verified model ID was `gemini-3.8-flash-low`.
+--print-timeout 900s -p <prompt>`, explicit `--model` and exact
+`--conversation <native_ID>` for resume. Adapter 0.2.0 passes non-null
+`requested_effort` through `--effort` (`low`, `medium`, `high`, `max`);
+invalid selection fails before dispatch. The flag mapping has fake-process
+tests and installed CLI help support; its effective native reasoning semantics
+remain unverified. Earlier model/resume smoke used `gemini-3.8-flash-low`.
 
 For prompts over 2,000 characters it writes a temporary prompt file and asks
 agy to open it. A longer Gemini 3.8 Flash/high self-development task exercised
@@ -227,6 +230,20 @@ was cumulative: do not sum consecutive result counters as independent turns.
 [Native model/resume evidence](native-smoke/2026-09-30-antigravity-zcode/report.md).
 
 ## Cursor
+
+Adapter 0.2.2 prepares a unique private `CURSOR_CONFIG_DIR` for each reviewer
+turn, retaining Ask mode and denying `Write(**)`, `Shell(*)`, `WebFetch(*)`
+and `Mcp(*:*)`. Preparation precedes dispatch permission; cleanup covers
+success, failure, cancellation and gate refusal. Native authentication stays
+with the CLI; no user credential/settings files are copied or edited.
+See the official [permissions](https://cursor.com/docs/cli/reference/permissions)
+and [configuration](https://cursor.com/docs/cli/reference/configuration) contracts.
+This is partial adapter hardening, not a verified full reviewer profile:
+`Read(**)` is broad, home-based MCP/plugin discovery remains ambient, and
+native denial and configuration self-repair require falsification tests.
+No-inference probes on Windows retained authentication with private config,
+and also with private HOME/USERPROFILE/config/data; the latter is research
+evidence for further isolation, not behavior implemented by adapter 0.2.2.
 
 Implementation: [adapter](../src/providers/cursor/cursorAdapter.ts).
 Set the pin to the agent launcher, which is separate from Desktop `cursor.cmd`:

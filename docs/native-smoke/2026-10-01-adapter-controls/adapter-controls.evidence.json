@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-01",
+  "platform": "win32",
+  "runtime_commit": "97bc34f1ac865a128e02cdcdacf86aba02c2388e",
+  "runtime_files": 48,
+  "worker": {
+    "role": "worker",
+    "session_id": "session-7204860ae81bfa78c54789ea",
+    "turn_id": "turn-785f82df6d5701c618290ff9",
+    "state": "SUCCEEDED",
+    "native_conversation_ref": "62432b4d-3f1a-4d1d-ad72-dd86e8470568",
+    "baseline_snapshot_id": "snap-1c364ec9f47dbf857c55a0b1",
+    "final_snapshot_id": "snap-2aee91c5c26b43ae26be4390",
+    "input_manifest_id": "art-427a37aff0eb117d8fe2a563",
+    "execution_started": true
+  },
+  "integrated_capture": {
+    "role": "worker",
+    "session_id": "session-77c2bff59d992377f0e62ab1",
+    "turn_id": "turn-cf10e1fb1c2e0542bb788b24",
+    "state": "SUCCEEDED",
+    "native_conversation_ref": "mock-native-turn-cf10e1fb1c2e0542bb788b24",
+    "baseline_snapshot_id": "snap-e81cbd8ef5d3f5b242459b3e",
+    "final_snapshot_id": "snap-be3ae830aa5be149324a1bcd",
+    "input_manifest_id": "art-9e243ff26ff51d1ffadbfb3f",
+    "execution_started": true
+  },
+  "reviewer": {
+    "role": "reviewer",
+    "session_id": "session-f700d75ce915462976855894",
+    "turn_id": "turn-9d45cbd9b9904a641e190897",
+    "state": "SUCCEEDED",
+    "native_conversation_ref": "f8a8ed82-ff4b-459e-a683-22b80e25683a",
+    "baseline_snapshot_id": "snap-1c364ec9f47dbf857c55a0b1",
+    "final_snapshot_id": null,
+    "input_manifest_id": "art-fd6d425df8be4c008a9ba1d3",
+    "execution_started": true
+  },
+  "review_report": "I'll review the required inputs and target diff for Cursor reviewer permissions and Antigravity effort/selection hardening.Reviewing the target adapter sources and tests against the contract focus areas.**None found.**\n\nVerified in scope: Cursor `0.2.2` reviewer private `CURSOR_CONFIG_DIR` + `cli-config.json` before gate (`src/providers/cursor/cursorAdapter.ts:103-150`), cleanup in `finally` (`264-274`), `process.env` not mutated, worker path unchanged; Antigravity `0.2.0` constant version (`src/providers/antigravity/antigravityAdapter.ts:52`), model/effort/blank-resume reject before gate (`80-89`), `--effort` only for valid non-null (`101-103`), prompt-dir cleanup on gate refuse/cancel/error (`257-267`); no test-stack version workaround. Native sandbox/`Read(**)`/home MCP not claimed verified.",
+  "validation": {
+    "typecheck": "passed",
+    "targeted_tests": 63,
+    "full_tests": 371,
+    "test_files": 30
+  },
+  "candidate_adapters": {
+    "cursor": "0.2.2",
+    "antigravity": "0.2.0"
+  },
+  "private_cursor_auth_probe": {
+    "inference": false,
+    "private_config": true,
+    "private_home": true,
+    "private_data": true,
+    "authenticated": true
+  },
+  "full_native_profile": "unverified"
+}
