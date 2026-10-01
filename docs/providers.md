@@ -6,7 +6,7 @@ not every feature a vendor application might offer. The per-capability
 [verification matrix](provider-capabilities.md) and linked native evidence
 distinguish implementation, local tests and actual provider execution.
 
-Current transport versions are Cursor 0.2.8, ZCode 0.2.5, Antigravity 0.2.3
+Current transport versions are Cursor 0.2.8, ZCode 0.2.6, Antigravity 0.2.3
 and Claude/Codex 0.2.2. Historical smoke versions are identified separately
 below. [Native policy observations](native-policy-controls.md) explain why
 CLI flags, readiness and individual marker tests do not prove a complete
@@ -75,7 +75,7 @@ dispatch; create a new broker session rather than guessing the missing text.
 
 Implementation: [adapter](../src/providers/zcode/zcodeAdapter.ts),
 [launch config](../src/providers/zcode/nativeConfig.ts),
-[JSON parser](../src/providers/zcode/resultParser.ts). Adapter version: `0.2.1`.
+[JSON parser](../src/providers/zcode/resultParser.ts). Adapter version: `0.2.6`.
 
 ### Working installation and authentication
 
@@ -177,6 +177,31 @@ object is available. A different ID on explicit resume, malformed output,
 nonzero exit, cancellation or a non-idle projection fails the turn; no ID is
 invented and no fresh-session retry occurs. `--continue` is intentionally not
 used because it selects a latest session rather than the broker's exact ID.
+
+Adapter 0.2.6 classifies explicit JSON error fields in stdout and stderr;
+SDK `model_rate_limited` attribution is accepted on the stderr error channel.
+Codes 1308/1310 and 1316–1321 map to `QUOTA_EXHAUSTED`; 1302/1305 and
+explicit Start Plan busy codes 3008–3010 map to `RATE_LIMITED`. Code 1308
+does not establish a five-hour window by itself. The
+[official Z.AI error reference](https://docs.z.ai/api-reference/api-code)
+defines the API codes; installed PROGRAM evidence defines the SDK error fields.
+These sources do not prove that standalone `--json` emits every error.
+
+Only fixed messages and observed numeric `vendor_code`/
+`status_code` details are returned; HTTP status, reset time and duration are
+never invented. Successful idle projections may retain historical lastError
+and still complete. Response prose, nested tool data, HTTP 429 text and plain
+error prefixes are not quota evidence. On an observable attributed error,
+the adapter requests abort and awaits the existing managed process receipt;
+unknown ownership/capture, cancellation, timeout and output caps take priority.
+There is no automatic retry or model/account/plan/provider fallback.
+
+The installed standalone CLI catch writes only `error.message` to stderr.
+If it drops the attribution or suppresses errors during an internal retry,
+the adapter cannot reconstruct the code; failure stays generic or ends at the
+hard deadline. This checkpoint uses fake Node CLIs and does not claim a new
+live ZCode quota smoke. See the
+[quota checkpoint](native-smoke/2026-10-01-zcode-quota/report.md).
 
 Prompts remain argv-based and capped at 6,000 JavaScript characters. There is
 no large-prompt file workaround in this adapter. Output timers use the remaining

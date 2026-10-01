@@ -14,7 +14,7 @@ bridge/daemon processes ([evidence](native-smoke/2026-09-30-codex/report.md)).
 Setup, auth ownership, model/effort rules and limitations for every provider:
 [provider operations guide](providers.md).
 
-Current managed Windows transport versions are Cursor 0.2.8, ZCode 0.2.5,
+Current managed Windows transport versions are Cursor 0.2.8, ZCode 0.2.6,
 Antigravity 0.2.3 and Claude/Codex 0.2.2. Native smoke rows below retain their original
 tested adapter versions; they do not validate a new version-bound profile.
 The [Windows supervision checkpoint](native-smoke/2026-10-01-windows-job/report.md)
@@ -120,6 +120,7 @@ had contaminated marker recall and remains rejected evidence.
 | model selection | native | smoke_tested | private defaultModelSelection; logs confirm Flash twice; GLM-5.3/Flash on Z.AI Individual; other families rejected; low/high/max accepted, null selects low; reasoning semantics unverified |
 | prompt size | limited | documented | argv transport capped at 6000 chars (INPUT_LIMIT) — ENAMETOOLONG open question |
 | structured agent report | unsupported | documented | native JSON parsed; response prose stays text_only; usage not returned in broker result |
+| quota-error classification | limited | documented | Adapter 0.2.6 explicit JSON error attribution: usage quotas become QUOTA_EXHAUSTED, transient limits RATE_LIMITED; fixed messages, no raw stderr or invented HTTP status; owned abort receipt and stale idle-error exclusion tested offline; standalone plain-message/silent retry attribution remains unknown ([report](native-smoke/2026-10-01-zcode-quota/report.md)) |
 | app-server NDJSON bus | unsupported | configured | broker integration not implemented; native 0.16.9 protocol/empty-session bootstrap smoke passed, account model selection failed; requires host account/auth contract ([evidence](native-smoke/2026-09-30-zcode-bootstrap/report.md)) |
 
 Individual GLM-5.3/high delivered a static review through MCP on adapter 0.2.1.
@@ -156,7 +157,7 @@ that development scenario, not a full native worker security profile.
 ## Readiness observations and durable binding
 
 See the [native readiness checkpoint](native-smoke/2026-10-01-native-readiness/report.md).
-Current contracts are Cursor 0.2.8, Antigravity 0.2.3 and ZCode 0.2.5.
+Current contracts are Cursor 0.2.8, Antigravity 0.2.3 and ZCode 0.2.6.
 Cursor reports observed version/catalog and a recognized CLI authentication marker;
 Agy reports its model catalog; ZCode reports its installed PROGRAM model catalog.
 Unavailable CLI versions or authentication stay null. Runtime/config fingerprints

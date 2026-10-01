@@ -15,7 +15,13 @@ import {
 } from "../common/readiness.ts";
 import { BrokerError } from "../../shared/errors.ts";
 import { createZcodePersonalConfig, readZcodeInstalledCatalog, resolveZcodeBuiltinPath } from "./nativeConfig.ts";
-import { parseZcodeResult } from "./resultParser.ts";
+import {
+  parseZcodeResult,
+  classifyZcodeError,
+  classifyZcodeStderrLine,
+  classifyZcodeText,
+  type ZcodeClassifiedError,
+} from "./resultParser.ts";
 
 const ZCODE_PROMPT_ARG_MAX = 6000;
 const ZCODE_OUTPUT_MAX = 1_048_576;
@@ -38,7 +44,7 @@ export interface ZcodeAdapterOptions {
 
 export class ZcodeAdapter implements ProviderAdapter {
   readonly providerId = "zcode";
-  readonly adapterVersion = "0.2.5";
+  readonly adapterVersion = "0.2.6";
   readonly transportEnvelopeLimit = { maxChars: ZCODE_PROMPT_ARG_MAX };
   private readonly opts: ZcodeAdapterOptions;
   private readonly readinessCache = new ReadinessObservationCache();
@@ -133,6 +139,7 @@ export class ZcodeAdapter implements ProviderAdapter {
     let outputTooLarge = false;
     let emittedRef = false;
     let executionUnknown = false;
+    let observedEarlyError: ZcodeClassifiedError | null = null;
     const checkCancel = () => { if (gate.cancellationRequested() !== null) controller.abort(); };
     try {
       tmpDir = mkdtempSync(path.join(os.tmpdir(), "agent-broker-zcode-"));
@@ -163,24 +170,78 @@ export class ZcodeAdapter implements ProviderAdapter {
           if (outputTooLarge) return;
           text += line + "\n";
           if (text.length > ZCODE_OUTPUT_MAX) { outputTooLarge = true; controller.abort(); return; }
+          if (!observedEarlyError) {
+            const trimmed = text.trim();
+            if (trimmed.startsWith("{")) {
+              try {
+                const obj = JSON.parse(trimmed);
+                const classified = classifyZcodeError(obj);
+                if (classified) {
+                  observedEarlyError = classified;
+                  controller.abort();
+                  return;
+                }
+              } catch {
+                // not single-line JSON
+              }
+            }
+          }
           const parsed = parseZcodeResult(text);
           if (parsed && !emittedRef && (req.native_conversation_ref === null || parsed.sessionId === req.native_conversation_ref)) {
             emittedRef = true;
             onEvent({ type: "native_ref_obtained", payload: { ref: parsed.sessionId } });
           }
         },
-        onStderrLine: () => undefined,
+        onStderrLine: (line) => {
+          if (!observedEarlyError) {
+            const classified = classifyZcodeStderrLine(line);
+            if (classified) {
+              observedEarlyError = classified;
+              controller.abort();
+              return;
+            }
+          }
+        },
         onOwnershipEvent: (ev) => onEvent(ev),
       });
       if (result.uncertainAfterResume) {
         executionUnknown = true;
         throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
       }
-      if (result.outputLimited || outputTooLarge || result.timedOut || result.killed || result.exitCode !== 0) {
+      if (gate.cancellationRequested() !== null) {
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "ZCode execution interrupted.", { executionStarted: true });
+      }
+      if (result.timedOut) {
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", `ZCode timed out (${result.timedOut}).`, { executionStarted: true });
+      }
+      if (result.outputLimited || outputTooLarge) {
         const message = result.outputLimited ? `ZCode output limit exceeded (${result.outputLimitReason ?? "total"}).`
-          : outputTooLarge ? "ZCode JSON output exceeds the adapter limit."
-          : result.timedOut ? `ZCode timed out (${result.timedOut}).`
-          : result.killed ? "ZCode execution interrupted."
+          : "ZCode JSON output exceeds the adapter limit.";
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", message, { executionStarted: true });
+      }
+
+      // Check classified quota / rate limit errors
+      let classifiedError: ZcodeClassifiedError | null = observedEarlyError;
+      if (!classifiedError) {
+        classifiedError = classifyZcodeText(text);
+      }
+
+      if (classifiedError) {
+        const details: Record<string, unknown> = {};
+        if (classifiedError.vendorCode !== undefined) {
+          details.vendor_code = classifiedError.vendorCode;
+        }
+        if (classifiedError.statusCode !== undefined) {
+          details.status_code = classifiedError.statusCode;
+        }
+        throw new BrokerError(classifiedError.errorCode, classifiedError.safeMessage, {
+          executionStarted: true,
+          details,
+        });
+      }
+
+      if (result.killed || result.exitCode !== 0) {
+        const message = result.killed ? "ZCode execution interrupted."
           : `ZCode exited with code ${result.exitCode}; native stderr withheld.`;
         throw new BrokerError("PROVIDER_PROTOCOL_ERROR", message, { executionStarted: true });
       }

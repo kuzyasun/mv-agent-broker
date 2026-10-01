@@ -180,3 +180,11 @@ The [required-input integrity checkpoint](native-smoke/2026-10-01-input-integrit
 records Cursor implementation/repair, independent Gemini review, coordinator
 ancestor-link corrections and actual zero-dispatch corruption tests. Verified
 byte delivery is separate from native input access/write enforcement.
+
+The [ZCode quota checkpoint](native-smoke/2026-10-01-zcode-quota/report.md)
+records explicit error attribution, owned fail-fast termination, successful
+Cursor review with coordinator fixes, and 723 passing offline tests/one skip.
+Standalone plain-message/silent-retry attribution remains unknown. The operator
+requested stopping after this package; unfinished worktree/event/storage/operator
+packages are preserved and unaccepted. Fresh owned inputs/slots initialization
+is a separate confirmed remaining issue.
