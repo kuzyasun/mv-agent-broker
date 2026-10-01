@@ -926,10 +926,14 @@ export class BrokerCore {
         }
       }
       const preference = route.native_subagents ?? { mode: "off", max_agents: 1 };
-      const guidance = preference.mode === "off"
-        ? "Perform this task as one agent. Do not delegate to native subagents."
-        : `Prefer native subagents for independent pieces of large tasks when available; request at most ${preference.max_agents} children and wait for their results. Do not simulate delegation when unavailable.`;
-      const advisory = `\n\n[Broker advisory: mode=${preference.mode}, max_agents=${preference.max_agents}. ${guidance} This preference does not enforce agent count, child models, or permissions.]`;
+      let advisory: string;
+      if (preference.mode === "off") {
+        advisory = `\n\n[Broker advisory: mode=off, max_agents=${preference.max_agents}. Perform this task as one agent. Do not delegate to native subagents. This preference does not enforce agent count, child models, or permissions.]`;
+      } else if (preference.mode === "prefer") {
+        advisory = `\n\n[Broker advisory: mode=prefer, max_agents=${preference.max_agents}. Prefer native subagents for independent pieces of large tasks when available; request at most ${preference.max_agents} children and wait for their results. Do not simulate delegation when unavailable. This preference does not enforce agent count, child models, or permissions.]`;
+      } else {
+        advisory = "\n\n[Broker advisory: mode=auto. Agent decides whether native delegation is useful; when useful, let the vendor choose the number of native children, wait for their results, and do not simulate children. This preference does not enforce agent count, child models, or permissions.]";
+      }
       return {
         ...req,
         provider: route.provider,

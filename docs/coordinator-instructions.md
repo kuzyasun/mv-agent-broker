@@ -14,8 +14,10 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    writes. Pass `route_id` with project, instructions, workspace and a unique
    idempotency key; omit raw provider/model/account/role/policy binding fields.
 3. Use the single-agent route for small work. A large-task route may request native
-   subagents for independent pieces; its count is advisory and native child models
-   can differ. Avoid delegation chains and duplicate source investigations.
+   subagents for independent pieces; `prefer` can carry a suggested maximum that
+   is advisory, while `auto` lets the agent decide whether delegation is useful
+   and lets the vendor choose the number. Native child models can differ. Avoid
+   delegation chains and duplicate source investigations.
 4. Send the task with its workspace precondition. Read bounded status/event deltas,
    then `agent_turn_result`. A successful turn proves execution, while its reported
    checks and quality remain claims. Inspect the actual changes and run the smallest

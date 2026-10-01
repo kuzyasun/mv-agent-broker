@@ -111,6 +111,33 @@ describe("operator configuration", () => {
     expect(() => loadOperatorConfig(JSON.stringify(foreignRoute))).toThrow(/project/i);
   });
 
+  it("round-trips auto native-subagent mode without a child count", () => {
+    const loaded = loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      routes: [{ ...validConfig().routes[0], native_subagents: { mode: "auto" } }],
+    }));
+
+    expect(loaded.routes[0]?.native_subagents).toEqual({ mode: "auto" });
+  });
+
+  it("rejects missing or non-positive counts for counted native-subagent modes", () => {
+    expect(() => loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      routes: [{ ...validConfig().routes[0], native_subagents: { mode: "off" } }],
+    }))).toThrow(/positive max_agents/);
+    expect(() => loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      routes: [{ ...validConfig().routes[0], native_subagents: { mode: "prefer", max_agents: 0 } }],
+    }))).toThrow(/positive max_agents/);
+  });
+
+  it("rejects a child count combined with auto native-subagent mode", () => {
+    expect(() => loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      routes: [{ ...validConfig().routes[0], native_subagents: { mode: "auto", max_agents: 2 } }],
+    }))).toThrow(/auto.*without max_agents|mode off\|prefer/i);
+  });
+
   it("applies registry entries transactionally and exposes named routes without wiping state", () => {
     const db = openRegistryDb(":memory:");
     try {

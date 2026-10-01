@@ -59,9 +59,13 @@ must be restarted; it never starts a daemon, edits the registry, runs
 inference, exports credentials, or terminates existing paid jobs.
 
 The Profiles section edits routes with explicit project, configured account,
-role, policy, model, effort, and advisory native-subagent settings. A model
-refresh is an explicit metadata-only action and supports manual model entry
-when a provider is unavailable. Observed catalog timestamps are informational:
+role, policy, model, effort, and advisory native-subagent settings. Route IDs
+are editable profile names: the fields in each profile select its behavior.
+A `*_worker` name normally describes one agent, `*_large` is a convention
+that encourages native children, and `*_reviewer` describes an independent
+review; explicit policy still controls permissions. A model refresh is an
+explicit metadata-only action and supports manual model entry when a provider
+is unavailable. Observed catalog timestamps are informational:
 they do not prove authentication or quota. The Projects wizard creates unique
 project, current-workspace, review-slot, policy, and coverage IDs with
 explicit source/exclusion/write-scope arrays. Existing sessions retain their
@@ -85,6 +89,15 @@ selectors while editing. Configured/manual choices are not observed catalogs.
 Effort **No override** means no explicit effort, while Cursor's literal `none`
 is a separate catalog variant. Cursor fast variants retain their exact ID.
 Parent settings do not establish the actual model or effort of native children.
+
+Native-subagent settings have three modes. `off` requests one agent,
+`prefer` suggests native children for independent pieces, and `auto` lets the
+agent decide whether delegation is useful while the vendor chooses the number
+of children. The suggested maximum children field is advisory, not an exact
+desired count or an enforced cap; it guides delegation only in `prefer` mode.
+`auto` stores no numeric count. There is no `zcode_large`
+preset because ZCode native children are not verified; a ZCode worker can
+still implement a large task. Duplicate a profile to make another preset.
 
 The settings process is independent of MCP: restart MCP after saving, not just
 the settings page. The project wizard can add a repository to the same state
@@ -177,7 +190,8 @@ For example, call `agent_session_spawn` with:
 
 Choose the large-task example for independent parallel work only after editing
 its model/effort to your preference. Set `native_subagents.mode` to `prefer`
-and `max_agents` to the desired advisory count. Repository child definitions
+with a positive `max_agents` when an advisory count is useful, or to `auto` to
+let the agent and vendor decide. Repository child definitions
 can select separate models: Cursor reads `.cursor/agents/*.md` with YAML
 `name`, `description`, `model`, `readonly`, `is_background`; Antigravity reads
 `.agents/agents/*.md` with `name`, `description`, `tools`, `model: inherit`,

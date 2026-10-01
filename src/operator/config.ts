@@ -70,10 +70,9 @@ export interface OperatorCoverageProfile {
   config: CoverageConfig;
 }
 
-export type NativeSubagents = {
-  mode: "off" | "prefer";
-  max_agents: number;
-};
+export type NativeSubagents =
+  | { mode: "off" | "prefer"; max_agents: number }
+  | { mode: "auto" };
 
 export interface OperatorRoute {
   route_id: string;
@@ -245,9 +244,16 @@ export function validateOperatorConfig(input: unknown, baseDir = process.cwd()):
     if (!["worker", "reviewer", "researcher"].includes(route.role)) fail(`route ${route.route_id} has an invalid role`);
     if (route.effort !== undefined && route.effort !== null) nonEmpty(route.effort, `route ${route.route_id}.effort`);
     if (route.native_subagents !== undefined) {
-      if (!route.native_subagents || typeof route.native_subagents !== "object" || Array.isArray(route.native_subagents) ||
-        !["off", "prefer"].includes(route.native_subagents.mode) ||
-        !Number.isInteger(route.native_subagents.max_agents) || route.native_subagents.max_agents < 1) {
+      const preference = route.native_subagents;
+      if (!preference || typeof preference !== "object" || Array.isArray(preference)) {
+        fail(`route ${route.route_id}.native_subagents must use mode off|prefer with a positive max_agents, or auto without max_agents`);
+      } else if (preference.mode === "auto") {
+        if (Object.prototype.hasOwnProperty.call(preference, "max_agents")) {
+          fail(`route ${route.route_id}.native_subagents auto mode must be without max_agents`);
+        }
+      } else if (preference.mode !== "off" && preference.mode !== "prefer") {
+        fail(`route ${route.route_id}.native_subagents must use mode off|prefer with a positive max_agents, or auto without max_agents`);
+      } else if (!Number.isInteger(preference.max_agents) || preference.max_agents < 1) {
         fail(`route ${route.route_id}.native_subagents must use mode off|prefer and a positive max_agents`);
       }
     }

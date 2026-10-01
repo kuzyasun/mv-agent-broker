@@ -3,7 +3,9 @@
 The broker coordinates vendor sessions; a vendor can delegate within its own
 session. Use a single agent for small tasks and an explicitly selected route for
 larger tasks that benefit from independent work. Native delegation can improve
-elapsed time; it does not establish lower token or quota consumption.
+elapsed time; it does not establish lower token or quota consumption. Route IDs
+are editable profile names; a
+`*_large` suffix is only a convention.
 
 ## Provider mechanisms
 
@@ -23,6 +25,15 @@ parent's requested settings. The installed CLIs expose no verified flag for a
 hard child count limit; a requested mode/count is advisory unless separately
 enforced and tested. Native children share vendor context and permissions;
 they do not replace an independent broker reviewer of a sealed target snapshot.
+
+Operator routes expose three native-subagent modes. `off` requests one agent,
+`prefer` suggests independent native children and carries a positive
+`max_agents` advisory, while `auto` lets the agent decide whether delegation
+is useful and lets the vendor choose the number of children. `auto` carries no
+numeric count and none of these settings enforce child count, models, or
+permissions. There is intentionally no `zcode_large` preset: ZCode native
+children are not verified, although a ZCode worker can still implement a large
+task.
 
 ## Antigravity smoke evidence, 2026-10-01
 

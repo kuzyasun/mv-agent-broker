@@ -45,3 +45,17 @@ Private evidence directory: `2026-10-01T18-28-08-816Z-fa051405`.
 The coordinator stopped long Antigravity author attempts and moved the fixed
 implementation design to a bounded Cursor Luna/high worker. Small native
 subagent probes succeeded for both vendors separately.
+
+## Concurrent coordinator edit attributed to a native turn, 2026-10-02
+
+Cursor completed the profile-help/agent-decides implementation and terminated
+normally, but turn `turn-a07c7e921548c02738e2268c` finalized as
+`FAILED / SCOPE_VIOLATION`. The coordinator added `AGENTS.md` to the same checkout
+after the worker baseline, outside the worker's declared source coverage. The
+broker detected that new protected path; it cannot attribute a filesystem change
+to a particular writer. The coordinator verified the completed diff and tests,
+then captured a separate current snapshot for review without another paid author
+launch. Future author work uses an isolated checkout with no concurrent
+coordinator edits. No broker enforcement change was added.
+
+Private evidence: `.state/dogfood/2026-10-01T22-33-43-225Z-d6857849/`.

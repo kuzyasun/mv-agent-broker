@@ -44,6 +44,17 @@
   const selectedProject = (route) => find(state.projects, "project_id", route.project_id);
   const selectedPolicy = (route) => find(state.policy_profiles, "policy_profile_id", route.policy_profile_id);
   const currentWorkspace = (projectId) => (state.workspaces || []).find((item) => item.project_id === projectId && item.mode === "current");
+  const nativeModeLabels = {
+    off: "Off (one agent)",
+    prefer: "Prefer subagents",
+    auto: "Agent decides",
+  };
+
+  function routeSummary(route) {
+    const mode = route.native_subagents && route.native_subagents.mode || "off";
+    const effort = route.effort || "No override";
+    return `Provider ${route.provider || "not set"} · role ${route.role || "not set"} · mode ${nativeModeLabels[mode] || mode} · effort ${effort}`;
+  }
 
   function markDirty() {
     dirty = true;
@@ -144,6 +155,9 @@
       actions.append(refresh, duplicate, remove);
       header.append(actions);
       card.append(header);
+      const summary = make("p", routeSummary(route));
+      summary.className = "route-summary";
+      card.append(summary);
 
       const fields = make("div");
       fields.className = "field-grid";
@@ -157,7 +171,10 @@
         renderRoutes();
       }));
       fields.append(selectField("Configured account", route.account_profile_id, (state.accounts || []).filter((account) => account.provider === route.provider).map((account) => ({ value: account.account_profile_id, label: `${account.account_profile_id} · ${account.provider}` })), (value) => setField(route, "account_profile_id", value)));
-      fields.append(selectField("Role", route.role, ["worker", "reviewer", "researcher"].map((value) => ({ value, label: value })), (value) => setField(route, "role", value)));
+      fields.append(selectField("Role", route.role, ["worker", "reviewer", "researcher"].map((value) => ({ value, label: value })), (value) => {
+        setField(route, "role", value);
+        renderRoutes();
+      }));
       fields.append(selectField("Explicit policy", route.policy_profile_id, (state.policy_profiles || []).map((policy) => ({ value: policy.policy_profile_id, label: `${policy.policy_profile_id} · ${policy.config && policy.config.access || "access not set"}` })), (value) => {
         setField(route, "policy_profile_id", value);
         renderRoutes();
@@ -183,15 +200,35 @@
       const effortValues = [...(known ? known.efforts : fallback[route.provider] || [""])];
       const currentEffort = route.effort ?? "";
       if (!effortValues.includes(currentEffort)) effortValues.push(currentEffort);
-      fields.append(selectField("Effort (parent/model limits apply)", currentEffort, effortValues.map((value) => ({ value, label: value || "No override" })), (value) => setField(route, "effort", value || null)));
-      fields.append(selectField("Native subagents (advisory)", route.native_subagents && route.native_subagents.mode || "off", ["off", "prefer"].map((value) => ({ value, label: value })), (value) => {
-        route.native_subagents = { mode: value, max_agents: route.native_subagents && route.native_subagents.max_agents || 1 };
-        markDirty();
+      fields.append(selectField("Effort (parent/model limits apply)", currentEffort, effortValues.map((value) => ({ value, label: value || "No override" })), (value) => {
+        setField(route, "effort", value || null);
+        renderRoutes();
       }));
-      fields.append(textField("Desired child count", route.native_subagents && route.native_subagents.max_agents || 1, (value) => {
-        route.native_subagents = { mode: route.native_subagents && route.native_subagents.mode || "off", max_agents: Number(value) };
+      const nativeMode = route.native_subagents && route.native_subagents.mode || "off";
+      fields.append(selectField("Native subagents (advisory)", nativeMode, Object.entries(nativeModeLabels).map(([value, label]) => ({ value, label })), (value) => {
+        route.native_subagents = value === "auto"
+          ? { mode: "auto" }
+          : { mode: value, max_agents: route.native_subagents && route.native_subagents.max_agents || 1 };
         markDirty();
-      }, "number"));
+        renderRoutes();
+      }));
+      const countLabel = make("label");
+      countLabel.append(make("span", "Suggested maximum children"));
+      const countHelp = make("span", "Advisory only; not an exact desired count or enforced cap.");
+      countHelp.className = "field-help";
+      countLabel.append(countHelp);
+      const countInput = document.createElement("input");
+      countInput.type = "number";
+      countInput.min = "1";
+      countInput.step = "1";
+      countInput.value = nativeMode === "auto" ? "" : String(route.native_subagents && route.native_subagents.max_agents || 1);
+      countInput.disabled = nativeMode === "off" || nativeMode === "auto";
+      countInput.addEventListener("input", () => {
+        route.native_subagents = { mode: nativeMode === "prefer" ? "prefer" : "off", max_agents: Number(countInput.value) };
+        markDirty();
+      });
+      countLabel.append(countInput);
+      fields.append(countLabel);
       card.append(fields);
       const note = make("p", known ? "Model options come from the last catalogue refresh. Child models and counts remain advisory." : "Manual or configured model; combination is unverified until checked against the CLI catalogue. No automatic substitution.");
       note.className = "small-note";

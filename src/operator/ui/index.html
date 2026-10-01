@@ -37,6 +37,11 @@
         <button id="add-route" class="button secondary">Add route</button>
       </div>
       <p class="muted">A route names the project, provider account, model, role, and explicit policy. Role labels do not grant permissions.</p>
+      <details class="profile-help">
+        <summary>How profile names and native subagents work</summary>
+        <p>A profile saves a provider, model, effort, role and permissions. Its name is editable: <code>*_worker</code> is our preset for one worker, <code>cursor_large</code> / <code>agy_large</code> encourage subagents for larger tasks, and <code>*_reviewer</code> is for independent review. The fields below determine behavior.</p>
+        <p>Off requests one agent. Prefer subagents suggests a maximum. Agent decides lets the agent choose whether and how many to use. These are prompt instructions; the broker cannot enforce child count. ZCode can handle large tasks, but its native subagents are unverified, so there is no <code>zcode_large</code> preset. Duplicate a profile to add a preset.</p>
+      </details>
       <label>Show profiles for project <select id="project-filter"></select></label>
       <div id="routes" class="route-grid"></div>
     </section>
