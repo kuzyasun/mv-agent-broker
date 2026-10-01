@@ -5,13 +5,15 @@ import { runStdioBridge, type McpToolContext } from "../bridge/server.ts";
 import { startDaemon } from "../daemon/bootstrap.ts";
 import { startDaemonRpc } from "../daemon/rpc.ts";
 import { applyOperatorConfig, loadOperatorConfig, type OperatorConfig } from "./config.ts";
+import { startOperatorUi } from "./ui.ts";
 
-type Command = "validate" | "stdio" | "daemon" | "mcp-config";
+type Command = "validate" | "stdio" | "daemon" | "mcp-config" | "ui";
 
-function parseArgs(argv: string[]): { command: Command; configPath: string; connect: boolean } {
+function parseArgs(argv: string[]): { command: Command; configPath: string; connect: boolean; port: number } {
   let command: Command = "stdio";
   let configPath: string | undefined;
   let connect = false;
+  let port = 4318;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--connect") { connect = true; continue; }
@@ -19,7 +21,13 @@ function parseArgs(argv: string[]): { command: Command; configPath: string; conn
       configPath = argv[++index];
       continue;
     }
-    if (arg === "validate" || arg === "stdio" || arg === "daemon" || arg === "mcp-config") {
+    if (arg === "--port") {
+      const value = argv[++index];
+      if (value === undefined || !/^\d+$/.test(value) || Number(value) > 65_535) throw new Error("--port must be a number from 0 to 65535.");
+      port = Number(value);
+      continue;
+    }
+    if (arg === "validate" || arg === "stdio" || arg === "daemon" || arg === "mcp-config" || arg === "ui") {
       command = arg;
       continue;
     }
@@ -27,7 +35,8 @@ function parseArgs(argv: string[]): { command: Command; configPath: string; conn
   }
   if (!configPath) throw new Error("--config PATH is required.");
   if (connect && command !== "mcp-config") throw new Error("--connect is only supported by mcp-config.");
-  return { command, configPath: path.resolve(configPath), connect };
+  if (port !== 4318 && command !== "ui") throw new Error("--port is only supported by ui.");
+  return { command, configPath: path.resolve(configPath), connect, port };
 }
 
 function binaryPins(config: OperatorConfig): Record<string, string | undefined> {
@@ -104,6 +113,28 @@ async function runDaemon(config: OperatorConfig): Promise<void> {
   }
 }
 
+async function runUi(configPath: string, port: number): Promise<void> {
+  const ui = await startOperatorUi({
+    configPath,
+    port,
+    scriptPath: path.resolve(fileURLToPath(import.meta.url)),
+  });
+  process.stderr.write(`agent-broker ui listening ${ui.url}\n`);
+  try {
+    await new Promise<void>(resolve => {
+      const shutdown = () => {
+        process.off("SIGINT", shutdown);
+        process.off("SIGTERM", shutdown);
+        resolve();
+      };
+      process.on("SIGINT", shutdown);
+      process.on("SIGTERM", shutdown);
+    });
+  } finally {
+    await ui.close();
+  }
+}
+
 function printMcpConfig(configPath: string, config: OperatorConfig, connect: boolean): void {
   const scriptPath = connect
     ? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../bridge/main-stdio.ts")
@@ -120,7 +151,11 @@ function printMcpConfig(configPath: string, config: OperatorConfig, connect: boo
 }
 
 async function main(): Promise<void> {
-  const { command, configPath, connect } = parseArgs(process.argv.slice(2));
+  const { command, configPath, connect, port } = parseArgs(process.argv.slice(2));
+  if (command === "ui") {
+    await runUi(configPath, port);
+    return;
+  }
   const config = loadOperatorConfig(configPath);
   if (command === "validate") {
     process.stdout.write(`${JSON.stringify({ valid: true, version: config.version, state_dir: config.state_dir, projects: config.projects.length, routes: config.routes.length })}\n`);
@@ -133,7 +168,9 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch(error => {
-  process.stderr.write(`agent-broker operator fatal: ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  void main().catch(error => {
+    process.stderr.write(`agent-broker operator fatal: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

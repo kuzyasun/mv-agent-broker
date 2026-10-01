@@ -58,6 +58,17 @@ routes, transactional registry application, and mock-first examples. See the
 [operator guide](docs/operator-guide.md). Full native/provider acceptance
 remains deferred; existing behavior and evidence are preserved.
 
+Edit agent profiles, models, effort, subagent preferences and projects in a
+local settings page:
+
+```powershell
+npm run --silent broker -- ui --config docs/examples/operator.mock.json
+```
+
+Open the printed loopback URL. For native providers, select your prepared
+operator config instead of the mock example. Saves create backups; restart
+MCP to use changed settings in new sessions.
+
 ```bash
 npm install
 npm run typecheck   # tsc --noEmit

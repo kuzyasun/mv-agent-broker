@@ -40,6 +40,57 @@ The snippet uses absolute node, script, and config paths:
 npm run broker -- validate --config docs/examples/operator.mock.json
 ```
 
+## Local settings UI
+
+Start the settings page without starting a broker daemon or running a provider:
+
+```powershell
+npm run --silent broker -- ui --config C:\ops\agent-broker.json
+npm run --silent broker -- ui --config C:\ops\agent-broker.json --port 0
+```
+
+The operator prints the actual loopback URL to stderr. The page is bound only
+to `127.0.0.1`, uses a per-process token for API reads and writes, and serves
+only its fixed UI assets. It loads the raw JSON so unknown fields and relative
+paths remain visible and intact. Saving validates a clone with the same
+operator validator, rejects stale revisions, writes an exact same-directory
+backup, and atomically replaces the config. A save reports that the operator
+must be restarted; it never starts a daemon, edits the registry, runs
+inference, exports credentials, or terminates existing paid jobs.
+
+The Profiles section edits routes with explicit project, configured account,
+role, policy, model, effort, and advisory native-subagent settings. A model
+refresh is an explicit metadata-only action and supports manual model entry
+when a provider is unavailable. Observed catalog timestamps are informational:
+they do not prove authentication or quota. The Projects wizard creates unique
+project, current-workspace, review-slot, policy, and coverage IDs with
+explicit source/exclusion/write-scope arrays. Existing sessions retain their
+old bindings; use a new project and state directory for another repository.
+
+The Connection section emits MCP JSON and Codex TOML using the same absolute
+config path, node executable, and operator script. Restart a client after
+copying a snippet so new sessions use the saved routes.
+
+Use the project selector to filter profiles. Duplicate a profile to create a
+different model/effort or review preset, then give it a unique ID using letters,
+numbers, dot, underscore, or hyphen. Select permissions separately from the
+role; choosing `reviewer` does not change a shared worker policy. The selected
+policy's access is displayed, while the wizard creates a separate read-only
+review policy. Changing shared bound policies requires new IDs/versions through
+configuration rather than changing privileges of old sessions.
+
+Model refresh uses saved binary pins and accounts. Save advanced account/pin
+changes before refreshing; use **Apply advanced edits to form** to update
+selectors while editing. Configured/manual choices are not observed catalogs.
+Effort **No override** means no explicit effort, while Cursor's literal `none`
+is a separate catalog variant. Cursor fast variants retain their exact ID.
+Parent settings do not establish the actual model or effort of native children.
+
+The settings process is independent of MCP: restart MCP after saving, not just
+the settings page. The project wizard can add a repository to the same state
+using new IDs; a separate config/state is another option. The UI does not inspect
+bound-session conflicts in the registry; daemon startup remains authoritative.
+
 ## Accounts, roles, and routes
 
 Each account is a provider binding (`provider`, quota scope, and CLI-owned

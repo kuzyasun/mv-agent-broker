@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Broker Operator</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">LOCAL AGENT SETTINGS</p>
+      <h1>Agent Broker Operator</h1>
+      <p class="muted">Choose providers, roles, models and effort for your projects.</p>
+    </div>
+    <div class="top-actions">
+      <button id="reload" class="button secondary">Reload</button>
+      <button id="save" class="button primary">Save configuration</button>
+    </div>
+  </header>
+  <main class="page">
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+    <section class="card intro">
+      <div>
+        <p class="eyebrow" id="change-label">Saved configuration</p>
+        <strong id="revision-label">Loading configuration…</strong>
+      </div>
+      <p class="muted">Save settings, then restart MCP to use them in new sessions. A backup is created with every save.</p>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">PROFILES</p>
+          <h2>Agent profiles</h2>
+        </div>
+        <button id="add-route" class="button secondary">Add route</button>
+      </div>
+      <p class="muted">A route names the project, provider account, model, role, and explicit policy. Role labels do not grant permissions.</p>
+      <label>Show profiles for project <select id="project-filter"></select></label>
+      <div id="routes" class="route-grid"></div>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">PROJECTS</p>
+          <h2>Workspace bindings</h2>
+        </div>
+        <button id="new-project" class="button secondary">New project wizard</button>
+      </div>
+      <p class="notice">Workspace IDs are durable bindings. For a different repository, add a new project and state directory; old sessions keep their original workspace and reject bound changes.</p>
+      <div id="projects" class="project-list"></div>
+      <div id="project-wizard" class="wizard hidden"></div>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">CONNECTION</p>
+          <h2>Client snippets</h2>
+        </div>
+      </div>
+      <p class="muted">Both snippets point to this exact configuration path. Restart a running MCP client and start new sessions; never terminate paid jobs automatically.</p>
+      <div class="snippet-grid">
+        <label> MCP JSON <textarea id="mcp-json" class="code" readonly></textarea></label>
+        <label> Codex TOML <textarea id="codex-toml" class="code" readonly></textarea></label>
+      </div>
+      <div class="top-actions"><button id="copy-json" class="button secondary">Copy MCP JSON</button><button id="copy-toml" class="button secondary">Copy Codex TOML</button></div>
+    </section>
+
+    <details class="card">
+      <summary>Advanced settings</summary>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">ADVANCED RAW SETTINGS</p>
+          <h2>Accounts, pins, state, and coverage</h2>
+        </div>
+      </div>
+      <p class="muted">These editors cover fields without a first-version structured form. They are validated and preserved together with the route controls.</p>
+      <div class="advanced-grid">
+        <label>Accounts JSON <textarea id="accounts-json" class="code"></textarea></label>
+        <label>Binary pins JSON <textarea id="pins-json" class="code"></textarea></label>
+        <label>State directory <input id="state-dir" type="text"></label>
+        <label>Coverage profiles JSON <textarea id="coverage-json" class="code"></textarea></label>
+      </div>
+      <button id="apply-advanced" class="button secondary">Apply advanced edits to form</button>
+    </details>
+  </main>
+  <script>window.__OPERATOR_BOOTSTRAP__ = /*OPERATOR_BOOTSTRAP_JSON*/;</script>
+  <script src="/app.js" defer></script>
+</body>
+</html>
