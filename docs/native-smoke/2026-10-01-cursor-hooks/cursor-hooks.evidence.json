@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "assessment": "configured_candidate",
+  "native_enforcement": "unverified",
+  "prior_outside_read_failure_preserved": true,
+  "installed_cursor_version": "2026.09.28-64d2043",
+  "runs": [
+    {
+      "role": "partial_author",
+      "runtime_commit": "8f9d3f3a063a99ddc2a84dd6eb33fa1d74232ad7",
+      "workflow_status": "passed",
+      "started_at": "2026-10-01T02:50:30.344Z",
+      "finished_at": "2026-10-01T03:05:34.825Z",
+      "turns": [
+        {
+          "role": "worker",
+          "route": {
+            "provider": "antigravity",
+            "model": "gemini-3.8-flash-high"
+          },
+          "turn_id": "turn-f9146f0fcd363306f3e4a847",
+          "state": "SUCCEEDED",
+          "native_ref": "72c87e6a-afb0-4728-9c3e-e5c636b22e54",
+          "baseline_snapshot_id": "snap-3661e16299dd8dd5ba8d0752",
+          "final_snapshot_id": "snap-2945dcbc02b64fc1240b7925",
+          "observed_report_characters": 242
+        }
+      ]
+    },
+    {
+      "role": "completion_author",
+      "runtime_commit": "8f9d3f3a063a99ddc2a84dd6eb33fa1d74232ad7",
+      "workflow_status": "passed",
+      "started_at": "2026-10-01T03:16:51.936Z",
+      "finished_at": "2026-10-01T04:05:32.782Z",
+      "turns": [
+        {
+          "role": "worker",
+          "route": {
+            "provider": "zcode",
+            "model": "account:zai-individual-coding-plan/GLM-5.3-Flash",
+            "effort": "max"
+          },
+          "turn_id": "turn-b38b205f4c370d3db144d49b",
+          "state": "SUCCEEDED",
+          "native_ref": "sess_d1bf132d-0000-4e43-90d9-8d11d299e364",
+          "baseline_snapshot_id": "snap-b33cba3718f6d45dd251ac36",
+          "final_snapshot_id": "snap-cc8dca889fb6900c5e041fe0",
+          "observed_report_characters": 3641
+        }
+      ]
+    },
+    {
+      "role": "independent_review",
+      "runtime_commit": "8f9d3f3a063a99ddc2a84dd6eb33fa1d74232ad7",
+      "workflow_status": "passed",
+      "started_at": "2026-10-01T04:06:39.474Z",
+      "finished_at": "2026-10-01T04:13:03.509Z",
+      "turns": [
+        {
+          "role": "worker",
+          "route": {
+            "provider": "mock",
+            "model": "mock"
+          },
+          "turn_id": "turn-55ef319a378489214cbf2348",
+          "state": "SUCCEEDED",
+          "native_ref": "mock-native-turn-55ef319a378489214cbf2348",
+          "baseline_snapshot_id": "snap-ab76fa8e4f616695e89cb806",
+          "final_snapshot_id": "snap-90e1c9ef6a38533c5bc4e43f",
+          "observed_report_characters": 2
+        },
+        {
+          "role": "reviewer",
+          "route": {
+            "provider": "zcode",
+            "model": "account:zai-individual-coding-plan/GLM-5.3",
+            "effort": "high"
+          },
+          "turn_id": "turn-92786a3d58ed3bedcb5aca5b",
+          "state": "SUCCEEDED",
+          "native_ref": "sess_8ac04b17-73b5-42f3-ae7b-4e79365492a3",
+          "baseline_snapshot_id": "snap-3661e16299dd8dd5ba8d0752",
+          "final_snapshot_id": null,
+          "observed_report_characters": 3224
+        }
+      ]
+    }
+  ],
+  "coordinator_checks": [
+    {
+      "command": "npm run typecheck",
+      "result": "passed_after_final_changes"
+    },
+    {
+      "command": "npm test",
+      "files": 34,
+      "passed": 476,
+      "boundary": "before_final_audit_handle_locking_repair"
+    },
+    {
+      "command": "npx vitest run tests/unit/cursor-hooks.test.ts",
+      "files": 1,
+      "passed": 19,
+      "boundary": "after_final_audit_handle_locking_repair"
+    }
+  ],
+  "coordinator_repairs": [
+    "native_flat_all_tool_hook_config",
+    "policy_hash_pin",
+    "physical_grant_identities",
+    "physical_temp_path",
+    "opaque_call_id_hashes",
+    "command_metacharacter_guard",
+    "bounded_verified_audit_handle_and_lock"
+  ],
+  "limitations": [
+    "no_native_hook_invocation_transcript_yet",
+    "managed_descendant_quiescence_unverified",
+    "review_snapshot_precedes_coordinator_repairs",
+    "partial_first_author_handoff_not_test_proof"
+  ]
+}

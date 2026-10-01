@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import {
   parseCursorStreamLine,
   summarizeCursorTurn,
@@ -263,6 +264,269 @@ describe("Cursor stream parser", () => {
       expect(summary.resultText).toBeNull();
       expect(summary.isError).toBe(false);
       expect(summary.assistantText).toBe("Interrupted stream...");
+    });
+  });
+
+  describe("tool_call receipts and denial observability", () => {
+    // Native shape: protobuf-JSON flattened oneof, exactly as the installed
+    // CLI emits — tool_call.<caseToolCall>.args/result with case-named result
+    // keys.
+    it("normalizes flattened readToolCall.result.permissionDenied with hashed path and no raw args", () => {
+      const line = JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "call-read-denied",
+        tool_call: {
+          readToolCall: {
+            args: { path: "C:\\projects\\workspace\\secret.txt" },
+            result: { permissionDenied: { error: "Hook blocked file access" } },
+          },
+        },
+        session_id: "sess-1",
+        timestamp_ms: 1727700000000,
+      });
+      const ev = parseCursorStreamLine(line);
+      expect(ev.kind).toBe("tool_call");
+      if (ev.kind === "tool_call") {
+        expect(ev.receipt).toEqual({
+          toolkind: "read",
+          status: "permissionDenied",
+          decision: "deny",
+          pathhash: createHash("sha256").update("C:\\projects\\workspace\\secret.txt").digest("hex"),
+          callid: createHash("sha256").update("call-read-denied").digest("hex").slice(0, 32),
+        });
+        expect((ev.receipt as any).args).toBeUndefined();
+        expect((ev.receipt as any).output).toBeUndefined();
+        expect((ev.receipt as any).error).toBeUndefined();
+        expect((ev.receipt as any).thinking).toBeUndefined();
+      }
+    });
+
+    it("normalizes flattened readToolCall rejected, error and success result cases", () => {
+      const build = (resultCase: string, value: Record<string, unknown>) => JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "call-x",
+        tool_call: {
+          readToolCall: {
+            args: { path: "/tmp/foo" },
+            result: { [resultCase]: value },
+          },
+        },
+      });
+      const evRejected = parseCursorStreamLine(build("rejected", { reason: "User rejected" }));
+      if (evRejected.kind === "tool_call") {
+        expect(evRejected.receipt?.decision).toBe("deny");
+        expect(evRejected.receipt?.status).toBe("rejected");
+        expect(evRejected.receipt?.toolkind).toBe("read");
+      }
+
+      const evError = parseCursorStreamLine(build("error", { error: "I/O failure" }));
+      if (evError.kind === "tool_call") {
+        expect(evError.receipt?.decision).toBe("error");
+        expect(evError.receipt?.status).toBe("error");
+      }
+
+      const evSuccess = parseCursorStreamLine(build("success", { output: { content: "hello" } }));
+      if (evSuccess.kind === "tool_call") {
+        expect(evSuccess.receipt?.decision).toBe("allow");
+        expect(evSuccess.receipt?.status).toBe("success");
+      }
+    });
+
+    it("normalizes flattened shellToolCall and mcpToolCall permissionDenied", () => {
+      const shell = JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "call-shell",
+        tool_call: {
+          shellToolCall: {
+            args: { command: "rm -rf /" },
+            result: { permissionDenied: { error: "Shell disabled" } },
+          },
+        },
+      });
+      const evShell = parseCursorStreamLine(shell);
+      if (evShell.kind === "tool_call") {
+        expect(evShell.receipt).toEqual({
+          toolkind: "shell",
+          status: "permissionDenied",
+          decision: "deny",
+          pathhash: null,
+          callid: createHash("sha256").update("call-shell").digest("hex").slice(0, 32),
+        });
+      }
+
+      const mcp = JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "call-mcp",
+        tool_call: {
+          mcpToolCall: {
+            args: { name: "dangerous_tool" },
+            result: { permissionDenied: { error: "MCP disabled" } },
+          },
+        },
+      });
+      const evMcp = parseCursorStreamLine(mcp);
+      if (evMcp.kind === "tool_call") {
+        expect(evMcp.receipt).toEqual({
+          toolkind: "mcp",
+          status: "permissionDenied",
+          decision: "deny",
+          pathhash: null,
+          callid: createHash("sha256").update("call-mcp").digest("hex").slice(0, 32),
+        });
+      }
+    });
+
+    it("unknownsuccessnotdeny: unknown tool case with success result does not report deny", () => {
+      const line = JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "call-unknown",
+        tool_call: {
+          customExtensionToolCall: {
+            result: { success: {} },
+          },
+        },
+      });
+      const ev = parseCursorStreamLine(line);
+      if (ev.kind === "tool_call") {
+        expect(ev.receipt?.toolkind).toBe("unknown");
+        expect(ev.receipt?.status).toBe("success");
+        expect(ev.receipt?.decision).toBe("allow");
+        expect(ev.receipt?.decision).not.toBe("deny");
+      }
+    });
+
+    it("unknownstatusdropped: unobserved result cases stay status unknown and never persist the raw case", () => {
+      for (const unobserved of ["timeout", "spawnError", "fileBusy", "failure"]) {
+        const line = JSON.stringify({
+          type: "tool_call",
+          subtype: "completed",
+          call_id: "call-unobserved",
+          tool_call: {
+            readToolCall: {
+              args: { path: "/tmp/foo" },
+              result: { [unobserved]: { detail: "chain-of-thought-marker" } },
+            },
+          },
+        });
+        const ev = parseCursorStreamLine(line);
+        if (ev.kind === "tool_call") {
+          expect(ev.receipt?.status).toBe("unknown");
+          expect(ev.receipt?.decision).toBe("unknown");
+          expect(JSON.stringify(ev.receipt)).not.toContain(unobserved);
+          expect(JSON.stringify(ev.receipt)).not.toContain("chain-of-thought-marker");
+        }
+      }
+    });
+
+    it("noerrorguess: is_error false without a typed result is not a success receipt", () => {
+      const line = JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "call-noresult",
+        is_error: false,
+        tool_call: {
+          readToolCall: { args: { path: "/tmp/foo" } },
+        },
+      });
+      const ev = parseCursorStreamLine(line);
+      if (ev.kind === "tool_call") {
+        expect(ev.receipt?.status).toBe("unknown");
+        expect(ev.receipt?.decision).toBe("unknown");
+      }
+    });
+
+    it("wrongshapeignored: non-flattened tool_call objects produce no receipt", () => {
+      for (const malformed of [
+        { type: "tool_call", subtype: "completed", tool_call: "not an object" },
+        { type: "tool_call", subtype: "completed", tool_call: 12345 },
+        { type: "tool_call", subtype: "completed", tool_call: null },
+        { type: "tool_call", subtype: "completed", tool_call: [] },
+        // Synthetic {tool:{case,value}} shape is not the native wire format.
+        { type: "tool_call", subtype: "completed", tool_call: { tool: { case: "readToolCall", value: { result: { result: { case: "success", value: {} } } } } } },
+        { type: "tool_call", subtype: "completed", tool_call: { case: "readToolCall", value: { result: { case: "success", value: {} } } } },
+        // Two case keys at once is malformed.
+        { type: "tool_call", subtype: "completed", tool_call: { readToolCall: {}, grepToolCall: {} } },
+      ]) {
+        const ev = parseCursorStreamLine(JSON.stringify(malformed));
+        expect(ev.kind).toBe("tool_call");
+        if (ev.kind === "tool_call") {
+          expect(ev.receipt).toBeUndefined();
+        }
+      }
+    });
+
+    it("fieldbombsbounded: bounds giant fields and stores zero raw args, output, env, or thinking", () => {
+      const giantString = "x".repeat(100_000);
+      const line = JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "call-" + "c".repeat(500),
+        thinking: giantString,
+        tool_call: {
+          readToolCall: {
+            args: { path: "C:\\path\\" + "a".repeat(10_000), extraBomb: giantString },
+            output: giantString,
+            thinking: giantString,
+            env: giantString,
+            result: { permissionDenied: { error: giantString } },
+          },
+        },
+      });
+      const ev = parseCursorStreamLine(line);
+      if (ev.kind === "tool_call") {
+        expect(ev.receipt).toBeDefined();
+        expect(ev.receipt!.callid.length).toBeLessThanOrEqual(128);
+        expect(ev.receipt!.toolkind).toBe("read");
+        expect(ev.receipt!.toolkind.length).toBeLessThanOrEqual(32);
+        expect(ev.receipt!.status).toBe("permissionDenied");
+        expect(ev.receipt!.status.length).toBeLessThanOrEqual(32);
+        expect(ev.receipt!.pathhash).toHaveLength(64);
+        expect(Object.keys(ev.receipt!).sort()).toEqual(["callid", "decision", "pathhash", "status", "toolkind"]);
+        expect(JSON.stringify(ev.receipt)).not.toContain("xxxx");
+      }
+    });
+
+    it("hashes complete call ids without persisting arbitrary source text", () => {
+      const line = JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "bad id\nwith\tcontrol\u0001chars",
+        tool_call: { readToolCall: { args: { path: "/tmp/foo" }, result: { success: {} } } },
+      });
+      const ev = parseCursorStreamLine(line);
+      if (ev.kind === "tool_call") {
+        expect(ev.receipt?.callid).toBe(createHash("sha256").update("bad id\nwith\tcontrol\u0001chars").digest("hex").slice(0, 32));
+        expect(JSON.stringify(ev.receipt)).not.toContain("badidwithcontrolchars");
+        expect(ev.receipt?.callid).not.toMatch(/[\n\t\u0001 ]/);
+      }
+      const empty = parseCursorStreamLine(JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "",
+        tool_call: { lsToolCall: { result: { success: {} } } },
+      }));
+      if (empty.kind === "tool_call") {
+        expect(empty.receipt?.callid).toBe("unknown");
+        expect(empty.receipt?.toolkind).toBe("ls");
+      }
+    });
+
+    it("zero thinking text in progress: thinking stream events are separate from progress", () => {
+      const line = JSON.stringify({
+        type: "thinking",
+        subtype: "delta",
+        text: "Secret internal chain-of-thought",
+      });
+      const ev = parseCursorStreamLine(line);
+      expect(ev.kind).toBe("thinking");
+      if (ev.kind === "thinking") {
+        expect(ev.text).toBe("Secret internal chain-of-thought");
+      }
     });
   });
 });

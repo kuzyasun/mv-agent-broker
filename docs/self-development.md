@@ -111,3 +111,7 @@ The [physical checkout lease checkpoint](native-smoke/2026-10-01-workspace-alias
 records ZCode authoring, independent Cursor review, confirmed bypass repairs
 and 448 passing offline tests. Legacy unbound leases/quarantines remain
 conservative until authoritative reconciliation.
+The [0.2.4 hook checkpoint](native-smoke/2026-10-01-cursor-hooks/report.md)
+records partial Antigravity authoring, ZCode completion, independent GLM/high
+review and coordinator repairs. The prior native outside-read failure remains
+recorded; configured hooks require a fresh accepted-runtime falsification.

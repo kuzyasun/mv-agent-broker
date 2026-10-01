@@ -231,10 +231,11 @@ was cumulative: do not sum consecutive result counters as independent turns.
 
 ## Cursor
 
-Adapter 0.2.3 prepares a unique private `CURSOR_CONFIG_DIR` for each reviewer
+Adapter 0.2.4 prepares a unique private `CURSOR_CONFIG_DIR` for each reviewer
 turn, retaining Ask mode and denying `Write(**)`, `Shell(*)`, `WebFetch(*)`
 and `Mcp(*:*)`. Preparation precedes dispatch permission; cleanup covers
-success, failure, cancellation and gate refusal. Native authentication stays
+success, definite failure and gate refusal; uncertain execution retains config
+and audit evidence. Native authentication stays
 with the CLI; no user credential/settings files are copied or edited.
 See the official [permissions](https://cursor.com/docs/cli/reference/permissions)
 and [configuration](https://cursor.com/docs/cli/reference/configuration) contracts.
@@ -256,6 +257,15 @@ require native falsification before the profile can be advertised as enforced.
 The earlier private-HOME continuity probe read broker evidence to find its
 marker; that memory-recall evidence was rejected, not counted as acceptance.
 See the [configuration checkpoint](native-smoke/2026-10-01-cursor-profile/report.md).
+
+The [0.2.4 hook candidate](native-smoke/2026-10-01-cursor-hooks/report.md)
+adds a trusted all-tool `preToolUse` gate, SHA-256-bound policy and immutable
+physical grants. Flat native command records fail closed; recognized reads and
+searches are checked against workspace/current input bindings. Mutation, shell,
+MCP, web, delegation and unknown tools are denied by the script. Bounded audit
+and typed stream receipts retain hashes and fixed labels only. Offline tests
+and installed-program schema checks passed; live invocation/enforcement and
+clean native continuity remain unverified. The 0.2.3 failure is not overwritten.
 
 Implementation: [adapter](../src/providers/cursor/cursorAdapter.ts).
 Set the pin to the agent launcher, which is separate from Desktop `cursor.cmd`:

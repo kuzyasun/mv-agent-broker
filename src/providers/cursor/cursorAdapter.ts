@@ -4,7 +4,7 @@
  * Implements ProviderAdapter contract (§13.2, §14.3) using headless CLI runner.
  */
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -23,6 +23,12 @@ import {
   type CursorStreamEvent,
 } from "./streamParser.ts";
 import { buildCursorReviewerConfig } from "./reviewerProfile.ts";
+import {
+  atomicWriteFile,
+  buildReviewerHookPolicy,
+  readAuditLog,
+  writeReviewerHooksConfig,
+} from "./reviewerHooks.ts";
 
 const CURSOR_ENV_ALLOWLIST = [
   "HOME",
@@ -87,7 +93,7 @@ function ensurePrivateDirectory(directory: string): void {
 
 export class CursorAdapter implements ProviderAdapter {
   readonly providerId = "cursor";
-  readonly adapterVersion = "0.2.3";
+  readonly adapterVersion = "0.2.4";
 
   readonly stateRoot?: string;
   private readonly binary: string;
@@ -134,8 +140,14 @@ export class CursorAdapter implements ProviderAdapter {
     }
 
     let configDir: string | null = null;
+    let auditLogFile: string | null = null;
     let reviewerEnv: NodeJS.ProcessEnv | null = null;
     let pollInterval: NodeJS.Timeout | null = null;
+    // Set when the turn ends without a definitive outcome (timeout, kill,
+    // nonzero exit, missing result). The private config/audit directory is
+    // then preserved for a future managed supervisor instead of being
+    // destroyed together with the audit evidence.
+    let executionUnknown = false;
 
     try {
       if (req.role === "reviewer") {
@@ -159,9 +171,31 @@ export class CursorAdapter implements ProviderAdapter {
 
         for (const directory of [homeDir, dataDir, xdgConfigHome, xdgCacheHome]) ensurePrivateDirectory(directory);
 
-        configDir = mkdtempSync(path.join(os.tmpdir(), "agent-broker-cursor-"));
+        configDir = mkdtempSync(path.join(realpathSync(os.tmpdir()), "agent-broker-cursor-"));
         const configFile = path.join(configDir, "cli-config.json");
-        writeFileSync(configFile, JSON.stringify(reviewerConfig, null, 2), "utf8");
+        atomicWriteFile(configFile, JSON.stringify(reviewerConfig, null, 2));
+
+        auditLogFile = path.join(configDir, "reviewer-audit.jsonl");
+        const policyFile = path.join(configDir, "reviewer-policy.json");
+        // Private exclusions stay precise: the sessions tree (every session's
+        // home/data/config, this one and any other turn's) and the per-turn
+        // config directory holding the policy and audit log. The broker state
+        // root itself is never blanket-forbidden — reviewer slots and bound
+        // inputs live under it and must stay readable.
+        const hookPolicy = buildReviewerHookPolicy({
+          workspace_path: req.workspace_path,
+          read_only_input_paths: req.read_only_input_paths,
+          forbidden_paths: [path.join(stateRoot, "sessions"), configDir],
+          audit_log_path: auditLogFile,
+          session_id: req.session_id,
+          turn_id: req.turn_id,
+        });
+        atomicWriteFile(policyFile, JSON.stringify(hookPolicy, null, 2));
+
+        writeReviewerHooksConfig({
+          homeDir,
+          policyPath: policyFile,
+        });
 
         reviewerEnv = {
           ...process.env,
@@ -258,6 +292,31 @@ export class CursorAdapter implements ProviderAdapter {
               type: "progress",
               payload: { label },
             });
+            if (ev.receipt) {
+              onEvent({
+                type: "tool_receipt",
+                payload: {
+                  toolkind: ev.receipt.toolkind,
+                  status: ev.receipt.status,
+                  decision: ev.receipt.decision,
+                  pathhash: ev.receipt.pathhash,
+                  callid: ev.receipt.callid,
+                },
+              });
+              if (ev.receipt.decision === "deny") {
+                onEvent({
+                  type: "denial",
+                  payload: {
+                    toolkind: ev.receipt.toolkind,
+                    status: ev.receipt.status,
+                    decision: ev.receipt.decision,
+                    pathhash: ev.receipt.pathhash,
+                    callid: ev.receipt.callid,
+                    source: "native",
+                  },
+                });
+              }
+            }
             break;
           }
           case "result":
@@ -274,6 +333,7 @@ export class CursorAdapter implements ProviderAdapter {
       const summary = summarizeCursorTurn(events);
       // A result record does not override an interrupted or failed process.
       if (cliResult.timedOut || cliResult.killed || cliResult.exitCode !== 0) {
+        executionUnknown = true;
         const message = cliResult.timedOut ? `Cursor timed out (${cliResult.timedOut}).`
           : cliResult.killed ? `Cursor execution interrupted: ${cancelReason ?? "cancelled"}.`
           : cliResult.stderrTail || `Cursor exited with code ${cliResult.exitCode}.`;
@@ -306,6 +366,7 @@ export class CursorAdapter implements ProviderAdapter {
         });
       }
 
+      executionUnknown = true;
       throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "stream closed without result", {
         executionStarted: true,
       });
@@ -313,7 +374,40 @@ export class CursorAdapter implements ProviderAdapter {
       if (pollInterval !== null) {
         clearInterval(pollInterval);
       }
-      if (configDir !== null) {
+      if (auditLogFile !== null && existsSync(auditLogFile)) {
+        try {
+          const records = readAuditLog(auditLogFile);
+          for (const rec of records) {
+            onEvent({
+              type: "hook_audit",
+              payload: {
+                toolkind: rec.toolkind,
+                status: rec.status,
+                decision: rec.decision,
+                pathhash: rec.pathhash,
+                callid: rec.callid,
+                timestamp_ms: rec.timestamp_ms,
+              },
+            });
+            if (rec.decision === "deny") {
+              onEvent({
+                type: "denial",
+                payload: {
+                  toolkind: rec.toolkind,
+                  status: rec.status,
+                  decision: rec.decision,
+                  pathhash: rec.pathhash,
+                  callid: rec.callid,
+                  source: "hook",
+                },
+              });
+            }
+          }
+        } catch {
+          // ignore audit read failures
+        }
+      }
+      if (configDir !== null && !executionUnknown) {
         try {
           rmSync(configDir, { recursive: true, force: true });
         } catch {

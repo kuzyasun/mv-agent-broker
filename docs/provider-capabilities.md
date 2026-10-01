@@ -64,7 +64,7 @@ User startup hooks can run, although broker hook/permission integration is
 unwired. Worker writes, reviewer enforcement and live tool cancellation remain
 unverified. Native rate-limit status was allowed; quota rejection was not tested.
 
-## cursor (adapter 0.2.3; model/resume smoke on 0.2.0, `src/providers/cursor/`)
+## cursor (adapter 0.2.4; model/resume smoke on 0.2.0, `src/providers/cursor/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
@@ -76,6 +76,7 @@ unverified. Native rate-limit status was allowed; quota rejection was not tested
 | Windows cmd shim boundary checks | native | documented | common infra; Cursor native run used .ps1, not .cmd |
 | cancellation + inactivity timeouts | native | documented | common infra/fake process cancellation; native tool-tree cancellation and quiescence unverified |
 | reviewer outside-read boundary | unknown | failed | 0.2.3 reproduced an outside marker absent from the prompt; [native falsification](native-smoke/2026-10-01-cursor-read-boundary/report.md); restricted profile not supported |
+| trusted all-tool preToolUse hook | unknown | configured | 0.2.4 flat native config, pinned policy hash/physical grants and bounded receipts passed offline checks; [checkpoint](native-smoke/2026-10-01-cursor-hooks/report.md); live hook invocation/enforcement pending |
 | reviewer Write/Shell denial / worker writes | unknown | configured | 0.2.3 config and agent-reported denials; disposable sentinel absent, native denial receipts unavailable; --trust is workspace trust, not enforcement |
 | quota-error classification | unknown | configured | four successful requests; quota exhaustion not observed; startup timeout no longer mislabeled RATE_LIMITED |
 | structured final output | unsupported | documented | text_only |
