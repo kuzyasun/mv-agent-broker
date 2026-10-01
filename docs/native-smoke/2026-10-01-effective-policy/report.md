@@ -25,6 +25,14 @@ Final offline validation: typecheck passed; **343/343 tests in 29 files**, inclu
 temporary workspaces, not native Claude. The existing dogfood evidence validator
 also passed. Native authentication remains owned by each installed CLI.
 
+A follow-up tightened rejection metadata to explicit `execution_started=false`.
+Its typecheck and all 39 policy/bridge tests passed. The accepted `cf99dc5` copy
+then passed a public MCP smoke without native inference: unknown restrictions,
+scope widening, null restrictions and traversal were rejected with zero sessions,
+turns, reservations or accepted keys. The same rejected key subsequently admitted
+a valid narrowed mock session, which completed with a sealed final snapshot.
+Its durable policy grant was verified as `src/core` in the private registry.
+
 An independent Antigravity design review completed in a separate review slot,
 but its delivered summary reached 4000 characters and ended mid-sentence.
 Retain it as partial evidence, not complete acceptance. Future dogfood briefs

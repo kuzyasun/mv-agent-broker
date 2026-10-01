@@ -152,5 +152,41 @@
     "caller_contract_tests": 5,
     "cursor_config_auth_probe": "authenticated without inference",
     "final_caller_contract_priority_fix": "after sealed Cursor target; verified by coordinator"
+  },
+  "mcp_smoke": {
+    "runtime_commit": "cf99dc58d002317ec6eef09ea24338e8d2d7c006",
+    "runtime_files": 48,
+    "native_launches": 0,
+    "rejected": [
+      {
+        "code": "POLICY_UNSUPPORTED",
+        "execution_started": false
+      },
+      {
+        "code": "INVALID_REQUEST",
+        "execution_started": false
+      },
+      {
+        "code": "INVALID_REQUEST",
+        "execution_started": false
+      },
+      {
+        "code": "INVALID_REQUEST",
+        "execution_started": false
+      }
+    ],
+    "rejected_counts": {
+      "sessions": 0,
+      "turns": 0,
+      "idempotency_records": 0,
+      "reservations": 0
+    },
+    "same_key_reused_for_accepted_spawn": true,
+    "turn_id": "turn-51f3d8f4af5f10da5da16111",
+    "state": "SUCCEEDED",
+    "effective_write_scope": [
+      "src/core"
+    ],
+    "final_snapshot_id": "snap-9e42c5cdaeb52d348d421ceb"
   }
 }
