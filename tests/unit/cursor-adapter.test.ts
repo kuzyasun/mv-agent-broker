@@ -82,6 +82,17 @@ function request(overrides: Partial<TurnExecutionRequest> = {}): TurnExecutionRe
 function gate() { let count = 0; return { acquireDispatchPermission: () => { count++; }, cancellationRequested: () => null, count: () => count }; }
 
 describe("Cursor adapter", () => {
+  it.each(["worker", "reviewer", "read-only-worker", "empty-worker"] as const)("force approves only the explicitly writable worker: %s", async mode => {
+    const f = fixture();
+    const policy = { binding_version: 1 as const, access: mode === "read-only-worker" ? "read_only" as const : "workspace_write" as const,
+      write_scope: mode === "empty-worker" ? [] : ["src"], policy_profile_id: "test", policy_profile_version: "1",
+      profile_config: "{}", profile_fingerprint: "fixture", requested_restrictions: null };
+    const result = await f.adapter.executeTurn(request({ role: mode === "reviewer" ? "reviewer" : "worker",
+      workspace_path: f.root, effective_policy: policy }), gate(), () => {});
+    const inspection = JSON.parse(result.agent_reported!.summary);
+    expect(inspection.args.includes("--force")).toBe(mode === "worker");
+    expect(inspection.args).not.toContain("--approve-mcps");
+  });
   it("uses ask mode for reviewer reports and leaves worker mode unchanged", async () => {
     for (const role of ["worker", "reviewer"] as const) {
       const f = fixture();
@@ -205,7 +216,7 @@ describe("Cursor adapter", () => {
     expect(inspection.cursorConfig).toBeNull();
     expect(process.env.CURSOR_CONFIG_DIR).toBe(ambientDir);
   });
-  it("preserves private config and audit when the process fails with an unknown outcome", async () => {
+  it("preserves private failure evidence even when the managed process quiesces", async () => {
     const f = fixture();
     vi.spyOn(os, "tmpdir").mockReturnValue(f.root);
     await expect(f.adapter.executeTurn(request({ role: "reviewer", workspace_path: f.root, task_envelope: "nonzero" }), gate(), () => {}))
@@ -213,7 +224,7 @@ describe("Cursor adapter", () => {
     const observedPath = path.join(f.root, "observed-config-dir.txt");
     expect(existsSync(observedPath)).toBe(true);
     const observedDir = readFileSync(observedPath, "utf8");
-    // Unknown execution outcome: config and policy are kept (the audit log
+    // Failure evidence: config and policy are kept (the audit log
     // materializes only when the hook fires) for a future managed supervisor.
     expect(existsSync(observedDir)).toBe(true);
     expect(existsSync(path.join(observedDir, "reviewer-policy.json"))).toBe(true);
@@ -258,8 +269,8 @@ describe("Cursor adapter", () => {
     expect(existsSync(createdConfigDir!)).toBe(false);
     expect(existsSync(f.sentinel)).toBe(false);
   });
-  it("bumps adapter version to 0.2.4", () => {
-    expect(new CursorAdapter().adapterVersion).toBe("0.2.4");
+  it("bumps adapter version to 0.2.5", () => {
+    expect(new CursorAdapter().adapterVersion).toBe("0.2.5");
   });
   it.each(["root", "sessions", "data"])("refuses a private history %s junction before native launch", async component => {
     const f = fixture(); const g = gate();

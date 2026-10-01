@@ -417,6 +417,11 @@ export class TurnExecutor {
     }
 
     if (failure !== null) {
+      const isExecutionUnknown = failure instanceof BrokerError && failure.code === "EXECUTION_UNKNOWN";
+      if (isExecutionUnknown) {
+        this.markUnknown(after, session, failure);
+        return;
+      }
       if (failure instanceof BrokerError) {
         // No-dispatch evidence comes from the journal, never from the
         // adapter's self-declaration: only the gate writes
@@ -484,10 +489,9 @@ export class TurnExecutor {
         execution_started: true,
         native_conversation_ref: nativeRef,
       });
+      // Definite native outcome → FINALIZING → terminal (§6.5.2).
+      this.finalizeWithOutcome(after, session, result, continuation, watch.reason);
     }
-
-    // Definite native outcome → FINALIZING → terminal (§6.5.2).
-    this.finalizeWithOutcome(after, session, result, continuation, watch.reason);
   }
 
   private recordOutcomeEvidence(
@@ -914,6 +918,11 @@ export class TurnExecutor {
             payload: { executor_incarnation: this.expectedIncarnation },
             created_at: now,
           });
+          // Ownership-before-resume must not ACK ResumeThread on a stale
+          // incarnation — throw so the Windows helper cancels with zero resume.
+          if (ev.type === "owned_launch") {
+            throw new Error("stale executor incarnation: ownership persistence refused before resume");
+          }
           return;
         }
       }
@@ -924,6 +933,103 @@ export class TurnExecutor {
         payload: ev.payload ?? {},
         created_at: now,
       });
+
+      // Windows managed ownership: persist launch identity into the existing
+      // launch_turn intent and session.runtime_id BEFORE ResumeThread.
+      // This callback binds ownership before resume; neither permission nor
+      // ownership alone proves that native execution has started.
+      if (ev.type === "owned_launch") {
+        if (!ev.payload) {
+          throw new Error("missing owned_launch payload; refusing resume");
+        }
+        const p = ev.payload;
+        if (
+          typeof p.launch_uuid !== "string" || !/^[0-9a-fA-F-]{1,64}$/.test(p.launch_uuid) ||
+          typeof p.named_job !== "string" || !/^[0-9A-Za-z_\\:.-]{1,120}$/.test(p.named_job) ||
+          typeof p.root_pid !== "number" || !Number.isInteger(p.root_pid) || p.root_pid <= 0 ||
+          typeof p.root_creation_time !== "string" || !/^[1-9][0-9]{0,18}$/.test(p.root_creation_time) ||
+          p.owner_pid !== process.pid ||
+          typeof p.owner_creation_time !== "string" || !/^[1-9][0-9]{0,18}$/.test(p.owner_creation_time) ||
+          typeof p.helper_pid !== "number" || !Number.isInteger(p.helper_pid) || p.helper_pid <= 0
+        ) {
+          throw new Error("strict ownership payload validation failed; refusing resume");
+        }
+
+        const ownership = {
+          launch_uuid: p.launch_uuid,
+          named_job: p.named_job,
+          root_pid: p.root_pid,
+          root_creation_time: p.root_creation_time,
+          helper_pid: p.helper_pid,
+          owner_pid: p.owner_pid,
+          owner_creation_time: p.owner_creation_time,
+        };
+
+        const runtimeId = [
+          "winjob",
+          ownership.launch_uuid,
+          ownership.named_job,
+          String(ownership.root_pid),
+          ownership.root_creation_time,
+          String(ownership.helper_pid),
+          String(ownership.owner_pid),
+          ownership.owner_creation_time,
+        ].join(":");
+
+        // onAdapterEvent already owns the serialized transaction: nested
+        // RegistryDb transactions are deliberately forbidden.
+        {
+          if (this.expectedIncarnation !== null) {
+            const ds = getDaemonState(this.db);
+            if (!ds || ds.incarnation !== this.expectedIncarnation) {
+              throw new Error("stale executor incarnation: ownership persistence refused before resume");
+            }
+          }
+
+          const turnForRuntime = getTurn(this.db, turnId);
+          if (!turnForRuntime || turnForRuntime.state !== "STARTING" || turnForRuntime.session_id !== sessionId) {
+            throw new Error("active turn not found or not in STARTING; refusing resume");
+          }
+
+          const matchingIntents = listPendingIntents(this.db, "launch_turn").filter((i) => i.turn_id === turnId);
+          const intent = matchingIntents[0];
+          if (matchingIntents.length !== 1 || !intent || intent.session_id !== sessionId) {
+            throw new Error(`expected exactly 1 pending launch_turn intent, found ${matchingIntents.length}; refusing resume`);
+          }
+          let intentPayload: Record<string, unknown>;
+          try {
+            if (!intent.payload) throw new Error("empty intent payload");
+            intentPayload = JSON.parse(intent.payload) as Record<string, unknown>;
+            if (typeof intentPayload !== "object" || intentPayload === null || Array.isArray(intentPayload)) throw new Error("corrupt payload");
+          } catch {
+            throw new Error("corrupt launch_turn intent journal; refusing resume");
+          }
+          intentPayload.ownership = ownership;
+
+          const intentUpdate = this.db.raw
+            .prepare("UPDATE intents SET payload = ?, updated_at = ? WHERE intent_id = ? AND state = 'pending'")
+            .run(JSON.stringify(intentPayload), now, intent.intent_id);
+          if (intentUpdate.changes !== 1) {
+            throw new Error("0 rows updated for launch_turn intent; refusing resume");
+          }
+
+          const session = getSession(this.db, sessionId);
+          if (!session || session.state !== "ACTIVE" || session.active_turn_id !== turnId) throw new Error("session does not own active turn; refusing resume");
+          updateSessionFields(this.db, sessionId, { runtime_id: runtimeId }, session.record_version, now);
+          updateTurnFields(this.db, turnId, { runtime_id: runtimeId }, turnForRuntime.state_version, now);
+        }
+      }
+
+      if (ev.type === "owned_zero_resume") {
+        const t = getTurn(this.db, turnId);
+        if (!t || t.session_id !== sessionId || (t.state !== "STARTING" && t.state !== "CANCELLING")) {
+          throw new Error("zero-resume receipt for an inactive managed turn");
+        }
+        const ownsProcess = ev.payload?.ownership !== null && ev.payload?.ownership !== undefined;
+        if (ownsProcess && ev.payload?.quiesced !== true) throw new Error("unsettled owned process cannot establish safe zero-resume finalization");
+        updateTurnFields(this.db, turnId, { execution_started: false }, t.state_version, now);
+      }
+
       if (ev.type === "native_ref_obtained" && ev.payload && typeof ev.payload.ref === "string") {
         // Persist the native reference ASAP (§13.2, §14.3).
         const turn = getTurn(this.db, turnId);
@@ -942,9 +1048,18 @@ export class TurnExecutor {
         }
       }
       // First NATIVE evidence confirms dispatch → RUNNING (§6.5.2). Gate on
-      // the journaled dispatch permission, not on any adapter chatter.
+      // the journaled dispatch permission, not on ownership receipts alone —
+      // owned_launch proves durable bind before ResumeThread, not that native
+      // inference has started.
+      const ownershipOnly =
+        ev.type === "owned_launch" ||
+        ev.type === "owned_resumed" ||
+        ev.type === "owned_root_exit" ||
+        ev.type === "owned_quiescence" ||
+        ev.type === "owned_unproven";
+      const phaseOnly = ownershipOnly || ev.type === "owned_zero_resume";
       const turn = getTurn(this.db, turnId);
-      if (turn && turn.state === "STARTING" && turn.execution_started === true) {
+      if (turn && turn.state === "STARTING" && turn.execution_started === true && !phaseOnly) {
         assertTurnTransition("STARTING", "dispatch_confirmed");
         updateTurnFields(this.db, turnId, { state: "RUNNING" }, turn.state_version, now);
         appendEvent(this.db, {
@@ -1365,6 +1480,7 @@ export class TurnExecutor {
     continuation?: "new_native_conversation" | "native_resume",
     nativeRef?: string,
     finalSnapshotId?: string | null,
+    isReconciliation: boolean = false,
   ): void {
     if (this.faultSkipCommitTurns_.has(turn.turn_id)) {
       return;
@@ -1387,7 +1503,7 @@ export class TurnExecutor {
       }
       const t = getTurn(this.db, turn.turn_id);
       if (!t) throw new Error("turn-vanished");
-      if (!isNonterminalTurnState(t.state) || t.state === "UNKNOWN") {
+      if (!isNonterminalTurnState(t.state) || (t.state === "UNKNOWN" && !isReconciliation)) {
         // Late terminal event after a committed terminal: audit only (§6.5.2).
         appendEvent(this.db, {
           turn_id: turn.turn_id,
@@ -1397,6 +1513,13 @@ export class TurnExecutor {
           created_at: now,
         });
         return;
+      }
+      if (t.state === "UNKNOWN" && isReconciliation) {
+        const s = getSession(this.db, session.session_id);
+        if (s && s.state === "BLOCKED") {
+          assertSessionTransition(s.state, "unknown_turn_finalizing");
+          updateSessionFields(this.db, s.session_id, { state: "ACTIVE" }, s.record_version, now);
+        }
       }
       // FINALIZING is mandatory before any terminal state (§6.2): encode the
       // normative entry edge from §6.5.2, then FINALIZING → terminal.
@@ -1622,6 +1745,8 @@ export class TurnExecutor {
           },
           continuation,
           nativeRef,
+          null,
+          true,
         );
       } else {
         this.commitTerminal(
@@ -1642,6 +1767,7 @@ export class TurnExecutor {
           continuation,
           nativeRef,
           finalSnapshotId,
+          true,
         );
       }
 

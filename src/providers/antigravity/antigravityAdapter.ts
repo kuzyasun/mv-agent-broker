@@ -49,7 +49,7 @@ const VALID_ANTIGRAVITY_EFFORTS = new Set(["low", "medium", "high", "max"]);
 
 export class AntigravityAdapter implements ProviderAdapter {
   readonly providerId = "antigravity";
-  readonly adapterVersion = "0.2.0";
+  readonly adapterVersion = "0.2.1";
 
   private readonly binary: string;
   private readonly defaultModel?: string;
@@ -93,7 +93,7 @@ export class AntigravityAdapter implements ProviderAdapter {
       "--output-format",
       "stream-json",
       "--print-timeout",
-      "900s",
+      "0",
       "--model",
       model,
     ];
@@ -112,6 +112,7 @@ export class AntigravityAdapter implements ProviderAdapter {
 
     let tmpDir: string | null = null;
     let pollInterval: NodeJS.Timeout | null = null;
+    let executionUnknown = false;
 
     try {
       let promptArg: string;
@@ -157,7 +158,8 @@ export class AntigravityAdapter implements ProviderAdapter {
         envAllowlist: ANTIGRAVITY_ENV_ALLOWLIST,
         inheritEnv: process.env,
         firstLineTimeoutMs: 120_000,
-        inactivityTimeoutMs: 900_000,
+        // --print-timeout 0 waits the full turn; do not invent a 900s inactivity cut.
+        inactivityTimeoutMs: Math.max(60_000, req.deadline_at > 0 ? req.deadline_at - req.clock.now() : 24 * 60 * 60_000),
         signal: ac.signal,
       };
 
@@ -196,9 +198,14 @@ export class AntigravityAdapter implements ProviderAdapter {
         onStderrLine: (_line: string) => {
           // Captured in stderrTail by runHeadlessCli
         },
+        onOwnershipEvent: (ev) => onEvent(ev),
       };
 
       const cliResult = await runHeadlessCli(spec, cliEvents);
+      if (cliResult.uncertainAfterResume) {
+        executionUnknown = true;
+        throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
+      }
       const summary = summarizeAntigravityTurn(events);
 
       // 5. Resolve or throw based on outcome.
@@ -254,11 +261,16 @@ export class AntigravityAdapter implements ProviderAdapter {
       throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "stream closed without result", {
         executionStarted: true,
       });
+    } catch (err) {
+      if (err instanceof BrokerError && err.code === "EXECUTION_UNKNOWN") {
+        executionUnknown = true;
+      }
+      throw err;
     } finally {
       if (pollInterval !== null) {
         clearInterval(pollInterval);
       }
-      if (tmpDir !== null) {
+      if (tmpDir !== null && !executionUnknown) {
         try {
           rmSync(tmpDir, { recursive: true, force: true });
         } catch {

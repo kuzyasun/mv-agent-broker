@@ -29,7 +29,7 @@ export interface ZcodeAdapterOptions {
 
 export class ZcodeAdapter implements ProviderAdapter {
   readonly providerId = "zcode";
-  readonly adapterVersion = "0.2.1";
+  readonly adapterVersion = "0.2.2";
   private readonly opts: ZcodeAdapterOptions;
   constructor(opts: ZcodeAdapterOptions) { this.opts = opts; }
 
@@ -57,6 +57,7 @@ export class ZcodeAdapter implements ProviderAdapter {
     let text = "";
     let outputTooLarge = false;
     let emittedRef = false;
+    let executionUnknown = false;
     const checkCancel = () => { if (gate.cancellationRequested() !== null) controller.abort(); };
     try {
       tmpDir = mkdtempSync(path.join(os.tmpdir(), "agent-broker-zcode-"));
@@ -94,7 +95,12 @@ export class ZcodeAdapter implements ProviderAdapter {
           }
         },
         onStderrLine: () => undefined,
+        onOwnershipEvent: (ev) => onEvent(ev),
       });
+      if (result.uncertainAfterResume) {
+        executionUnknown = true;
+        throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
+      }
       if (outputTooLarge || result.timedOut || result.killed || result.exitCode !== 0) {
         const message = outputTooLarge ? "ZCode JSON output exceeds the adapter limit." : result.timedOut ? `ZCode timed out (${result.timedOut}).` : result.killed ? "ZCode execution interrupted." : result.stderrTail || `ZCode exited with code ${result.exitCode}.`;
         throw new BrokerError("PROVIDER_PROTOCOL_ERROR", message, { executionStarted: true });
@@ -109,9 +115,14 @@ export class ZcodeAdapter implements ProviderAdapter {
       onEvent({ type: "progress", payload: { label: "json-run-complete" } });
       return { native_outcome: "completed", native_conversation_ref: parsed.sessionId,
         agent_reported: { summary: parsed.response.slice(0, 4000) || "zcode turn complete", format_status: "text_only" } };
+    } catch (err) {
+      if (err instanceof BrokerError && err.code === "EXECUTION_UNKNOWN") {
+        executionUnknown = true;
+      }
+      throw err;
     } finally {
       if (poll) clearInterval(poll);
-      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+      if (tmpDir && !executionUnknown) rmSync(tmpDir, { recursive: true, force: true });
     }
   }
 

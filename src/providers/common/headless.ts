@@ -4,14 +4,22 @@
  * - Invocations are executable + argument array, NO shell interpolation.
  * - The prompt travels via stdin, never argv.
  * - Child env is an explicit allowlist per adapter (§12.3).
- * - Cancellation kills the whole tree (Windows: taskkill /T /F; POSIX: SIGKILL)
- *   with a bounded grace period — an interrupt must lead to a definite
- *   process termination before quiescence is claimed (§14.4).
+ * - Cancellation / deadlines must stop descendant writes before definite return:
+ *   Windows uses the broker-owned job object (KILL_ON_JOB_CLOSE); POSIX uses SIGKILL.
  * - Windows npm shims (.cmd/.bat) are wrapped via cmd.exe with strict token
  *   boundary checks (no untrusted interpolation into the command line).
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { BrokerError } from "../../shared/errors.ts";
+import {
+  assertWindowsJobCapable,
+  createLineAssembler,
+  runWindowsJob,
+  WindowsJobCapabilityError,
+  type WindowsJobOwnership,
+} from "./windowsJob.ts";
 
 export interface HeadlessSpawnSpec {
   binary: string;
@@ -26,11 +34,19 @@ export interface HeadlessSpawnSpec {
   firstLineTimeoutMs: number;
   inactivityTimeoutMs: number;
   signal: AbortSignal;
+  /**
+   * Durable ownership-before-resume gate (Windows managed path). Core persists
+   * launch identity here; throwing refuses ResumeThread (zero resume).
+   * Optional so direct fake-adapter tests stay compatible on any platform.
+   */
+  onBeforeResume?: (ownership: WindowsJobOwnership) => void | Promise<void>;
 }
 
 export interface HeadlessCliEvents {
   onStdoutLine(line: string): void;
   onStderrLine(line: string): void;
+  /** Optional ownership / resume / quiescence signals for adapter→core forwarding. */
+  onOwnershipEvent?(ev: { type: string; payload?: Record<string, unknown> }): void;
 }
 
 export interface HeadlessCliResult {
@@ -38,6 +54,18 @@ export interface HeadlessCliResult {
   killed: boolean;
   timedOut: "first-line" | "inactivity" | null;
   stderrTail: string;
+  /** Windows: helper resumed the owned root. */
+  resumed?: boolean;
+  /** Windows: ActiveProcesses==0 and pipes drained. */
+  quiesced?: boolean;
+  /**
+   * Windows: native execution started (or was resumed) but helper loss /
+   * missing quiescence left the outcome undefined — adapters must retain
+   * leases/pins/views/config and surface EXECUTION_UNKNOWN.
+   */
+  uncertainAfterResume?: boolean;
+  ownership?: WindowsJobOwnership | null;
+  terminationReason?: string | null;
 }
 
 const CMD_UNSAFE = /["%!^&|<>()\r\n\0]/;
@@ -68,7 +96,9 @@ function classifyWindowsTarget(binary: string): WindowsLaunchTarget {
 
 /** Resolve a bare command via where.exe on Windows (PATH + PATHEXT aware). */
 function resolveWindowsBinary(binary: string): string {
-  const probe = spawnSync("where.exe", [binary], { timeout: 2000, encoding: "utf8" });
+  if (path.isAbsolute(binary)) return binary;
+  const root = Object.entries(process.env).find(([key]) => key.toUpperCase() === "SYSTEMROOT")?.[1] ?? "C:\\Windows";
+  const probe = spawnSync(path.join(root, "System32", "where.exe"), [binary], { timeout: 2000, encoding: "utf8" });
   if (probe.status === 0) {
     const first = probe.stdout.split(/\r?\n/).find((l) => l.trim().length > 0);
     if (first) return first.trim();
@@ -94,8 +124,9 @@ export function prepareCommand(binary: string, args: string[]): { command: strin
     return { command: comspec, args: ["/d", "/s", "/c", cmdline], windowsVerbatim: true };
   }
   if (target.kind === "powershell-shim") {
-    const pwshProbe = spawnSync("where.exe", ["pwsh.exe"], { timeout: 2000, encoding: "utf8" });
-    const shell = pwshProbe.status === 0 ? "pwsh.exe" : "powershell.exe";
+    const pwsh = resolveWindowsBinary("pwsh.exe");
+    const root = Object.entries(process.env).find(([key]) => key.toUpperCase() === "SYSTEMROOT")?.[1] ?? "C:\\Windows";
+    const shell = path.isAbsolute(pwsh) ? pwsh : path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     return {
       command: shell,
       args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", resolved, ...args],
@@ -130,26 +161,26 @@ function buildEnv(spec: HeadlessSpawnSpec): NodeJS.ProcessEnv {
   return env;
 }
 
+function envToPairs(env: NodeJS.ProcessEnv): string[] {
+  const pairs: string[] = [];
+  for (const [k, v] of Object.entries(env)) {
+    if (v === undefined) continue;
+    if (k.includes("=") || k.includes("\0") || v.includes("\0")) continue;
+    pairs.push(`${k}=${v}`);
+  }
+  return pairs;
+}
+
 function killTree(child: ChildProcess): void {
   if (child.pid === undefined || child.exitCode !== null) return;
-  if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
-  } else {
-    try {
-      child.kill("SIGKILL");
-    } catch {
-      /* already gone */
-    }
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    /* already gone; this function is only used by the POSIX runner */
   }
 }
 
-/**
- * Run a headless CLI turn: feed the prompt via stdin, stream stdout/stderr
- * line-by-line, enforce startup/inactivity deadlines and external abort.
- * Resolves when the process exits (or is killed); never throws for a
- * non-zero exit — callers decide semantics from {exitCode, killed, timedOut}.
- */
-export function runHeadlessCli(spec: HeadlessSpawnSpec, events: HeadlessCliEvents): Promise<HeadlessCliResult> {
+function runHeadlessCliPosix(spec: HeadlessSpawnSpec, events: HeadlessCliEvents): Promise<HeadlessCliResult> {
   return new Promise((resolve) => {
     const { command, args, windowsVerbatim } = prepareCommand(spec.binary, spec.args);
     const child = spawn(command, args, {
@@ -228,10 +259,7 @@ export function runHeadlessCli(spec: HeadlessSpawnSpec, events: HeadlessCliEvent
     });
     child.on("close", (code) => finish(code));
 
-    // Prompt transport (§12.5): stdin by default; print-first CLIs that only
-    // accept an argv prompt use promptArgv (callers enforce a size cap).
     if (spec.promptArgv !== undefined) {
-      // args already contain the prompt token — nothing to write.
       void spec.promptStdin;
     } else {
       const tag = `agent-broker:${randomUUID().slice(0, 8)}`;
@@ -243,3 +271,161 @@ export function runHeadlessCli(spec: HeadlessSpawnSpec, events: HeadlessCliEvent
     armTimer();
   });
 }
+
+async function runHeadlessCliWindows(spec: HeadlessSpawnSpec, events: HeadlessCliEvents): Promise<HeadlessCliResult> {
+  // Honest refusal — never silently fall back to unmanaged spawn/taskkill.
+  try {
+    assertWindowsJobCapable();
+  } catch (e) {
+    events.onOwnershipEvent?.({ type: "owned_zero_resume", payload: { ownership: null, quiesced: false, reason: "capability_refused" } });
+    const message = e instanceof Error ? e.message : String(e);
+    throw new BrokerError("PROVIDER_INCOMPATIBLE", message, { executionStarted: false });
+  }
+
+  let prepared: ReturnType<typeof prepareCommand>;
+  try { prepared = prepareCommand(spec.binary, spec.args); }
+  catch {
+    events.onOwnershipEvent?.({ type: "owned_zero_resume", payload: { ownership: null, quiesced: false, reason: "launch_configuration_refused" } });
+    throw new BrokerError("PROVIDER_INCOMPATIBLE", "Windows launch configuration refused before native execution.", { executionStarted: false });
+  }
+  const env = buildEnv(spec);
+  const childStdin = spec.promptArgv !== undefined
+    ? Buffer.alloc(0)
+    : Buffer.from(`${spec.promptStdin}\n[broker-eor agent-broker:${randomUUID().slice(0, 8)}]\n`, "utf8");
+
+  let killed = false;
+  let timedOut: HeadlessCliResult["timedOut"] = null;
+  let sawFirstLine = false;
+  let resumed = false;
+  let stderrTail = "";
+  let timer: NodeJS.Timeout | null = null;
+  const ac = new AbortController();
+
+  const armTimer = () => {
+    // Deadlines apply to native IO after ResumeThread — not helper Add-Type/startup.
+    if (!resumed) return;
+    if (timer) clearTimeout(timer);
+    const ms = sawFirstLine ? spec.inactivityTimeoutMs : spec.firstLineTimeoutMs;
+    timer = setTimeout(() => {
+      timedOut = sawFirstLine ? "inactivity" : "first-line";
+      killed = true;
+      ac.abort();
+    }, ms);
+  };
+
+  const onOuterAbort = () => {
+    killed = true;
+    ac.abort();
+  };
+  spec.signal.addEventListener("abort", onOuterAbort, { once: true });
+  if (spec.signal.aborted) onOuterAbort();
+
+  const noteActivity = () => {
+    if (!sawFirstLine) sawFirstLine = true;
+    armTimer();
+  };
+
+  const onStdout = createLineAssembler((line) => {
+    noteActivity();
+    events.onStdoutLine(line);
+  });
+  const onStderr = createLineAssembler((line) => {
+    noteActivity();
+    events.onStderrLine(line);
+  });
+
+  try {
+    const result = await runWindowsJob({
+      applicationName: prepared.command,
+      args: prepared.windowsVerbatim ? [] : prepared.args,
+      verbatimCommandLine: prepared.windowsVerbatim
+        ? [
+            /[\s"]/.test(prepared.command) ? `"${prepared.command.replace(/"/g, "")}"` : prepared.command,
+            ...prepared.args,
+          ].join(" ")
+        : undefined,
+      cwd: spec.cwd,
+      envPairs: envToPairs(env),
+      childStdin,
+      signal: ac.signal,
+      onBeforeResume: async (ownership) => {
+        events.onOwnershipEvent?.({ type: "owned_launch", payload: { ...ownership } });
+        if (spec.onBeforeResume) await spec.onBeforeResume(ownership);
+      },
+      onControl: (op, payload) => {
+        if (op === "resumed") {
+          resumed = true;
+          armTimer();
+          events.onOwnershipEvent?.({ type: "owned_resumed", payload });
+        } else if (op === "root_exit") {
+          events.onOwnershipEvent?.({ type: "owned_root_exit", payload });
+        } else if (op === "exit" || op === "terminated") {
+          events.onOwnershipEvent?.({ type: "owned_quiescence", payload: { op, ...payload } });
+        } else if (op === "terminated_unproven") {
+          events.onOwnershipEvent?.({ type: "owned_unproven", payload });
+        }
+      },
+      onStdoutChunk: onStdout,
+      onStderrChunk: (bytes) => {
+        stderrTail = (stderrTail + bytes.toString("utf8")).slice(-2000);
+        onStderr(bytes);
+      },
+    });
+
+    if (result.uncertainAfterResume) {
+      throw new BrokerError("EXECUTION_UNKNOWN", "Owned Windows execution has no authoritative quiescence receipt.", { executionStarted: null });
+    }
+    if (!result.resumed) {
+      events.onOwnershipEvent?.({ type: "owned_zero_resume", payload: { quiesced: result.quiesced,
+        reason: result.terminationReason ?? "helper_refused", ownership: result.ownership } });
+      throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "Windows helper refused execution before resume.", { executionStarted: false });
+    }
+    if (result.protocolError) {
+      throw new BrokerError("EVIDENCE_CAPTURE_FAILED", result.protocolError, { executionStarted: true });
+    }
+    try { onStdout.flush(); onStderr.flush(); }
+    catch {
+      throw new BrokerError("EVIDENCE_CAPTURE_FAILED", "Final native stream callback failed after owned quiescence.", { executionStarted: true });
+    }
+
+    if (timer) clearTimeout(timer);
+    spec.signal.removeEventListener("abort", onOuterAbort);
+
+    return {
+      exitCode: result.exitCode,
+      killed: killed || result.killed,
+      timedOut,
+      stderrTail: (stderrTail + result.stderrTail).slice(-2000),
+      resumed: result.resumed,
+      quiesced: result.quiesced,
+      uncertainAfterResume: result.uncertainAfterResume,
+      ownership: result.ownership,
+      terminationReason: result.terminationReason,
+    };
+  } catch (e) {
+    if (timer) clearTimeout(timer);
+    spec.signal.removeEventListener("abort", onOuterAbort);
+    if (e instanceof WindowsJobCapabilityError) {
+      events.onOwnershipEvent?.({ type: "owned_zero_resume", payload: { ownership: null, quiesced: false, reason: "prelaunch_capability_refused" } });
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", "Windows managed launch capability refused before native execution.", { executionStarted: false });
+    }
+    throw e;
+  }
+}
+
+/**
+ * Run a headless CLI turn: feed the prompt via stdin, stream stdout/stderr
+ * line-by-line, enforce startup/inactivity deadlines and external abort.
+ * Resolves when the process exits (or is killed); never throws for a
+ * non-zero exit — callers decide semantics from {exitCode, killed, timedOut}.
+ * On Windows, launches through the owned job helper (capability refusal is
+ * thrown, never a silent unmanaged fallback).
+ */
+export function runHeadlessCli(spec: HeadlessSpawnSpec, events: HeadlessCliEvents): Promise<HeadlessCliResult> {
+  if (process.platform === "win32") {
+    return runHeadlessCliWindows(spec, events);
+  }
+  return runHeadlessCliPosix(spec, events);
+}
+
+export { WindowsJobCapabilityError, type WindowsJobOwnership };

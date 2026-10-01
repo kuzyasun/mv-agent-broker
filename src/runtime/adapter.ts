@@ -16,6 +16,14 @@ export interface AdapterEvent {
   payload?: Record<string, unknown>;
 }
 
+/**
+ * Optional Windows managed-execution events adapters may forward via onEvent
+ * (no global observers): owned_launch (pre-resume ownership bind),
+ * owned_resumed, owned_root_exit, owned_quiescence, owned_unproven,
+ * owned_zero_resume (journaled proof correcting the earlier permission phase).
+ * Core persists owned_launch into launch_turn intent + runtime_id before ACK.
+ */
+
 export type NativeOutcome = "completed" | "failed";
 
 export interface AgentReportedResult {

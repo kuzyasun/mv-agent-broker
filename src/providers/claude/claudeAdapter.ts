@@ -48,7 +48,7 @@ const CLAUDE_ENV_ALLOWLIST = [
 
 export class ClaudeAdapter implements ProviderAdapter {
   readonly providerId = "claude-code";
-  readonly adapterVersion = "0.2.0";
+  readonly adapterVersion = "0.2.1";
   private readonly binary: string;
 
   constructor(opts?: ClaudeAdapterOptions) {
@@ -145,8 +145,14 @@ export class ClaudeAdapter implements ProviderAdapter {
           onStderrLine(_line: string) {
             // Collected in stderrTail by runHeadlessCli
           },
+          onOwnershipEvent(ev) {
+            onEvent(ev);
+          },
         },
       );
+      if (cliResult.uncertainAfterResume) {
+        throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
+      }
     } finally {
       clearInterval(pollInterval);
     }

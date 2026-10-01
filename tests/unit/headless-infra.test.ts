@@ -73,18 +73,17 @@ describe("runHeadlessCli", () => {
     );
     expect(result.timedOut).toBe("first-line");
     expect(result.killed).toBe(true);
-  }, 15000);
+  }, 60_000);
 
-  it("aborts via the external signal", async () => {
+  it("aborts via the external signal after native readiness", async () => {
     const controller = new AbortController();
     const promise = runHeadlessCli(
-      spec({ args: ["-e", "setTimeout(() => console.log('late'), 60000);"], signal: controller.signal }),
-      { onStdoutLine: () => undefined, onStderrLine: () => undefined },
+      spec({ args: ["-e", "console.log('ready');setTimeout(() => console.log('late'), 60000);"], signal: controller.signal }),
+      { onStdoutLine: line => { if (line === "ready") controller.abort(); }, onStderrLine: () => undefined },
     );
-    setTimeout(() => controller.abort(), 200);
     const result = await promise;
     expect(result.killed).toBe(true);
-  }, 15000);
+  }, 60_000);
 
   it("skips stdin when promptArgv marks the prompt as already in args", async () => {
     const out: string[] = [];
@@ -112,6 +111,38 @@ describe("runHeadlessCli", () => {
       { onStdoutLine: (l) => out.push(l), onStderrLine: () => undefined },
     );
     expect(out[0]).toBe("absent");
+  });
+
+  it.runIf(process.platform === "win32")("emits owned_launch before native stdout on Windows job path", async () => {
+    const events: string[] = [];
+    const out: string[] = [];
+    const result = await runHeadlessCli(
+      spec({
+        args: ["-e", "console.log('after-resume');"],
+        firstLineTimeoutMs: 30_000,
+        inactivityTimeoutMs: 30_000,
+      }),
+      {
+        onStdoutLine: (l) => {
+          events.push("stdout");
+          out.push(l);
+        },
+        onStderrLine: () => undefined,
+        onOwnershipEvent: (ev) => events.push(ev.type),
+      },
+    );
+    expect(result.resumed).toBe(true);
+    expect(result.quiesced).toBe(true);
+    expect(result.uncertainAfterResume).toBe(false);
+    expect(events[0]).toBe("owned_launch");
+    expect(events).toContain("owned_resumed");
+    expect(out).toContain("after-resume");
+  }, 60_000);
+
+  it.runIf(process.platform !== "win32")("Windows job integration is not silently skipped off win32", async () => {
+    // Off Windows the POSIX runner is used; capability module still refuses.
+    const { assertWindowsJobCapable, WindowsJobCapabilityError } = await import("../../src/providers/common/windowsJob.ts");
+    expect(() => assertWindowsJobCapable()).toThrow(WindowsJobCapabilityError);
   });
 });
 

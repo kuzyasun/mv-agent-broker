@@ -172,7 +172,7 @@ describe("CodexAdapter lifecycle and preflight", () => {
   it("initializes with default binary and version", () => {
     const adapter = new CodexAdapter();
     expect(adapter.providerId).toBe("codex");
-    expect(adapter.adapterVersion).toBe("0.2.0");
+    expect(adapter.adapterVersion).toBe("0.2.1");
     expect(adapter.inspectRuntime("sess-1")).toBeNull();
   });
 

@@ -14,7 +14,7 @@ export const CODEX_ENV_ALLOWLIST = [
 
 export class CodexAdapter implements ProviderAdapter {
   readonly providerId = "codex";
-  readonly adapterVersion = "0.2.0";
+  readonly adapterVersion = "0.2.1";
   private readonly binary: string;
   constructor(opts: CodexAdapterOptions = {}) { this.binary = opts.binary ?? "codex"; }
   preflight(config: Record<string, unknown>): void {
@@ -68,7 +68,11 @@ export class CodexAdapter implements ProviderAdapter {
           else if (ev.kind === "failure") state.failure ??= ev.message;
         },
         onStderrLine() { /* Retained by the shared process runner. */ },
+        onOwnershipEvent(ev) { onEvent(ev); },
       });
+      if (cli.uncertainAfterResume) {
+        throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
+      }
     } finally { clearInterval(poll); }
 
     if (cli.timedOut || cli.killed || cli.exitCode !== 0) {

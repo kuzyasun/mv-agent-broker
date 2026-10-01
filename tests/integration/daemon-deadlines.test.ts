@@ -229,7 +229,8 @@ describe("daemon deadline supervision (spec §14.6)", () => {
   });
 
   it("preserves quiescence: remains held in CANCELLING until completion, never force-releases on elapsed deadline alone", async () => {
-    // Custom mock adapter that delays settlement upon interrupt
+    // Custom mock adapter that delays settlement upon interrupt.
+    // Direct fake adapters stay compatible: optional ownership events are not required.
     class QuiescingMockAdapter implements ProviderAdapter {
       readonly providerId = "mock";
       readonly adapterVersion = "0.1.0";

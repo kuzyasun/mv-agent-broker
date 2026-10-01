@@ -93,7 +93,7 @@ function ensurePrivateDirectory(directory: string): void {
 
 export class CursorAdapter implements ProviderAdapter {
   readonly providerId = "cursor";
-  readonly adapterVersion = "0.2.4";
+  readonly adapterVersion = "0.2.5";
 
   readonly stateRoot?: string;
   private readonly binary: string;
@@ -130,6 +130,11 @@ export class CursorAdapter implements ProviderAdapter {
       throw new BrokerError("SESSION_NOT_RESUMABLE", "Cursor resume requires a nonempty native conversation reference.", { executionStarted: false });
     }
     const args = ["--print", "--output-format", "stream-json", "--model", model, "--trust"];
+    // Explicitly writable operator-approved workers must execute their checks
+    // without an interactive approval prompt. Native explicit denies still win.
+    // This is not a claim that the writer scope is a native sandbox.
+    if (req.role === "worker" && req.effective_policy?.access === "workspace_write" &&
+        Array.isArray(req.effective_policy.write_scope) && req.effective_policy.write_scope.length > 0) args.push("--force");
     // Plan mode can deliver its report via CreatePlan instead of result text.
     if (req.role === "reviewer") args.push("--mode", "ask");
     if (req.workspace_path !== null && req.workspace_path !== undefined && req.workspace_path.length > 0) {
@@ -327,12 +332,19 @@ export class CursorAdapter implements ProviderAdapter {
       onStderrLine: (_line: string) => {
         // Captured in stderrTail by runHeadlessCli
       },
+      onOwnershipEvent: (ev) => onEvent(ev),
     };
 
       const cliResult = await runHeadlessCli(spec, cliEvents);
+      if (cliResult.uncertainAfterResume) {
+        executionUnknown = true;
+        throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
+      }
       const summary = summarizeCursorTurn(events);
       // A result record does not override an interrupted or failed process.
       if (cliResult.timedOut || cliResult.killed || cliResult.exitCode !== 0) {
+        // Keep private policy/audit evidence even after a known local failure.
+        // This retention flag does not classify the broker outcome as UNKNOWN.
         executionUnknown = true;
         const message = cliResult.timedOut ? `Cursor timed out (${cliResult.timedOut}).`
           : cliResult.killed ? `Cursor execution interrupted: ${cancelReason ?? "cancelled"}.`
@@ -370,6 +382,11 @@ export class CursorAdapter implements ProviderAdapter {
       throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "stream closed without result", {
         executionStarted: true,
       });
+    } catch (err) {
+      if (err instanceof BrokerError && err.code === "EXECUTION_UNKNOWN") {
+        executionUnknown = true;
+      }
+      throw err;
     } finally {
       if (pollInterval !== null) {
         clearInterval(pollInterval);

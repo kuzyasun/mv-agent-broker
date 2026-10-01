@@ -126,4 +126,12 @@ The [physical session cwd checkpoint](native-smoke/2026-10-01-workspace-binding/
 records ZCode implementation, independent Cursor review and coordinator repairs
 with 489 passing offline tests. New physical sessions bind a resolved cwd;
 historically unbound physical sessions need explicit replacement while retaining
-their recorded native context. Runtime process-tree ownership remains open.
+their recorded native context. Hosted execution-domain proof remains open.
+
+The [Windows owned-process checkpoint](native-smoke/2026-10-01-windows-job/report.md)
+records retained failed/partial authors, independent reviews and main repairs.
+Local Job ownership, pre-resume journaling and conservative helper-loss handling
+are tested with owned Node processes. Hosted tool-domain quiescence and complete
+native profiles remain open. The observed ZCode Individual provider-1310 limit
+led to an explicit Cursor/Gemini development route; Start Plan remains unverified
+and unavailable through the verified standalone account runtime.
