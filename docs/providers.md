@@ -12,6 +12,9 @@ below. [Native policy observations](native-policy-controls.md) explain why
 CLI flags, readiness and individual marker tests do not prove a complete
 worker/reviewer confinement profile.
 
+[Native subagent configuration and smoke evidence](native-subagents.md) covers
+vendor delegation within a broker session and its current verification limits.
+
 ## Configuration and status
 
 Native adapters are registered only when their `AB_*` pin is set. A pin does

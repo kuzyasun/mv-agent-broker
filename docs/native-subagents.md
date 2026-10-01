@@ -10,7 +10,7 @@ elapsed time; it does not establish lower token or quota consumption.
 | Provider | Documented mechanism | Local evidence |
 | --- | --- | --- |
 | Antigravity CLI | `invoke_subagent`; built-in `self` and `research`; repository definitions under `.agents/agents/` | Two real child sessions completed through accepted broker `8db50fb` on 2026-10-01 |
-| Cursor CLI | Agent definitions under `.cursor/agents/`; explicit model configuration; native delegation | CLI/help/catalog checked; native child execution with an operator-selected model remains pending |
+| Cursor CLI | Agent definitions under `.cursor/agents/`; explicit model configuration; native delegation | Two child sessions completed through frozen broker `f3e5d44` on requested Luna/high; large-task model remains operator-configurable |
 | ZCode | No verified configuration or native child execution in this package | Unknown; continue using explicit broker worker/reviewer sessions |
 
 Sources: [Antigravity custom subagents](https://antigravity.google/docs/subagents?tab=cli),
@@ -35,6 +35,7 @@ was a separate checkout; the main repository was not the probe workspace.
 
 | Evidence | Observed value |
 | --- | --- |
+| Installed Antigravity CLI | `1.2.14` (`agy.exe --version`, checked in this run) |
 | Broker turn | `turn-a3850f842af7ebb3994dd1c4`, `SUCCEEDED` |
 | Parent native conversation | `8bb8bca6-a7a9-4c0e-9d5a-96822bd2e76e` |
 | Child A | `0b5de7c6-c8b6-499f-8654-d5d8028f73c2` |
@@ -58,3 +59,37 @@ Still unknown: actual child model/effort, exact parallel overlap, child quota
 attribution, cancellation of a running parent and all descendants, failure
 propagation, and enforcement of an advisory child cap. Those are deferred
 until an observed workflow problem requires them.
+
+## Cursor smoke evidence, 2026-10-01
+
+The coordinator used a separate fixture checkout, CLI
+`2026.09.28-64d2043`, and frozen accepted broker
+`f3e5d448c56efabdb341fd17ab21c84785f92014`. The parent and both repository
+agent definitions explicitly requested `gpt-5.6-luna-high`. High effort was
+encoded in the catalog model ID; this probe does not establish separate
+effort-field mapping on the historical adapter. No `auto` model was requested.
+
+| Evidence | Observed value |
+| --- | --- |
+| Broker turn | `turn-89226ac533caeed8d428c9e4`, `SUCCEEDED` |
+| Parent native conversation | `5a892d2e-e6cb-4b21-acd5-98a2ecb7ddc0` |
+| `alpha-worker` child | `0f736941-ed45-490d-9e44-b1edd1d108ff` |
+| `beta-worker` child | `c1e7058f-0e4e-45e6-9b36-e3974a7da6a5` |
+| Successful native task receipt call IDs | `929e666d625d1afadfc0d50fb5305dfc`, `1e6ba5e9149abde427dc77822bf902fe` |
+| Numeric / word outputs | Independently checked `81` and `cedar birch amber` |
+
+Each child had a distinct native chat store and transcript for the exact fixture
+workspace. The two successful task receipts were projected from broker events.
+Only safe identity/model metadata was extracted from the owned native records;
+private thinking was not published. The completed declared report was retrieved
+through public MCP artifact paging after daemon restart without inference.
+
+Private evidence: `.state/coordinator/cursor-subagent-probe-repo/`, including
+`cursor-probe-report.private.json` and `cursor-subagent-proof.private.json`
+in its `.state/coordinator/` directory. The parent named the native tool
+`cursor.Subagent`; the broker's sanitized receipt class is `task`.
+
+Actual child model metadata was absent from the projected transcript fields;
+the configured model and parent's report remain requests/claims. Child usage,
+parallel overlap, a hard child cap, group cancellation, and reviewer subagent
+permission inheritance remain unverified.

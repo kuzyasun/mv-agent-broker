@@ -99,6 +99,7 @@ unverified. Native rate-limit status was allowed; quota rejection was not tested
 | private reviewer native continuity on 0.2.6 | native | smoke_tested | same native ID, fresh tag recalled without reinjection and correct S1/S2 projection under a short owned state root; long path failed SQLite; no restart/full-profile claim ([clean repaired pair](native-smoke/2026-10-01-cursor-clean-continuity-repaired/report.md)) |
 | reviewer Write/Shell denial / worker writes | unknown | configured | 0.2.3 config and agent-reported denials; disposable sentinel absent, native denial receipts unavailable; --trust is workspace trust, not enforcement |
 | quota-error classification | unknown | configured | four successful requests; quota exhaustion not observed; startup timeout no longer mislabeled RATE_LIMITED |
+| native child delegation (project agents) | native | smoke_tested | Two successful task receipts, distinct child native chat stores and independently checked outputs through broker f3e5d44; requested Luna/high, actual child model/usage/cancellation unknown ([evidence](native-subagents.md)) |
 | structured final output | unsupported | documented | text_only |
 
 Cursor auto ask-mode review delivered its final report through MCP on adapter
@@ -143,6 +144,7 @@ that development scenario, not a full native worker security profile.
 | conversation-id capture | native | smoke_tested | init.conversation_id observed; alternate nested-field capture remains parser-level only |
 | model selection (`--model <id>`) | native | smoke_tested | CLI init.model confirms gemini-3.8-flash-low on both turns; other models/effort unverified |
 | separate effort (`--effort low/medium/high/max`) | native | documented | adapter 0.2.0 fake-process mapping/zero-dispatch rejection; effective native reasoning unverified |
+| native child delegation (`invoke_subagent`) | native | smoke_tested | Two distinct child conversations, parent tool-payload links and independently checked fixture files through frozen broker 8db50fb; child model/usage/cancellation remain unknown ([evidence](native-subagents.md)) |
 | cancellation (taskkill/SIGKILL tree) | native | documented | common headless infra |
 | structured final output | unsupported | documented | text_only |
 
