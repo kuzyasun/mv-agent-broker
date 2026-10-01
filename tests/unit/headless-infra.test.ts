@@ -23,6 +23,16 @@ function spec(overrides: Partial<Parameters<typeof runHeadlessCli>[0]> = {}) {
 }
 
 describe("runHeadlessCli", () => {
+  it.skipIf(process.platform !== "win32").each([undefined, "D:"])("preserves structural SystemDrive without ambient secrets (%s)", async (drive) => {
+    const out: string[] = [];
+    const result = await runHeadlessCli(spec({
+      args: ["-e", "console.log(JSON.stringify({drive:process.env.SystemDrive,secret:process.env.BROKER_TEST_SECRET}));"],
+      inheritEnv: { SYSTEMROOT: "C:\\Windows", systemdrive: drive, BROKER_TEST_SECRET: "private" },
+      envAllowlist: [],
+    }), { onStdoutLine: line => out.push(line), onStderrLine: () => {} });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(out[0]!)).toEqual({ drive: drive ?? "C:" });
+  });
   it.skipIf(process.platform !== "win32")("preserves mixed-case Windows environment keys from a plain object", async () => {
     const out: string[] = [];
     await runHeadlessCli(spec({

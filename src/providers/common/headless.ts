@@ -154,6 +154,10 @@ function buildEnv(spec: HeadlessSpawnSpec): NodeJS.ProcessEnv {
   env.PATH = inherited("PATH") ?? "";
   if (process.platform === "win32") {
     env.SystemRoot = inherited("SystemRoot") ?? "C:\\Windows";
+    // Windows components expand %SystemDrive% even when launched from a
+    // scrubbed environment. Omitting it can create a literal relative cache
+    // tree in the workspace. Keep this structural OS value, not ambient secrets.
+    env.SystemDrive = inherited("SystemDrive") ?? path.win32.parse(env.SystemRoot).root.replace(/\\$/, "");
     // PowerShell needs PATHEXT even for native .exe calls inside a .ps1 shim.
     env.PATHEXT = inherited("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD";
     if (inherited("ComSpec")) env.ComSpec = inherited("ComSpec");

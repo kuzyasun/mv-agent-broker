@@ -135,3 +135,10 @@ are tested with owned Node processes. Hosted tool-domain quiescence and complete
 native profiles remain open. The observed ZCode Individual provider-1310 limit
 led to an explicit Cursor/Gemini development route; Start Plan remains unverified
 and unavailable through the verified standalone account runtime.
+
+The [Cursor native history checkpoint](native-smoke/2026-10-01-cursor-history/report.md)
+records failed native author final capture, explicit integrated Gemini review,
+coordinator repairs, and offline continuity tests for adapter 0.2.6. The private
+config/chat root survives turns; immutable policies remain separate. Real clean
+memory recall and workspace cleanliness are validated separately from these
+offline gates.

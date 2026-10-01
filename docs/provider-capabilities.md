@@ -14,7 +14,7 @@ bridge/daemon processes ([evidence](native-smoke/2026-09-30-codex/report.md)).
 Setup, auth ownership, model/effort rules and limitations for every provider:
 [provider operations guide](providers.md).
 
-Current managed Windows transport versions are Cursor 0.2.5, ZCode 0.2.2 and
+Current managed Windows transport versions are Cursor 0.2.6, ZCode 0.2.2 and
 Antigravity/Claude/Codex 0.2.1. Native smoke rows below retain their original
 tested adapter versions; they do not validate a new version-bound profile.
 The [Windows supervision checkpoint](native-smoke/2026-10-01-windows-job/report.md)

@@ -4,7 +4,7 @@
  * Implements ProviderAdapter contract (§13.2, §14.3) using headless CLI runner.
  */
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -60,6 +60,29 @@ export interface CursorAdapterOptions {
   stateRoot?: string;
 }
 
+/** Native chat-store layout from PROGRAM 2026.09.28-64d2043 (paths.js WI + state/index.ts). */
+export function cursorNativeChatStorePath(configDir: string, workspaceCwd: string, nativeConversationId: string): string {
+  if (!/^[A-Za-z0-9_-]{1,256}$/.test(nativeConversationId)) {
+    throw new BrokerError("SESSION_NOT_RESUMABLE", "Cursor native reference is not a safe opaque path component.", { executionStarted: false });
+  }
+  const workspaceKey = createHash("md5").update(path.resolve(workspaceCwd)).digest("hex");
+  return path.join(configDir, "chats", workspaceKey, nativeConversationId, "store.db");
+}
+
+function hasSafeNativeStore(storePath: string): boolean {
+  const root = path.parse(storePath).root;
+  let current = root;
+  const components = storePath.slice(root.length).split(path.sep).filter(Boolean);
+  for (const [index, component] of components.entries()) {
+    current = path.join(current, component);
+    const stat = lstatSync(current, { throwIfNoEntry: false });
+    if (!stat || stat.isSymbolicLink() || (index === components.length - 1 ? !stat.isFile() : !stat.isDirectory())) return false;
+    const resolved = path.resolve(realpathSync(current));
+    if (process.platform === "win32" ? resolved.toLowerCase() !== current.toLowerCase() : resolved !== current) return false;
+  }
+  return true;
+}
+
 /** Check every existing component before creating descendants or following links. */
 function ensurePrivateDirectory(directory: string): void {
   const absolute = path.resolve(directory);
@@ -91,14 +114,22 @@ function ensurePrivateDirectory(directory: string): void {
   }
 }
 
+function assertRegularOwnedFileOrAbsent(filePath: string, fieldName: string): void {
+  const stat = lstatSync(filePath, { throwIfNoEntry: false });
+  if (stat && (stat.isSymbolicLink() || !stat.isFile())) {
+    throw new BrokerError("PROVIDER_INCOMPATIBLE", `Cursor ${fieldName} is a symlink or unsupported file type.`, { executionStarted: false });
+  }
+}
+
 export class CursorAdapter implements ProviderAdapter {
   readonly providerId = "cursor";
-  readonly adapterVersion = "0.2.5";
+  readonly adapterVersion = "0.2.6";
 
   readonly stateRoot?: string;
   private readonly binary: string;
   private readonly defaultModel: string;
   private readonly turnPermissionAcquired = new Map<string, boolean>();
+  private readonly sessionConfigOwners = new Map<string, string>();
   private fallbackStateRoot: string | null = null;
 
   constructor(opts: CursorAdapterOptions = {}) {
@@ -121,6 +152,12 @@ export class CursorAdapter implements ProviderAdapter {
     gate: DispatchGate,
     onEvent: (ev: AdapterEvent) => void,
   ): Promise<TurnExecutionResult> {
+    const requestSessionHash = createHash("sha256").update(req.session_id).digest("hex");
+    const knownRoot = this.stateRoot ?? this.fallbackStateRoot;
+    if (this.sessionConfigOwners.has(requestSessionHash) || (knownRoot !== null && knownRoot !== undefined &&
+        lstatSync(path.join(path.resolve(knownRoot), "sessions", requestSessionHash, "unsettled-unknown"), { throwIfNoEntry: false }))) {
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", "Cursor session configuration is busy or execution is unsettled.", { executionStarted: false });
+    }
     // Require an operator-selected model; historical defaults can disappear.
     const model = req.requested_model || this.defaultModel;
     if (!model.trim()) {
@@ -144,15 +181,16 @@ export class CursorAdapter implements ProviderAdapter {
       args.push("--resume", req.native_conversation_ref);
     }
 
-    let configDir: string | null = null;
+    let stableConfigDir: string | null = null;
+    let turnPolicyDir: string | null = null;
     let auditLogFile: string | null = null;
     let reviewerEnv: NodeJS.ProcessEnv | null = null;
     let pollInterval: NodeJS.Timeout | null = null;
-    // Set when the turn ends without a definitive outcome (timeout, kill,
-    // nonzero exit, missing result). The private config/audit directory is
-    // then preserved for a future managed supervisor instead of being
-    // destroyed together with the audit evidence.
+    let sessionLockKey: string | null = null;
+    // Typed EXECUTION_UNKNOWN only: blocks later cli-config refresh until reconcile.
+    // Known local failures may retain per-turn policy/audit evidence separately.
     let executionUnknown = false;
+    let retainTurnEvidence = false;
 
     try {
       if (req.role === "reviewer") {
@@ -173,24 +211,70 @@ export class CursorAdapter implements ProviderAdapter {
         const xdgConfigHome = path.join(sessionDir, "xdg-config");
         const xdgCacheHome = path.join(sessionDir, "xdg-cache");
         const xdgDataHome = dataDir;
+        stableConfigDir = path.join(sessionDir, "config");
+        const turnsRoot = path.join(sessionDir, "turns");
 
-        for (const directory of [homeDir, dataDir, xdgConfigHome, xdgCacheHome]) ensurePrivateDirectory(directory);
+        for (const directory of [homeDir, dataDir, xdgConfigHome, xdgCacheHome, stableConfigDir, turnsRoot]) {
+          ensurePrivateDirectory(directory);
+        }
 
-        configDir = mkdtempSync(path.join(realpathSync(os.tmpdir()), "agent-broker-cursor-"));
-        const configFile = path.join(configDir, "cli-config.json");
+        const unsettledMarker = path.join(sessionDir, "unsettled-unknown");
+        if (lstatSync(unsettledMarker, { throwIfNoEntry: false })) {
+          throw new BrokerError(
+            "PROVIDER_INCOMPATIBLE",
+            "Cursor session has unsettled unknown execution; config refresh is blocked until reconcile.",
+            { executionStarted: false },
+          );
+        }
+
+        const existingOwner = this.sessionConfigOwners.get(sessionHash);
+        if (existingOwner !== undefined) {
+          throw new BrokerError(
+            "PROVIDER_INCOMPATIBLE",
+            "Cursor session config update already in progress for another turn.",
+            { executionStarted: false },
+          );
+        }
+        this.sessionConfigOwners.set(sessionHash, req.turn_id);
+        sessionLockKey = sessionHash;
+
+        const turnHash = createHash("sha256").update(req.turn_id).digest("hex");
+        const candidatePolicyDir = path.join(turnsRoot, turnHash);
+        if (lstatSync(candidatePolicyDir, { throwIfNoEntry: false })) {
+          throw new BrokerError("PROVIDER_INCOMPATIBLE", "Cursor immutable turn policy already exists.", { executionStarted: false });
+        }
+        turnPolicyDir = candidatePolicyDir;
+        ensurePrivateDirectory(turnPolicyDir);
+
+        const spawnCwd = req.workspace_path ?? process.cwd();
+        if (req.native_conversation_ref !== null && req.native_conversation_ref !== undefined && req.native_conversation_ref.length > 0) {
+          // Metadata-only availability: exact PROGRAM path contract, immutable cwd bytes, never read store contents.
+          const storePath = cursorNativeChatStorePath(stableConfigDir, spawnCwd, req.native_conversation_ref);
+          if (!hasSafeNativeStore(storePath)) {
+            throw new BrokerError(
+              "SESSION_NOT_RESUMABLE",
+              "Cursor resume store is unavailable under the owned private chat path.",
+              { executionStarted: false },
+            );
+          }
+        }
+
+        const configFile = path.join(stableConfigDir, "cli-config.json");
+        assertRegularOwnedFileOrAbsent(configFile, "cli-config.json");
+        // Refresh only after prior managed quiescence (serial core turns + no unsettled marker).
         atomicWriteFile(configFile, JSON.stringify(reviewerConfig, null, 2));
 
-        auditLogFile = path.join(configDir, "reviewer-audit.jsonl");
-        const policyFile = path.join(configDir, "reviewer-policy.json");
-        // Private exclusions stay precise: the sessions tree (every session's
-        // home/data/config, this one and any other turn's) and the per-turn
-        // config directory holding the policy and audit log. The broker state
-        // root itself is never blanket-forbidden — reviewer slots and bound
-        // inputs live under it and must stay readable.
+        auditLogFile = path.join(turnPolicyDir, "reviewer-audit.jsonl");
+        const policyFile = path.join(turnPolicyDir, "reviewer-policy.json");
+        assertRegularOwnedFileOrAbsent(policyFile, "reviewer-policy.json");
+        // Private exclusions stay precise: the sessions tree (home/data/config/turns
+        // for every session) covers stable history and per-turn policy/audit.
+        // The broker state root itself is never blanket-forbidden — reviewer slots
+        // and bound inputs live under it and must stay readable.
         const hookPolicy = buildReviewerHookPolicy({
           workspace_path: req.workspace_path,
           read_only_input_paths: req.read_only_input_paths,
-          forbidden_paths: [path.join(stateRoot, "sessions"), configDir],
+          forbidden_paths: [path.join(stateRoot, "sessions")],
           audit_log_path: auditLogFile,
           session_id: req.session_id,
           turn_id: req.turn_id,
@@ -209,7 +293,7 @@ export class CursorAdapter implements ProviderAdapter {
           XDG_CONFIG_HOME: xdgConfigHome,
           XDG_CACHE_HOME: xdgCacheHome,
           XDG_DATA_HOME: xdgDataHome,
-          CURSOR_CONFIG_DIR: configDir,
+          CURSOR_CONFIG_DIR: stableConfigDir,
           CURSOR_DATA_DIR: dataDir,
         };
       }
@@ -338,6 +422,7 @@ export class CursorAdapter implements ProviderAdapter {
       const cliResult = await runHeadlessCli(spec, cliEvents);
       if (cliResult.uncertainAfterResume) {
         executionUnknown = true;
+        retainTurnEvidence = true;
         throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
       }
       const summary = summarizeCursorTurn(events);
@@ -345,7 +430,7 @@ export class CursorAdapter implements ProviderAdapter {
       if (cliResult.timedOut || cliResult.killed || cliResult.exitCode !== 0) {
         // Keep private policy/audit evidence even after a known local failure.
         // This retention flag does not classify the broker outcome as UNKNOWN.
-        executionUnknown = true;
+        retainTurnEvidence = true;
         const message = cliResult.timedOut ? `Cursor timed out (${cliResult.timedOut}).`
           : cliResult.killed ? `Cursor execution interrupted: ${cancelReason ?? "cancelled"}.`
           : cliResult.stderrTail || `Cursor exited with code ${cliResult.exitCode}.`;
@@ -373,18 +458,20 @@ export class CursorAdapter implements ProviderAdapter {
       }
 
       if (summary.sawResult && summary.isError) {
+        retainTurnEvidence = true;
         throw new BrokerError("PROVIDER_PROTOCOL_ERROR", summary.resultText || "cursor execution failed", {
           executionStarted: true,
         });
       }
 
-      executionUnknown = true;
+      retainTurnEvidence = true;
       throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "stream closed without result", {
         executionStarted: true,
       });
     } catch (err) {
       if (err instanceof BrokerError && err.code === "EXECUTION_UNKNOWN") {
         executionUnknown = true;
+        retainTurnEvidence = true;
       }
       throw err;
     } finally {
@@ -424,12 +511,29 @@ export class CursorAdapter implements ProviderAdapter {
           // ignore audit read failures
         }
       }
-      if (configDir !== null && !executionUnknown) {
+      // Never remove stable config/chats/home/data. Only the per-turn policy/audit
+      // directory may be removed after definitive completion (not UNKNOWN).
+      if (turnPolicyDir !== null && !retainTurnEvidence && !executionUnknown) {
         try {
-          rmSync(configDir, { recursive: true, force: true });
+          rmSync(turnPolicyDir, { recursive: true, force: true });
         } catch {
           // ignore cleanup failures
         }
+      }
+      if (executionUnknown && stableConfigDir !== null) {
+        try {
+          const sessionDir = path.dirname(stableConfigDir);
+          const marker = path.join(sessionDir, "unsettled-unknown");
+          assertRegularOwnedFileOrAbsent(marker, "unsettled-unknown");
+          writeFileSync(marker, req.turn_id, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        } catch {
+          // Core retains the durable unknown launch; keep the in-memory owner
+          // blocked as well, even if writing this extra marker failed.
+        }
+      }
+      if (sessionLockKey !== null && !executionUnknown) {
+        const owner = this.sessionConfigOwners.get(sessionLockKey);
+        if (owner === req.turn_id) this.sessionConfigOwners.delete(sessionLockKey);
       }
     }
   }

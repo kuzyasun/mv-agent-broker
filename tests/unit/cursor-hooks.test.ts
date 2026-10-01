@@ -3,10 +3,10 @@
  *
  * Exercises the real generated hook script and command against the actual
  * shared broker state layout: reviewer slots (state/slots) and bound inputs
- * (state/inputs) stay readable while blobs, private session homes (including
- * other turns), the per-turn config/audit directory, and unbound paths fail
- * closed. Also covers byte-bounded stdin, strict native tool_input shapes,
- * canonical audit labels, symlink hardening, and per-turn grant refresh.
+ * (state/inputs) stay readable while blobs, private session trees (stable
+ * home/data/config/chats and per-turn policy/audit under sessions), and unbound
+ * paths fail closed. Also covers byte-bounded stdin, strict native tool_input
+ * shapes, canonical audit labels, symlink hardening, and per-turn grant refresh.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -57,8 +57,9 @@ const hookScriptPath = fileURLToPath(new URL("../../src/providers/cursor/permiss
 
 /**
  * Shared broker state layout: workspace = state/slots/<slot>, inputs =
- * state/inputs, private blobs and per-session homes under state, and a
- * per-turn private config directory holding the policy and the audit log.
+ * state/inputs, private blobs and per-session homes/config under state/sessions,
+ * and a unique per-turn policy/audit directory (also under the forbidden
+ * sessions tree when installed by the adapter).
  */
 function createTestEnv() {
   const root = mkdtempSync(path.join(os.tmpdir(), "broker-cursor-hooks-test-"));

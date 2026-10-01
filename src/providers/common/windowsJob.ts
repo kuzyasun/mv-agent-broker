@@ -209,6 +209,7 @@ export function runWindowsJob(spec: WindowsJobLaunchSpec): Promise<WindowsJobRes
         cwd: spec.cwd,
         env: {
           SystemRoot: HOST_SYSTEM_ROOT,
+          SystemDrive: Object.entries(process.env).find(([key]) => key.toUpperCase() === "SYSTEMDRIVE")?.[1] ?? path.win32.parse(HOST_SYSTEM_ROOT).root.replace(/\\$/, ""),
           ComSpec: process.env.ComSpec ?? "C:\\Windows\\System32\\cmd.exe",
           PATH: process.env.PATH ?? "",
           PATHEXT: process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
