@@ -12,12 +12,43 @@ import { pathToFileURL } from "node:url";
 import {
   assertWindowsJobCapable,
   createLineAssembler,
+  createOutputQuota,
+  DEFAULT_MAX_LINE_BYTES,
+  DEFAULT_MAX_STREAM_EVENTS,
+  DEFAULT_MAX_TOTAL_BYTES,
   querySelfOwnerCreationTime,
   runWindowsJob,
   WindowsJobCapabilityError,
 } from "../../src/providers/common/windowsJob.ts";
 
 const isWin = process.platform === "win32";
+
+describe("output quota overrides", () => {
+  it("NaN/Infinity/zero/negative overrides never disable a limit", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1024]) {
+      const quota = createOutputQuota({ maxLineBytes: bad, maxTotalBytes: bad, maxEvents: bad });
+      expect(quota.maxLineBytes).toBe(DEFAULT_MAX_LINE_BYTES);
+      expect(quota.maxTotalBytes).toBe(DEFAULT_MAX_TOTAL_BYTES);
+      expect(quota.maxEvents).toBe(DEFAULT_MAX_STREAM_EVENTS);
+    }
+  });
+
+  it("a NaN line cap still overflows at the default budget instead of passing everything", () => {
+    const lines: string[] = [];
+    let overflow: string | null = null;
+    const assembler = createLineAssembler((l) => lines.push(l), {
+      maxLineBytes: Number.NaN,
+      maxTotalBytes: Number.NaN,
+      maxEvents: Number.NaN,
+      onOverflow: (r) => {
+        overflow = r;
+      },
+    });
+    assembler(Buffer.from("x".repeat(DEFAULT_MAX_LINE_BYTES + 1), "utf8"));
+    expect(overflow).toBe("line");
+    expect(lines).toEqual([]);
+  });
+});
 
 describe("WindowsJob capability", () => {
   it("refuses non-win32 honestly", () => {
@@ -395,4 +426,60 @@ describe.runIf(isWin)("runWindowsJob owned Node children", () => {
     expect(parsed.a).toContain("你好");
     expect(parsed.s).toContain("привет");
   }, 60_000);
+
+  it("createLineAssembler drains after UTF-8 line byte overflow without throwing mid-decode", () => {
+    const lines: string[] = [];
+    let overflow: string | null = null;
+    const assembler = createLineAssembler((l) => lines.push(l), {
+      maxLineBytes: 20,
+      maxTotalBytes: 1024,
+      maxEvents: 100,
+      onOverflow: (r) => {
+        overflow = r;
+      },
+    });
+    const payload = Buffer.from("漢".repeat(40), "utf8"); // no newline
+    for (let i = 0; i < payload.length; i += 5) {
+      assembler(payload.subarray(i, i + 5));
+    }
+    assembler.flush();
+    expect(overflow).toBe("line");
+    expect(lines).toEqual([]);
+  });
+
+  it("createLineAssembler caps many short lines via event budget", () => {
+    const lines: string[] = [];
+    let overflow: string | null = null;
+    const assembler = createLineAssembler((l) => lines.push(l), {
+      maxLineBytes: 1024,
+      maxTotalBytes: 1024 * 1024,
+      maxEvents: 3,
+      onOverflow: (r) => {
+        overflow = r;
+      },
+    });
+    assembler(Buffer.from("a\nb\nc\nd\ne\n", "utf8"));
+    expect(overflow).toBe("events");
+    expect(lines.length).toBe(3);
+  });
+});
+
+describe.runIf(isWin)("runWindowsJob native output quota", () => {
+  it("cancels owned job on native output quota overflow and waits for quiescence", async () => {
+    const lines: string[] = [];
+    const result = await runWindowsJob({
+      applicationName: process.execPath,
+      args: ["-e", "for(;;) process.stdout.write('xxxxxxxx');"],
+      cwd: process.cwd(),
+      envPairs: [`SystemRoot=${process.env.SystemRoot}`],
+      childStdin: Buffer.alloc(0),
+      signal: AbortSignal.timeout(15_000),
+      maxNativeOutputBytes: 4096,
+      onBeforeResume: () => undefined,
+      onStdoutChunk: createLineAssembler((l) => lines.push(l), { maxLineBytes: 1024, maxTotalBytes: 1024 * 1024 }),
+    });
+    expect(result.resumed).toBe(true);
+    expect(result.quiesced).toBe(true);
+    expect(result.outputLimited || result.terminationReason === "output_limit" || result.killed).toBe(true);
+  }, 30_000);
 });

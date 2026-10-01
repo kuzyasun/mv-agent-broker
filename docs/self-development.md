@@ -82,7 +82,7 @@ Production adapters do not rely on reading Desktop chat caches for reports.
 | Effective policy and inputs | Core narrowing and immutable binding completed; native mandatory enforcement, read/search-only reviewer and required-input enforcement remain open |
 | Runtime supervision | Durable launch/process ownership, managed descendant quiescence, crash/disconnect/restart cases and explicit UNKNOWN reconciliation |
 | Preflight and binding | Core admission preflight and immutable handoff completed; native CLI/auth/catalog readiness and lifetime account/config binding remain open |
-| Workspaces/resources | Broker-created Git worktrees, total storage admission including staging, bounded output and event wait behavior |
+| Workspaces/resources | Bounded output/report artifacts implemented; broker-created Git worktrees, total storage admission including staging and event wait remain |
 | Complete native feedback loop | Worker → review findings artifact → fix → review, R1/S1/R2/S2 continuity, cancellation during native tools |
 | Operator setup | Validated registry configuration, runnable startup packaging, practical recovery/triage workflow |
 | Acceptance closure | A01–A53 evidence by actual platform/provider/role/profile; retain unknown/failed statuses where no native proof exists |
@@ -142,3 +142,13 @@ coordinator repairs, and offline continuity tests for adapter 0.2.6. The private
 config/chat root survives turns; immutable policies remain separate. Real clean
 memory recall and workspace cleanliness are validated separately from these
 offline gates.
+
+The [clean Cursor 0.2.6 pair](native-smoke/2026-10-01-cursor-clean-continuity-repaired/report.md)
+confirmed same-conversation memory and changed S1/S2 source projection with a
+short state path; the failed long-path SQLite attempt remains retained.
+The [bounded output/report checkpoint](native-smoke/2026-10-01-bounded-reports/report.md)
+records Cursor authorship, renewed GLM Flash/max repair, independent reviews
+and coordinator crash/retention/Unicode repairs. Native and offline evidence
+remain distinct. The operator renewed GLM quota on 2026-10-01 and authorized
+Individual Flash/max development and selected GLM/high reviews again; the
+earlier provider-1310 failure is historical evidence, not a current quota check.

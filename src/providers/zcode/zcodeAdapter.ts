@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderAdapter, AdapterEvent, DispatchGate, RuntimeObservation, TurnExecutionRequest, TurnExecutionResult } from "../../runtime/adapter.ts";
+import { boundAgentReport } from "../../runtime/adapter.ts";
 import { runHeadlessCli } from "../common/headless.ts";
 import { BrokerError } from "../../shared/errors.ts";
 import { createZcodePersonalConfig, resolveZcodeBuiltinPath } from "./nativeConfig.ts";
@@ -29,7 +30,7 @@ export interface ZcodeAdapterOptions {
 
 export class ZcodeAdapter implements ProviderAdapter {
   readonly providerId = "zcode";
-  readonly adapterVersion = "0.2.2";
+  readonly adapterVersion = "0.2.3";
   private readonly opts: ZcodeAdapterOptions;
   constructor(opts: ZcodeAdapterOptions) { this.opts = opts; }
 
@@ -101,8 +102,12 @@ export class ZcodeAdapter implements ProviderAdapter {
         executionUnknown = true;
         throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
       }
-      if (outputTooLarge || result.timedOut || result.killed || result.exitCode !== 0) {
-        const message = outputTooLarge ? "ZCode JSON output exceeds the adapter limit." : result.timedOut ? `ZCode timed out (${result.timedOut}).` : result.killed ? "ZCode execution interrupted." : result.stderrTail || `ZCode exited with code ${result.exitCode}.`;
+      if (result.outputLimited || outputTooLarge || result.timedOut || result.killed || result.exitCode !== 0) {
+        const message = result.outputLimited ? `ZCode output limit exceeded (${result.outputLimitReason ?? "total"}).`
+          : outputTooLarge ? "ZCode JSON output exceeds the adapter limit."
+          : result.timedOut ? `ZCode timed out (${result.timedOut}).`
+          : result.killed ? "ZCode execution interrupted."
+          : result.stderrTail || `ZCode exited with code ${result.exitCode}.`;
         throw new BrokerError("PROVIDER_PROTOCOL_ERROR", message, { executionStarted: true });
       }
       const parsed = parseZcodeResult(text);
@@ -113,8 +118,12 @@ export class ZcodeAdapter implements ProviderAdapter {
         throw new BrokerError("SESSION_NOT_RESUMABLE", "ZCode returned a different native session during explicit resume.", { executionStarted: true });
       }
       onEvent({ type: "progress", payload: { label: "json-run-complete" } });
+      const provenance = parsed.projection ? "partial_projection" : undefined;
       return { native_outcome: "completed", native_conversation_ref: parsed.sessionId,
-        agent_reported: { summary: parsed.response.slice(0, 4000) || "zcode turn complete", format_status: "text_only" } };
+        agent_reported: boundAgentReport(parsed.response || "zcode turn complete", {
+          format_status: "text_only",
+          ...(provenance ? { provenance } : {}),
+        }) };
     } catch (err) {
       if (err instanceof BrokerError && err.code === "EXECUTION_UNKNOWN") {
         executionUnknown = true;

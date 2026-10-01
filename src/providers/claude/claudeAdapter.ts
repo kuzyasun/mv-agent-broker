@@ -10,6 +10,7 @@ import type {
   TurnExecutionRequest,
   TurnExecutionResult,
 } from "../../runtime/adapter.ts";
+import { boundAgentReport } from "../../runtime/adapter.ts";
 import { BrokerError } from "../../shared/errors.ts";
 import { runHeadlessCli, type HeadlessCliResult } from "../common/headless.ts";
 import { parseClaudeStreamLine } from "./hookEvents.ts";
@@ -48,7 +49,7 @@ const CLAUDE_ENV_ALLOWLIST = [
 
 export class ClaudeAdapter implements ProviderAdapter {
   readonly providerId = "claude-code";
-  readonly adapterVersion = "0.2.1";
+  readonly adapterVersion = "0.2.2";
   private readonly binary: string;
 
   constructor(opts?: ClaudeAdapterOptions) {
@@ -136,7 +137,7 @@ export class ClaudeAdapter implements ProviderAdapter {
             if (ev.kind === "assistant_text") {
               onEvent({
                 type: "progress",
-                payload: { label: ev.text.slice(0, 80) },
+                payload: { label: "status:assistant_text" },
               });
             } else if (ev.kind === "result") {
               streamState.lastResult = { text: ev.text, is_error: ev.is_error };
@@ -158,6 +159,11 @@ export class ClaudeAdapter implements ProviderAdapter {
     }
 
     // Native output never overrides process failure or interruption.
+    if (cliResult.outputLimited) {
+      throw new BrokerError("PROVIDER_PROTOCOL_ERROR", `Claude output limit exceeded (${cliResult.outputLimitReason ?? "total"}).`, {
+        executionStarted: true,
+      });
+    }
     if (cliResult.timedOut || cliResult.killed || cliResult.exitCode !== 0) {
       const message = cliResult.timedOut ? `Claude timed out (${cliResult.timedOut}).`
         : cliResult.killed ? "Claude execution interrupted."
@@ -175,10 +181,7 @@ export class ClaudeAdapter implements ProviderAdapter {
         return {
           native_outcome: "completed",
           native_conversation_ref: nativeRef,
-          agent_reported: {
-            summary: streamState.lastResult.text.slice(0, 4000),
-            format_status: "text_only",
-          },
+          agent_reported: boundAgentReport(streamState.lastResult.text, { format_status: "text_only" }),
         };
       }
       throw new BrokerError("PROVIDER_PROTOCOL_ERROR", streamState.lastResult.text, {

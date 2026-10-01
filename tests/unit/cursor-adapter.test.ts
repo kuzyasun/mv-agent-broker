@@ -306,8 +306,8 @@ describe("Cursor adapter", () => {
     expect(existsSync(path.join(f.stateRoot, "sessions", sessionHash, "config", "chats"))).toBe(false);
     expect(existsSync(f.sentinel)).toBe(false);
   });
-  it("bumps adapter version to 0.2.6", () => {
-    expect(new CursorAdapter().adapterVersion).toBe("0.2.6");
+  it("bumps adapter version to 0.2.7", () => {
+    expect(new CursorAdapter().adapterVersion).toBe("0.2.7");
   });
   it.each(["root", "sessions", "data"])("refuses a private history %s junction before native launch", async component => {
     const f = fixture(); const g = gate();
@@ -674,8 +674,10 @@ describe("Cursor adapter", () => {
     const progressEvents = events.filter(e => e.type === "progress");
     expect(progressEvents.some(e => (e.payload?.label as string)?.includes("thinking"))).toBe(false);
     expect(progressEvents.some(e => (e.payload?.label as string)?.includes("this is internal thinking text"))).toBe(false);
-    expect(progressEvents.some(e => (e.payload?.label as string)?.includes("this is assistant text"))).toBe(true);
-    expect(progressEvents.some(e => (e.payload?.label as string)?.includes("tool_call: Read"))).toBe(true);
+    // Assistant prose is never forwarded as progress — only bounded status/tool labels.
+    expect(progressEvents.some(e => (e.payload?.label as string)?.includes("this is assistant text"))).toBe(false);
+    expect(progressEvents.some(e => e.payload?.label === "status:assistant_text")).toBe(true);
+    expect(progressEvents.some(e => e.payload?.label === "tool_call:Read")).toBe(true);
   });
   it("configures stateRoot from bootstrap buildAdapters", async () => {
     const { buildAdapters } = await import("../../src/daemon/bootstrap.ts");

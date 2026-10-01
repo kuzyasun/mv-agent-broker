@@ -14,11 +14,14 @@ bridge/daemon processes ([evidence](native-smoke/2026-09-30-codex/report.md)).
 Setup, auth ownership, model/effort rules and limitations for every provider:
 [provider operations guide](providers.md).
 
-Current managed Windows transport versions are Cursor 0.2.6, ZCode 0.2.2 and
-Antigravity/Claude/Codex 0.2.1. Native smoke rows below retain their original
+Current managed Windows transport versions are Cursor 0.2.7, ZCode 0.2.3 and
+Antigravity/Claude/Codex 0.2.2. Native smoke rows below retain their original
 tested adapter versions; they do not validate a new version-bound profile.
 The [Windows supervision checkpoint](native-smoke/2026-10-01-windows-job/report.md)
 uses offline owned processes and makes no full native support claim.
+The [bounded output/report checkpoint](native-smoke/2026-10-01-bounded-reports/report.md)
+records shared transport limits and complete, recoverable report artifacts;
+its offline gates do not promote a new native profile.
 
 Legend — `support`: native | emulated | unsupported | unknown;
 `verification`: configured | documented | smoke_tested | failed.
@@ -85,6 +88,7 @@ unverified. Native rate-limit status was allowed; quota rejection was not tested
 | trusted all-tool preToolUse hook | unknown | configured | 0.2.4 flat native config, pinned policy hash/physical grants and bounded receipts passed offline checks; [checkpoint](native-smoke/2026-10-01-cursor-hooks/report.md); full forbidden-tool/input-paging enforcement remains unverified |
 | hook outside-Read denial on 0.2.4 | native | smoke_tested | exact outside-path denial receipt, 7 hook receipts, no marker disclosure; [native probe](native-smoke/2026-10-01-cursor-hooks-native/report.md); limited scenario only |
 | private reviewer native continuity on 0.2.4 | unknown | failed | same UUID, S1/S2 readable, fresh memory tag not recalled; per-turn CURSOR_CONFIG_DIR cleanup destroys native chats; [clean probe](native-smoke/2026-10-01-cursor-clean-continuity/report.md) |
+| private reviewer native continuity on 0.2.6 | native | smoke_tested | same native ID, fresh tag recalled without reinjection and correct S1/S2 projection under a short owned state root; long path failed SQLite; no restart/full-profile claim ([clean repaired pair](native-smoke/2026-10-01-cursor-clean-continuity-repaired/report.md)) |
 | reviewer Write/Shell denial / worker writes | unknown | configured | 0.2.3 config and agent-reported denials; disposable sentinel absent, native denial receipts unavailable; --trust is workspace trust, not enforcement |
 | quota-error classification | unknown | configured | four successful requests; quota exhaustion not observed; startup timeout no longer mislabeled RATE_LIMITED |
 | structured final output | unsupported | documented | text_only |

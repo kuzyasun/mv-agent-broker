@@ -211,4 +211,66 @@ describe("cleanup and agent_artifact_read (§15.3, §10.1)", () => {
       h.cleanup();
     }
   });
+  it("agent_artifact_read losslessly pages UTF-8 reports and partial JSON", () => {
+    const h = createHarness();
+    try {
+      for (const text of ["А🙂中éZ", JSON.stringify({ findings: "Україна🙂" })]) {
+        const art = h.publishArtifact(text);
+        let offset = 0;
+        let rebuilt = "";
+        let pages = 0;
+        do {
+          const page = h.core.artifactRead(h.seed.coordinatorId, art.artifact_id, { offset, max_bytes: 5 });
+          expect(page.offset).toBe(offset);
+          expect(page.bytes_read).toBe(Buffer.byteLength(page.data!, "utf8"));
+          expect(page.bytes_read).toBeGreaterThan(0);
+          expect(page.bytes_read).toBeLessThanOrEqual(5);
+          expect(page.next_offset).toBe(offset + page.bytes_read);
+          expect(page.data).not.toContain("�");
+          rebuilt += page.data;
+          offset = page.next_offset;
+          pages++;
+          if (!page.truncated) break;
+          if (pages > Buffer.byteLength(text)) throw new Error("Paging did not advance");
+        } while (true);
+        expect(rebuilt).toBe(text);
+        expect(offset).toBe(Buffer.byteLength(text));
+      }
+    } finally { h.cleanup(); }
+  });
+
+  it("agent_artifact_read rejects split offsets and undersized Unicode pages without zero progress", () => {
+    const h = createHarness();
+    try {
+      const art = h.publishArtifact("🙂A");
+      for (const offset of [1, 2, 3]) {
+        expectBrokerError(() => h.core.artifactRead(h.seed.coordinatorId, art.artifact_id, { offset }), "INVALID_REQUEST");
+      }
+      expectBrokerError(() => h.core.artifactRead(h.seed.coordinatorId, art.artifact_id, { max_bytes: 3 }), "INVALID_REQUEST");
+      expectBrokerError(() => h.core.artifactRead(h.seed.coordinatorId, art.artifact_id, { offset: Number.MAX_SAFE_INTEGER + 1 }), "INVALID_REQUEST");
+      const last = h.core.artifactRead(h.seed.coordinatorId, art.artifact_id, { offset: 4, max_bytes: 1 });
+      expect(last.data).toBe("A");
+      expect(last.next_offset).toBe(5);
+      expect(last.truncated).toBe(false);
+      for (const offset of [5, 10]) {
+        const empty = h.core.artifactRead(h.seed.coordinatorId, art.artifact_id, { offset });
+        expect(empty.data).toBe("");
+        expect(empty.bytes_read).toBe(0);
+        expect(empty.next_offset).toBe(offset);
+        expect(empty.truncated).toBe(false);
+      }
+    } finally { h.cleanup(); }
+  });
+
+  it("agent_artifact_read refuses invalid UTF-8 even when the stored hash matches", () => {
+    const h = createHarness();
+    try {
+      const art = h.publishArtifact("valid");
+      const invalid = openBlobStore(h.blobRoot).write(h.seed.projectId, new Uint8Array([0xff]));
+      h.db.raw.prepare("UPDATE artifacts SET content_hash = ?, size_bytes = ? WHERE artifact_id = ?")
+        .run(invalid.hash, invalid.size, art.artifact_id);
+      expectBrokerError(() => h.core.artifactRead(h.seed.coordinatorId, art.artifact_id), "ARTIFACT_CORRUPT");
+    } finally { h.cleanup(); }
+  });
+
 });

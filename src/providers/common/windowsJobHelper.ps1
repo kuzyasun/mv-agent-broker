@@ -46,6 +46,8 @@ public class BrokerJobConfig
     public string OwnerCreationTime;
     public int ResumeTimeoutMs;
     public int TerminateQuiesceMs;
+    /** Combined native stdout+stderr relay cap (bytes). <=0 means default 8 MiB. */
+    public long MaxNativeOutputBytes;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -370,6 +372,8 @@ public static class BrokerJobNative
         public uint RootExitCode;
         public volatile string TerminationReason;
         public int LastQueryError;
+        public long NativeBytesEmitted;
+        public volatile bool OutputLimited;
 
         public uint ActiveProcesses()
         {
@@ -387,11 +391,40 @@ public static class BrokerJobNative
 
         public void PumpNative()
         {
+            long cap = Cfg.MaxNativeOutputBytes > 0 ? Cfg.MaxNativeOutputBytes : (8L * 1024L * 1024L);
             byte[] chunk;
             while (NativeOut.TryTake(out chunk))
+            {
+                if (OutputLimited)
+                {
+                    // Drain/discard after quota — do not relay or accumulate strings.
+                    continue;
+                }
+                NativeBytesEmitted += chunk.LongLength;
+                if (NativeBytesEmitted > cap)
+                {
+                    OutputLimited = true;
+                    CancelRequested = true;
+                    if (TerminationReason == null) TerminationReason = "output_limit";
+                    try { EmitControl("output_limit", "{\"reason\":\"total\"}"); } catch { }
+                    continue;
+                }
                 EmitControl("stdout_chunk", "{\"b64\":\"" + Convert.ToBase64String(chunk) + "\"}");
+            }
             while (NativeErr.TryTake(out chunk))
+            {
+                if (OutputLimited) continue;
+                NativeBytesEmitted += chunk.LongLength;
+                if (NativeBytesEmitted > cap)
+                {
+                    OutputLimited = true;
+                    CancelRequested = true;
+                    if (TerminationReason == null) TerminationReason = "output_limit";
+                    try { EmitControl("output_limit", "{\"reason\":\"total\"}"); } catch { }
+                    continue;
+                }
                 EmitControl("stderr_chunk", "{\"b64\":\"" + Convert.ToBase64String(chunk) + "\"}");
+            }
         }
     }
 
@@ -860,6 +893,11 @@ try {
   $outJob.OwnerCreationTime = $ownerCreation
   $outJob.ResumeTimeoutMs = [int]$cfg.resume_timeout_ms
   $outJob.TerminateQuiesceMs = [int]$cfg.terminate_quiesce_ms
+  if ($null -ne $cfg.max_native_output_bytes) {
+    $outJob.MaxNativeOutputBytes = [long]$cfg.max_native_output_bytes
+  } else {
+    $outJob.MaxNativeOutputBytes = 8MB
+  }
 
   $emitControl = [Action[string,string]]{
     param([string]$op, [string]$json)

@@ -163,7 +163,9 @@ describe("A06: durable physical cwd binding", () => {
       let replaced = false;
       h.core.blobStore.write = (project, bytes) => {
         const result = originalWrite(project, bytes);
-        if (!replaced) {
+        // Inject inside final capture rather than the preceding report write.
+        const capturing = h.db.raw.prepare("SELECT COUNT(*) n FROM snapshot_records WHERE state='CAPTURING'").get() as { n: number };
+        if (!replaced && capturing.n > 0) {
           replaced = true;
           renameSync(h.workspaceRoot, retained);
           renameSync(donor, h.workspaceRoot);

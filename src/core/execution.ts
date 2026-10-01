@@ -13,6 +13,7 @@
 import type { RegistryDb } from "../storage/db.ts";
 import {
   appendEvent,
+  expireArtifact,
   getArtifact,
   getCoverageProfile,
   getDaemonState,
@@ -37,17 +38,35 @@ import {
   updateSnapshotState,
   updateTurnFields,
 } from "../storage/repo.ts";
+
 import { BrokerError } from "../shared/errors.ts";
 import type { ArtifactKind } from "../shared/api-types.ts";
 import { newId, ID_PREFIX, sha256Hex } from "../shared/ids.ts";
 import type { Clock } from "../shared/clock.ts";
-import type { Limits, SessionRecord, SnapshotManifest, SnapshotRecord, TurnRecord, TurnState } from "../shared/api-types.ts";
+import type {
+  IntentRecord,
+  Limits,
+  SessionRecord,
+  SnapshotManifest,
+  SnapshotRecord,
+  TurnRecord,
+  TurnState,
+} from "../shared/api-types.ts";
 import {
   assertSessionTransition,
   assertTurnTransition,
   isNonterminalTurnState,
 } from "./transitions.ts";
-import { cloneFrozenPolicy } from "../runtime/adapter.ts";
+import {
+  cloneFrozenPolicy,
+  sanitizeAdapterEvent,
+  AGENT_CONCERN_CHAR_LIMIT,
+  AGENT_LIST_METADATA_LIMIT,
+  AGENT_PROVENANCE_CHAR_LIMIT,
+  AGENT_SUMMARY_CHAR_LIMIT,
+  DEFAULT_MAX_REPORT_BYTES,
+  type AgentReportedResult,
+} from "../runtime/adapter.ts";
 import type {
   DispatchGate,
   ProviderAdapter,
@@ -81,6 +100,104 @@ class DispatchRefusedError extends Error {
   constructor(readonly reason: string) {
     super(`dispatch refused: cancellation accepted (${reason})`);
   }
+}
+
+/**
+ * Publication abort for a lost ownership race: a newer daemon incarnation owns
+ * the registry, so this executor must not mutate. Leaves the durable report
+ * subjournal untouched for the owning executor's recovery — never an evidence
+ * failure, never fabricated success.
+ */
+class StalePublicationError extends Error {
+  constructor() {
+    super("stale executor incarnation; report publication left for the owning executor");
+  }
+}
+
+/**
+ * Report publication subjournal carried inside the turn's pending launch_turn
+ * intent (§14.3) alongside its ownership/continuation keys. Phases:
+ * declared → allocated (artifact id + expected SHA-256/size + pending pin,
+ * atomic BEFORE any blob write) → blob_written → sealed. Schema metadata and
+ * the bounded summary only — never the full prose.
+ */
+interface ReportSubjournal {
+  phase: "declared" | "allocated" | "blob_written" | "sealed";
+  turn_id: string;
+  session_id: string;
+  project_id: string;
+  kind: ArtifactKind;
+  artifact_id?: string;
+  content_hash?: string;
+  size_bytes?: number;
+  baseline_snapshot_id: string | null;
+  target_snapshot_id: string | null;
+  provenance: string | null;
+  summary: string;
+  format_status: "structured" | "text_only";
+  truncated: boolean;
+  claimed_checks?: unknown[];
+  concerns?: string[];
+}
+
+function parseReportSubjournal(value: unknown): ReportSubjournal | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const r = value as Record<string, unknown>;
+  if (
+    r.phase !== "declared" && r.phase !== "allocated" && r.phase !== "blob_written" && r.phase !== "sealed" ||
+    typeof r.turn_id !== "string" ||
+    typeof r.session_id !== "string" ||
+    typeof r.project_id !== "string" ||
+    (r.kind !== "report" && r.kind !== "findings") ||
+    typeof r.summary !== "string" ||
+    (r.format_status !== "structured" && r.format_status !== "text_only") ||
+    typeof r.truncated !== "boolean"
+  ) {
+    return null;
+  }
+  const sub = r as unknown as ReportSubjournal;
+  if (
+    (r.artifact_id !== undefined && typeof r.artifact_id !== "string") ||
+    (r.content_hash !== undefined && typeof r.content_hash !== "string") ||
+    (r.size_bytes !== undefined && (typeof r.size_bytes !== "number" || !Number.isFinite(r.size_bytes)))
+  ) {
+    return null;
+  }
+  return sub;
+}
+
+/** Bounded provenance/concern metadata (schema-only event payloads). */
+function boundProvenance(provenance: string | undefined): string | null {
+  if (typeof provenance !== "string" || provenance.length === 0) return null;
+  return provenance.length > AGENT_PROVENANCE_CHAR_LIMIT
+    ? provenance.slice(0, AGENT_PROVENANCE_CHAR_LIMIT)
+    : provenance;
+}
+
+function boundListMetadata<T>(values: T[] | undefined): T[] | undefined {
+  if (!Array.isArray(values)) return undefined;
+  const result: T[] = [];
+  let budget = 8192;
+  for (const value of values.slice(0, AGENT_LIST_METADATA_LIMIT)) {
+    let safe: unknown;
+    if (typeof value === "string") safe = value.slice(0, AGENT_CONCERN_CHAR_LIMIT);
+    else if (typeof value === "boolean" || typeof value === "number" && Number.isFinite(value)) safe = value;
+    else if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      const projected: Record<string, unknown> = {};
+      for (const key of ["name", "command", "status", "result", "details", "summary", "kind"]) {
+        const entry = (value as Record<string, unknown>)[key];
+        if (typeof entry === "string") projected[key] = entry.slice(0, AGENT_CONCERN_CHAR_LIMIT);
+        else if (typeof entry === "boolean" || typeof entry === "number" && Number.isFinite(entry)) projected[key] = entry;
+      }
+      if (Object.keys(projected).length === 0) continue;
+      safe = projected;
+    } else continue;
+    const size = Buffer.byteLength(JSON.stringify(safe), "utf8");
+    if (size > budget) break;
+    budget -= size;
+    result.push(safe as T);
+  }
+  return result;
 }
 
 /**
@@ -123,6 +240,12 @@ export class TurnExecutor {
   private readonly running = new Map<string, Promise<void>>();
   private readonly cancelWatches = new Map<string, CancelWatch>();
   private readonly faultSkipCommitTurns_ = new Set<string>();
+  /** TEST-ONLY: fail report artifact publication after known native completion. */
+  private readonly faultReportPublicationTurns_ = new Set<string>();
+  /** TEST-ONLY: interrupt publication after durable allocation, BEFORE the blob write. */
+  private readonly faultSkipReportBlobTurns_ = new Set<string>();
+  /** TEST-ONLY: interrupt publication after the blob journal, BEFORE seal (crash-before-seal). */
+  private readonly faultSkipReportSealTurns_ = new Set<string>();
   private expectedIncarnation: string | null = null;
 
   constructor(args: {
@@ -451,22 +574,30 @@ export class TurnExecutor {
       return;
     }
 
-    // Preserve bounded native prose before outcome/finalization. Recovery can
-    // then expose it through the existing agent_reported result field.
+    // Preserve bounded native prose before outcome/finalization. Full text is
+    // sealed as a project report/findings artifact; the event payload stays
+    // schema-only (summary + refs, never full prose double-stored in DB).
     if (this.expectedIncarnation !== null) {
       const daemonState = getDaemonState(this.db);
       if (daemonState && daemonState.incarnation !== this.expectedIncarnation) return;
     }
-    if (result.agent_reported && typeof result.agent_reported.summary === "string" &&
-        (result.agent_reported.format_status === "structured" || result.agent_reported.format_status === "text_only")) {
-      const report = { ...result.agent_reported, summary: result.agent_reported.summary.slice(0, 4000) };
-      const bounded = Buffer.byteLength(JSON.stringify(report), "utf8") <= 64 * 1024
-        ? report : { summary: report.summary, format_status: report.format_status };
-      appendEvent(this.db, { turn_id: turnId, session_id: session.session_id,
-        type: "agent_reported", payload: bounded, created_at: this.clock.now() });
-    }
+    const reported = result.agent_reported;
+    // An ordinary late completion cannot publish evidence or release UNKNOWN.
+    // Only authoritative reconciliation of already durable evidence may do so.
+    if (after.state === "UNKNOWN") return;
+    const declaredReport =
+      reported !== undefined &&
+      typeof reported.summary === "string" &&
+      (reported.format_status === "structured" || reported.format_status === "text_only");
+    const resultNativeRef = result.native_conversation_ref !== ""
+      ? result.native_conversation_ref
+      : (after.native_conversation_ref ?? null);
 
-    if (after.state !== "UNKNOWN") {
+    {
+      // Known native outcome is journaled BEFORE publication (§5.3, §14.3):
+      // the evidence row is the authoritative recovery guard even when the
+      // publication is interrupted before any durable report identity, and a
+      // late UNKNOWN result stays retained but never overrides it.
       const timedOut = after.deadline_at !== null && this.clock.now() > after.deadline_at && watch.reason === "deadline";
       const candidate = result.native_outcome === "completed"
         ? "SUCCEEDED"
@@ -480,18 +611,527 @@ export class TurnExecutor {
         : watch.reason !== null && result.native_outcome === "failed"
           ? "cancelled"
           : "normal";
-      const nativeRef = result.native_conversation_ref !== "" ? result.native_conversation_ref : (after.native_conversation_ref ?? null);
-
-      this.recordOutcomeEvidence(after, {
-        native_outcome: result.native_outcome,
-        termination_hint,
-        candidate,
-        execution_started: true,
-        native_conversation_ref: nativeRef,
-      });
-      // Definite native outcome → FINALIZING → terminal (§6.5.2).
-      this.finalizeWithOutcome(after, session, result, continuation, watch.reason);
+      try {
+        this.db.tx(() => {
+          if (this.staleIncarnation()) return;
+          this.recordOutcomeEvidence(after, {
+            native_outcome: result.native_outcome,
+            termination_hint,
+            candidate,
+            execution_started: true,
+            native_conversation_ref: resultNativeRef,
+          });
+          // Outcome and required-final declaration share one durable commit.
+          if (declaredReport) this.journalDeclaredReportLocked(after, session, reported);
+        });
+      } catch (error) {
+        if (this.staleIncarnation()) return;
+        const reason = (error instanceof Error ? error.message : String(error)).slice(0, 512);
+        this.commitTerminal(after, session, {
+          candidate: "FAILED", native_outcome: result.native_outcome, termination_reason: "normal",
+          execution_started: true, finalization_error: `EVIDENCE_CAPTURE_FAILED: ${reason}`,
+          error_code: "EVIDENCE_CAPTURE_FAILED", detail: { report_publication_failed: true },
+        }, continuation, resultNativeRef ?? undefined);
+        return;
+      }
     }
+
+    if (declaredReport) {
+      try {
+        // Durable declared-final marker before any publication mutation, then
+        // the publication protocol itself (allocation → blob → verified seal).
+        const pub = this.publishAgentReport(after, session, reported);
+        if (!pub.sealed) {
+          // Crash-window semantics: stop subsequent execution. The turn stays
+          // nonterminal; recovery finalizes from the journaled outcome with
+          // the SAME artifact identity and zero inference.
+          return;
+        }
+      } catch (err) {
+        if (err instanceof StalePublicationError) return; // owning executor continues
+        const msg = err instanceof Error ? err.message : String(err);
+        // Known native completion stands; publication failure is explicit evidence failure.
+        this.commitTerminal(after, session, {
+          candidate: "FAILED",
+          native_outcome: result.native_outcome,
+          termination_reason: "normal",
+          execution_started: true,
+          finalization_error: `EVIDENCE_CAPTURE_FAILED: ${msg}`,
+          error_code: "EVIDENCE_CAPTURE_FAILED",
+          detail: { report_publication_failed: true },
+        }, continuation, resultNativeRef ?? undefined);
+        return;
+      }
+    }
+
+    // Definite native outcome → FINALIZING → terminal (§6.5.2).
+    this.finalizeWithOutcome(after, session, result, continuation, watch.reason);
+  }
+
+  // ─── durable report publication (§5.4, §14.3) ──────────────────────────────
+
+  /** The turn's single pending launch_turn intent, or null. */
+  private launchTurnIntent(turnId: string, sessionId: string): IntentRecord | null {
+    const matches = listPendingIntents(this.db, "launch_turn").filter(
+      (i) => i.turn_id === turnId && i.session_id === sessionId,
+    );
+    return matches.length === 1 ? matches[0] ?? null : null;
+  }
+
+  /** True when a different live daemon incarnation owns the registry. */
+  private staleIncarnation(): boolean {
+    if (this.expectedIncarnation === null) return false;
+    const ds = getDaemonState(this.db);
+    return ds !== null && ds.incarnation !== this.expectedIncarnation;
+  }
+
+  /** Read the report subjournal from the turn's pending launch_turn intent. */
+  private readReportSubjournal(turnId: string, sessionId: string): ReportSubjournal | null {
+    const intent = this.launchTurnIntent(turnId, sessionId);
+    if (!intent || !intent.payload) return null;
+    try {
+      const payload = JSON.parse(intent.payload) as Record<string, unknown>;
+      return parseReportSubjournal(payload.report);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Rewrite the launch_turn intent's report subjournal, preserving the
+   * ownership/continuation keys already present. Runs inside the caller's
+   * transaction; the UPDATE is conditional on the intent still being pending.
+   */
+  private writeReportSubjournalLocked(turnId: string, sessionId: string, report: ReportSubjournal, now: number): void {
+    const intent = this.launchTurnIntent(turnId, sessionId);
+    if (!intent) throw new Error("pending launch_turn intent for report publication not found");
+    let payload: Record<string, unknown>;
+    try {
+      payload = intent.payload
+        ? (JSON.parse(intent.payload) as Record<string, unknown>)
+        : {};
+      if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+        throw new Error("corrupt payload");
+      }
+    } catch {
+      throw new Error("corrupt launch_turn intent journal; refusing report publication");
+    }
+    payload.report = report;
+    const res = this.db.raw
+      .prepare("UPDATE intents SET payload = ?, updated_at = ? WHERE intent_id = ? AND state = 'pending'")
+      .run(JSON.stringify(payload), now, intent.intent_id);
+    if (res.changes !== 1) {
+      throw new Error("launch_turn intent no longer pending; refusing report publication");
+    }
+  }
+
+  /**
+   * Journal the declared-final requirement into the launch_turn intent
+   * subjournal BEFORE any publication mutation: a crash after this point
+   * leaves durable proof that a bounded native final existed, so recovery
+   * fails explicitly (EVIDENCE_CAPTURE_FAILED) instead of inventing success.
+   */
+  private journalDeclaredReportLocked(turn: TurnRecord, session: SessionRecord, reported: AgentReportedResult): void {
+    const prior = this.readReportSubjournal(turn.turn_id, session.session_id);
+    if (prior !== null) return; // already durably declared (idempotent)
+    const now = this.clock.now();
+      if (this.staleIncarnation()) throw new StalePublicationError();
+      this.writeReportSubjournalLocked(turn.turn_id, session.session_id, {
+        phase: "declared",
+        turn_id: turn.turn_id,
+        session_id: session.session_id,
+        project_id: turn.project_id,
+        kind: session.role === "reviewer" ? "findings" : "report",
+        baseline_snapshot_id: turn.baseline_snapshot_id,
+        target_snapshot_id: turn.review_target_snapshot_id,
+        provenance: boundProvenance(reported.provenance),
+        summary: reported.summary.slice(0, AGENT_SUMMARY_CHAR_LIMIT),
+        format_status: reported.format_status,
+        truncated: reported.truncated === true,
+        ...(boundListMetadata(reported.claimed_checks) !== undefined
+          ? { claimed_checks: boundListMetadata(reported.claimed_checks) }
+          : {}),
+        ...(boundListMetadata(reported.concerns) !== undefined
+          ? { concerns: boundListMetadata(reported.concerns) }
+          : {}),
+      }, now);
+  }
+
+  /**
+   * Durable report/findings publication protocol:
+   * 1. allocate the stable artifact id + expected SHA-256/size/bindings and
+   *    the staging/pending pin atomically BEFORE any blob write,
+   * 2. write the content-addressed blob, then journal the blob_written phase
+   *    (blob registry row + audit event + subjournal) in one transaction,
+   * 3. after verifying blob regularity/hash/size, settle seal + pin swap +
+   *    sealed event + subjournal in ONE fenced metadata transaction.
+   * Returns {sealed:false} when execution must stop like a crash window (the
+   * turn stays nonterminal; recovery completes it); throws only for explicit
+   * evidence failures (oversize, corrupt/foreign blob, binding mismatch).
+   */
+  private publishAgentReport(
+    turn: TurnRecord,
+    session: SessionRecord,
+    reported: AgentReportedResult,
+  ): { artifactId: string; sealed: boolean } {
+    if (this.faultReportPublicationTurns_.has(turn.turn_id)) {
+      throw new Error("injected report publication disk failure");
+    }
+
+    const subPrior = this.readReportSubjournal(turn.turn_id, session.session_id);
+
+    const fullText =
+      typeof reported.full_text === "string" ? reported.full_text : reported.summary;
+    const truncated =
+      reported.truncated === true ||
+      fullText.length > AGENT_SUMMARY_CHAR_LIMIT ||
+      (typeof reported.full_text === "string" && reported.summary.length < reported.full_text.length);
+    const summary =
+      reported.summary.length > AGENT_SUMMARY_CHAR_LIMIT
+        ? reported.summary.slice(0, AGENT_SUMMARY_CHAR_LIMIT)
+        : reported.summary;
+    const kind: ArtifactKind =
+      subPrior && (subPrior.kind === "findings" || subPrior.kind === "report")
+        ? subPrior.kind
+        : session.role === "reviewer"
+          ? "findings"
+          : "report";
+    const metadata = {
+      summary,
+      format_status: reported.format_status,
+      truncated,
+      provenance: subPrior ? subPrior.provenance : boundProvenance(reported.provenance),
+      claimed_checks: subPrior ? subPrior.claimed_checks : boundListMetadata(reported.claimed_checks),
+      concerns: subPrior ? subPrior.concerns : boundListMetadata(reported.concerns),
+    };
+
+    // Replay after settlement: same identity, schema-only result event.
+    if (subPrior?.artifact_id) {
+      const art = getArtifact(this.db, subPrior.artifact_id);
+      if (art && art.project_id === turn.project_id && art.state === "sealed") {
+        this.verifyReportBlob(turn, subPrior);
+        if (!getTurnEventPayload(this.db, turn.turn_id, "agent_reported")) this.appendBoundedAgentReported(turn, session, {
+          ...metadata,
+          full_message_artifact_id: subPrior.artifact_id,
+        });
+        return { artifactId: subPrior.artifact_id, sealed: true };
+      }
+    }
+
+    // Resume an allocated/blob_written publication: verify then settle.
+    if (
+      subPrior &&
+      (subPrior.phase === "allocated" || subPrior.phase === "blob_written") &&
+      typeof subPrior.artifact_id === "string" &&
+      typeof subPrior.content_hash === "string" &&
+      typeof subPrior.size_bytes === "number"
+    ) {
+      const sub: ReportSubjournal = { ...subPrior, artifact_id: subPrior.artifact_id };
+      this.verifyReportBlob(turn, sub);
+      if (this.faultSkipReportSealTurns_.has(turn.turn_id)) {
+        return { artifactId: sub.artifact_id as string, sealed: false };
+      }
+      this.settleReportPublication(turn, session, sub);
+      this.appendBoundedAgentReported(turn, session, {
+        ...metadata,
+        full_message_artifact_id: sub.artifact_id as string,
+      });
+      return { artifactId: sub.artifact_id as string, sealed: true };
+    }
+
+    const payloadBody =
+      kind === "findings"
+        ? JSON.stringify({
+            baseline_snapshot_id: turn.baseline_snapshot_id,
+            target_snapshot_id: turn.review_target_snapshot_id,
+            turn_id: turn.turn_id,
+            session_id: session.session_id,
+            source: session.provider,
+            provenance: metadata.provenance,
+            text: fullText,
+          })
+        : fullText;
+    const bytes = Buffer.from(payloadBody, "utf8");
+
+    // Reject oversized declared finals BEFORE any durable allocation or blob
+    // write; the known native outcome is preserved as an explicit failure.
+    if (bytes.byteLength > DEFAULT_MAX_REPORT_BYTES) {
+      throw new BrokerError(
+        "EVIDENCE_CAPTURE_FAILED",
+        `declared final report exceeds the bounded ${DEFAULT_MAX_REPORT_BYTES} UTF-8 byte limit`,
+      );
+    }
+
+    // Fresh allocation — atomic, BEFORE any blob write.
+    const artifactId = subPrior?.artifact_id ?? newId("art");
+    const contentHash = sha256Hex(bytes);
+    const sizeBytes = bytes.byteLength;
+    const allocatedAt = this.clock.now();
+    const sub: ReportSubjournal = {
+      phase: "allocated",
+      turn_id: turn.turn_id,
+      session_id: session.session_id,
+      project_id: turn.project_id,
+      kind,
+      artifact_id: artifactId,
+      content_hash: contentHash,
+      size_bytes: sizeBytes,
+      baseline_snapshot_id: turn.baseline_snapshot_id,
+      target_snapshot_id: turn.review_target_snapshot_id,
+      provenance: metadata.provenance,
+      summary: metadata.summary,
+      format_status: metadata.format_status,
+      truncated: metadata.truncated,
+      ...(metadata.claimed_checks !== undefined ? { claimed_checks: metadata.claimed_checks } : {}),
+      ...(metadata.concerns !== undefined ? { concerns: metadata.concerns } : {}),
+    };
+    this.db.tx(() => {
+      if (this.staleIncarnation()) throw new StalePublicationError();
+      if (!getArtifact(this.db, artifactId)) {
+        insertArtifact(this.db, {
+          artifact_id: artifactId,
+          project_id: turn.project_id,
+          kind,
+          content_hash: contentHash,
+          size_bytes: sizeBytes,
+          state: "staging",
+          created_at: allocatedAt,
+          sealed_at: null,
+          expired_at: null,
+        });
+      }
+      // Pending publication pin: keeps the staging artifact/blob reference
+      // accounted until settlement (swapped for the role root at seal).
+      insertPin(this.db, {
+        pin_id: newId("pin"),
+        artifact_id: artifactId,
+        root_kind: "pending_intent",
+        owner_session_id: session.session_id,
+        owner_turn_id: turn.turn_id,
+        created_at: allocatedAt,
+      });
+      this.writeReportSubjournalLocked(turn.turn_id, session.session_id, sub, allocatedAt);
+    });
+
+    if (this.faultSkipReportBlobTurns_.has(turn.turn_id)) {
+      // Crash window BEFORE the blob write: identity is durable, content is not.
+      return { artifactId, sealed: false };
+    }
+
+    const blob = this.blobs.write(turn.project_id, bytes);
+    if (blob.hash !== contentHash || blob.size !== sizeBytes) {
+      throw new Error("blob store returned unexpected content identity");
+    }
+
+    const blobAt = this.clock.now();
+    this.db.tx(() => {
+      if (this.staleIncarnation()) throw new StalePublicationError();
+      insertBlobRecord(this.db, {
+        project_id: turn.project_id,
+        content_hash: contentHash,
+        size_bytes: sizeBytes,
+        created_at: blobAt,
+      });
+      appendEvent(this.db, {
+        turn_id: turn.turn_id,
+        session_id: session.session_id,
+        type: "report_publication",
+        payload: this.reportPublicationPayload(sub, "blob_written", blobAt),
+        created_at: blobAt,
+      });
+      this.writeReportSubjournalLocked(
+        turn.turn_id,
+        session.session_id,
+        { ...sub, phase: "blob_written" },
+        blobAt,
+      );
+    });
+
+    if (this.faultSkipReportSealTurns_.has(turn.turn_id)) {
+      // Crash window AFTER the blob journal, BEFORE seal: recovery settles.
+      return { artifactId, sealed: false };
+    }
+
+    this.verifyReportBlob(turn, sub);
+    this.settleReportPublication(turn, session, sub);
+    this.appendBoundedAgentReported(turn, session, {
+      ...metadata,
+      full_message_artifact_id: artifactId,
+    });
+    return { artifactId, sealed: true };
+  }
+
+  /** Audit payload for report_publication events (schema refs only). */
+  private reportPublicationPayload(sub: ReportSubjournal, phase: "blob_written" | "sealed", at: number): Record<string, unknown> {
+    return {
+      artifact_id: sub.artifact_id,
+      kind: sub.kind,
+      content_hash: sub.content_hash,
+      size_bytes: sub.size_bytes,
+      phase,
+      turn_id: sub.turn_id,
+      session_id: sub.session_id,
+      project_id: sub.project_id,
+      baseline_snapshot_id: sub.baseline_snapshot_id,
+      target_snapshot_id: sub.target_snapshot_id,
+      provenance: sub.provenance,
+      ...(phase === "sealed" ? { sealed_at: at } : {}),
+    };
+  }
+
+  /**
+   * Verify blob regularity/hash/size and the project/turn/kind binding before
+   * any seal. Missing, symlinked/irregular, size-mismatched, hash-mismatched
+   * or foreign-bound content is an explicit EVIDENCE_CAPTURE_FAILED — never
+   * sealed blindly, never invented.
+   */
+  private verifyReportBlob(turn: TurnRecord, sub: ReportSubjournal): void {
+    if (
+      typeof sub.artifact_id !== "string" ||
+      typeof sub.content_hash !== "string" ||
+      typeof sub.size_bytes !== "number"
+    ) {
+      throw new BrokerError("EVIDENCE_CAPTURE_FAILED", "report publication identity incomplete");
+    }
+    const session = getSession(this.db, turn.session_id);
+    if (sub.turn_id !== turn.turn_id || sub.project_id !== turn.project_id ||
+        sub.session_id !== turn.session_id || session?.project_id !== turn.project_id ||
+        sub.kind !== (session.role === "reviewer" ? "findings" : "report") ||
+        sub.baseline_snapshot_id !== turn.baseline_snapshot_id ||
+        sub.target_snapshot_id !== turn.review_target_snapshot_id ||
+        !/^[0-9a-f]{64}$/.test(sub.content_hash) ||
+        !Number.isSafeInteger(sub.size_bytes) || sub.size_bytes < 0 ||
+        sub.size_bytes > DEFAULT_MAX_REPORT_BYTES) {
+      throw new BrokerError("EVIDENCE_CAPTURE_FAILED", "report subjournal does not bind this turn/project");
+    }
+    const art = getArtifact(this.db, sub.artifact_id);
+    if (!art || art.project_id !== turn.project_id || art.kind !== sub.kind) {
+      throw new BrokerError("EVIDENCE_CAPTURE_FAILED", "report artifact binding mismatch");
+    }
+    if (art.state !== "staging" && art.state !== "sealed" ||
+        art.state === "staging" && art.content_hash !== null && (art.content_hash !== sub.content_hash || art.size_bytes !== sub.size_bytes) ||
+        art.state === "sealed" && (art.content_hash !== sub.content_hash || art.size_bytes !== sub.size_bytes)) {
+      throw new BrokerError("EVIDENCE_CAPTURE_FAILED", "report artifact identity mismatch");
+    }
+    try {
+      this.blobs.readVerified(turn.project_id, sub.content_hash, sub.size_bytes);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      throw new BrokerError("EVIDENCE_CAPTURE_FAILED", `report blob failed verification: ${reason}`);
+    }
+  }
+
+  /**
+   * ONE fenced metadata transaction after verified blob regularity/hash/size:
+   * sealed artifact + pending-pin swap for the deliberate bounded-lifetime
+   * root (worker report → active_turn, released at terminal; reviewer
+   * findings → reviewer_anchor, held until session close) + sealed audit
+   * event + subjournal settlement. Stale incarnations abort without mutation.
+   */
+  private settleReportPublication(turn: TurnRecord, session: SessionRecord, sub: ReportSubjournal): void {
+    const artifactId = sub.artifact_id;
+    if (typeof artifactId !== "string" || typeof sub.content_hash !== "string" || typeof sub.size_bytes !== "number") {
+      throw new BrokerError("EVIDENCE_CAPTURE_FAILED", "report publication identity incomplete");
+    }
+    const now = this.clock.now();
+    this.db.tx(() => {
+      if (this.staleIncarnation()) throw new StalePublicationError();
+      const art = getArtifact(this.db, artifactId);
+      if (!art || art.project_id !== turn.project_id) {
+        throw new BrokerError("EVIDENCE_CAPTURE_FAILED", "report artifact vanished before seal");
+      }
+      if (art.state === "sealed") {
+        // Idempotent replay: converge the subjournal on the sealed phase.
+        if (sub.phase !== "sealed") {
+          this.writeReportSubjournalLocked(turn.turn_id, session.session_id, { ...sub, phase: "sealed" }, now);
+        }
+        return;
+      }
+      if (art.state !== "staging") {
+        throw new BrokerError("EVIDENCE_CAPTURE_FAILED", "report artifact is not sealable");
+      }
+      sealArtifact(this.db, artifactId, sub.content_hash as string, sub.size_bytes as number, now);
+      for (const pin of listPinsByOwner(this.db, turn.turn_id)) {
+        if (pin.artifact_id === artifactId && pin.root_kind === "pending_intent") {
+          releasePin(this.db, pin.pin_id);
+        }
+      }
+      insertPin(this.db, {
+        pin_id: newId("pin"),
+        artifact_id: artifactId,
+        root_kind: session.role === "reviewer" ? "reviewer_anchor" : "active_turn",
+        owner_session_id: session.session_id,
+        owner_turn_id: turn.turn_id,
+        created_at: now,
+      });
+      appendEvent(this.db, {
+        turn_id: turn.turn_id,
+        session_id: session.session_id,
+        type: "report_publication",
+        payload: this.reportPublicationPayload(sub, "sealed", now),
+        created_at: now,
+      });
+      this.writeReportSubjournalLocked(turn.turn_id, session.session_id, { ...sub, phase: "sealed" }, now);
+    });
+  }
+
+  /** Append the bounded agent_reported event only when it is not present. */
+  private ensureAgentReportedFromSubjournal(turn: TurnRecord, session: SessionRecord, sub: ReportSubjournal): void {
+    if (typeof sub.artifact_id !== "string") return;
+    const existing = getTurnEventPayload(this.db, turn.turn_id, "agent_reported");
+    if (existing && typeof existing.full_message_artifact_id === "string") return;
+    this.appendBoundedAgentReported(turn, session, {
+      summary: sub.summary,
+      format_status: sub.format_status,
+      truncated: sub.truncated,
+      full_message_artifact_id: sub.artifact_id,
+      provenance: sub.provenance ?? undefined,
+      claimed_checks: sub.claimed_checks,
+      concerns: sub.concerns,
+    });
+  }
+
+  private appendBoundedAgentReported(
+    turn: TurnRecord,
+    session: SessionRecord,
+    report: {
+      summary: string;
+      format_status: "structured" | "text_only";
+      truncated: boolean;
+      full_message_artifact_id: string;
+      provenance?: string | null;
+      claimed_checks?: unknown[];
+      concerns?: string[];
+    },
+  ): void {
+    const payload: Record<string, unknown> = {
+      summary: report.summary,
+      format_status: report.format_status,
+      truncated: report.truncated,
+      full_message_artifact_id: report.full_message_artifact_id,
+    };
+    if (report.provenance) payload.provenance = report.provenance;
+    if (report.claimed_checks !== undefined) payload.claimed_checks = report.claimed_checks;
+    if (report.concerns !== undefined) payload.concerns = report.concerns;
+    const bounded =
+      Buffer.byteLength(JSON.stringify(payload), "utf8") <= 64 * 1024
+        ? payload
+        : {
+            summary: report.summary,
+            format_status: report.format_status,
+            truncated: report.truncated,
+            full_message_artifact_id: report.full_message_artifact_id,
+          };
+    this.db.tx(() => {
+      if (this.staleIncarnation()) throw new StalePublicationError();
+      appendEvent(this.db, {
+      turn_id: turn.turn_id,
+      session_id: session.session_id,
+      type: "agent_reported",
+      payload: bounded,
+      created_at: this.clock.now(),
+      });
+    });
   }
 
   private recordOutcomeEvidence(
@@ -906,6 +1546,12 @@ export class TurnExecutor {
   }
 
   private onAdapterEvent(turnId: string, sessionId: string, ev: { type: string; payload?: Record<string, unknown> }): void {
+    // Only the project's event schema persists: thinking/reasoning, unknown
+    // types and arbitrary payload extras/raw arguments are discarded here;
+    // owned control receipts pass through for strict in-core validation.
+    const sanitized = sanitizeAdapterEvent(ev);
+    if (sanitized === null) return;
+
     const now = this.clock.now();
     this.db.tx(() => {
       if (this.expectedIncarnation !== null) {
@@ -920,7 +1566,7 @@ export class TurnExecutor {
           });
           // Ownership-before-resume must not ACK ResumeThread on a stale
           // incarnation — throw so the Windows helper cancels with zero resume.
-          if (ev.type === "owned_launch") {
+          if (sanitized.type === "owned_launch") {
             throw new Error("stale executor incarnation: ownership persistence refused before resume");
           }
           return;
@@ -929,8 +1575,8 @@ export class TurnExecutor {
       appendEvent(this.db, {
         turn_id: turnId,
         session_id: sessionId,
-        type: `adapter:${ev.type}`,
-        payload: ev.payload ?? {},
+        type: `adapter:${sanitized.type}`,
+        payload: sanitized.payload,
         created_at: now,
       });
 
@@ -938,11 +1584,11 @@ export class TurnExecutor {
       // launch_turn intent and session.runtime_id BEFORE ResumeThread.
       // This callback binds ownership before resume; neither permission nor
       // ownership alone proves that native execution has started.
-      if (ev.type === "owned_launch") {
-        if (!ev.payload) {
+      if (sanitized.type === "owned_launch") {
+        if (!sanitized.payload) {
           throw new Error("missing owned_launch payload; refusing resume");
         }
-        const p = ev.payload;
+        const p = sanitized.payload;
         if (
           typeof p.launch_uuid !== "string" || !/^[0-9a-fA-F-]{1,64}$/.test(p.launch_uuid) ||
           typeof p.named_job !== "string" || !/^[0-9A-Za-z_\\:.-]{1,120}$/.test(p.named_job) ||
@@ -1020,28 +1666,28 @@ export class TurnExecutor {
         }
       }
 
-      if (ev.type === "owned_zero_resume") {
+      if (sanitized.type === "owned_zero_resume") {
         const t = getTurn(this.db, turnId);
         if (!t || t.session_id !== sessionId || (t.state !== "STARTING" && t.state !== "CANCELLING")) {
           throw new Error("zero-resume receipt for an inactive managed turn");
         }
-        const ownsProcess = ev.payload?.ownership !== null && ev.payload?.ownership !== undefined;
-        if (ownsProcess && ev.payload?.quiesced !== true) throw new Error("unsettled owned process cannot establish safe zero-resume finalization");
+        const ownsProcess = sanitized.payload.ownership !== null && sanitized.payload.ownership !== undefined;
+        if (ownsProcess && sanitized.payload.quiesced !== true) throw new Error("unsettled owned process cannot establish safe zero-resume finalization");
         updateTurnFields(this.db, turnId, { execution_started: false }, t.state_version, now);
       }
 
-      if (ev.type === "native_ref_obtained" && ev.payload && typeof ev.payload.ref === "string") {
+      if (sanitized.type === "native_ref_obtained" && typeof sanitized.payload.ref === "string") {
         // Persist the native reference ASAP (§13.2, §14.3).
         const turn = getTurn(this.db, turnId);
         if (turn) {
-          updateTurnFields(this.db, turnId, { native_conversation_ref: ev.payload.ref }, turn.state_version, now);
+          updateTurnFields(this.db, turnId, { native_conversation_ref: sanitized.payload.ref }, turn.state_version, now);
         }
         const session = getSession(this.db, sessionId);
         if (session && session.native_conversation_ref === null) {
           updateSessionFields(
             this.db,
             sessionId,
-            { native_conversation_ref: ev.payload.ref, context_status: "available" },
+            { native_conversation_ref: sanitized.payload.ref, context_status: "available" },
             session.record_version,
             now,
           );
@@ -1052,12 +1698,12 @@ export class TurnExecutor {
       // owned_launch proves durable bind before ResumeThread, not that native
       // inference has started.
       const ownershipOnly =
-        ev.type === "owned_launch" ||
-        ev.type === "owned_resumed" ||
-        ev.type === "owned_root_exit" ||
-        ev.type === "owned_quiescence" ||
-        ev.type === "owned_unproven";
-      const phaseOnly = ownershipOnly || ev.type === "owned_zero_resume";
+        sanitized.type === "owned_launch" ||
+        sanitized.type === "owned_resumed" ||
+        sanitized.type === "owned_root_exit" ||
+        sanitized.type === "owned_quiescence" ||
+        sanitized.type === "owned_unproven";
+      const phaseOnly = ownershipOnly || sanitized.type === "owned_zero_resume";
       const turn = getTurn(this.db, turnId);
       if (turn && turn.state === "STARTING" && turn.execution_started === true && !phaseOnly) {
         assertTurnTransition("STARTING", "dispatch_confirmed");
@@ -1550,7 +2196,9 @@ export class TurnExecutor {
 
       // Latest-anchor pin transfer (§15.3.1): the initial baseline stays
       // pinned until close; the previous "latest" pin is atomically replaced
-      // by the new sealed final snapshot's manifest.
+      // by the new sealed final snapshot's manifest. Pruning touches ONLY
+      // snapshot-manifest anchors — report/finding pins are never session
+      // anchors and are never removed by this transfer.
       if (finalSnapshotId) {
         const sPins = getSession(this.db, session.session_id);
         const finalRecord = getSnapshotRecord(this.db, finalSnapshotId);
@@ -1558,9 +2206,10 @@ export class TurnExecutor {
           ? (getSnapshotRecord(this.db, sPins.initial_snapshot_id)?.manifest_artifact_id ?? null)
           : null;
         for (const pin of listPinsByOwner(this.db, session.session_id)) {
-          if (pin.root_kind === "session_anchor" && pin.artifact_id !== initialArtifactId) {
-            releasePin(this.db, pin.pin_id);
-          }
+          if (pin.root_kind !== "session_anchor" || pin.artifact_id === initialArtifactId) continue;
+          const pinnedArt = getArtifact(this.db, pin.artifact_id);
+          if (pinnedArt && pinnedArt.kind !== "snapshot_manifest") continue;
+          releasePin(this.db, pin.pin_id);
         }
         if (finalRecord) {
           insertPin(this.db, {
@@ -1574,14 +2223,45 @@ export class TurnExecutor {
         }
       }
 
+      // An unsealed staged report at terminal is a deliberate bounded failure:
+      // expire the tombstone so no staging artifact or permanent publication
+      // root outlives the turn (sealed reports keep their role pin contract).
+      // UNKNOWN turns never reach commitTerminal — their pins survive recovery.
+      const reportSub = this.readReportSubjournal(turn.turn_id, session.session_id);
+      if (reportSub?.artifact_id) {
+        const reportArt = getArtifact(this.db, reportSub.artifact_id);
+        if (reportArt?.project_id === turn.project_id && reportArt.state === "sealed" && reportArt.kind === "report") {
+          // Preserve the latest complete report of an open worker/researcher.
+          // Older report roots become eligible for explicit cleanup, not deletion.
+          for (const pin of listPinsByOwner(this.db, session.session_id)) {
+            if (pin.root_kind === "session_anchor" && pin.artifact_id !== reportArt.artifact_id &&
+                pin.owner_turn_id !== null &&
+                getTurnEventPayload(this.db, pin.owner_turn_id, "agent_reported")?.full_message_artifact_id === pin.artifact_id &&
+                getArtifact(this.db, pin.artifact_id)?.kind === "report") releasePin(this.db, pin.pin_id);
+          }
+          insertPin(this.db, {
+            pin_id: newId("pin"), artifact_id: reportArt.artifact_id, root_kind: "session_anchor",
+            owner_session_id: session.session_id, owner_turn_id: turn.turn_id, created_at: now,
+          });
+        }
+        if (reportArt && reportArt.project_id === turn.project_id && reportArt.state === "staging") {
+          expireArtifact(this.db, reportArt.artifact_id, now);
+        }
+      }
+
       // Release turn-owned reservations exactly once, complete this turn's
-      // journaled launch intent (§14.7), and drop its accepted-turn pins
-      // (§15.3.1: latest/session roots re-pin what must survive).
+      // journaled launch intent (§14.7), and drop its accepted-turn/pending
+      // publication pins (§15.3.1: latest/session roots re-pin what survives).
       for (const res of listActiveReservationsByOwner(this.db, turn.turn_id)) {
         releaseReservation(this.db, res.reservation_id, now);
       }
       for (const pin of listPinsByOwner(this.db, turn.turn_id)) {
-        if (pin.root_kind === "active_turn") releasePin(this.db, pin.pin_id);
+        if (pin.root_kind === "pending_intent") {
+          const staged = getArtifact(this.db, pin.artifact_id);
+          if (staged?.project_id === turn.project_id && staged.state === "staging" &&
+              (staged.kind === "report" || staged.kind === "findings")) expireArtifact(this.db, staged.artifact_id, now);
+        }
+        if (pin.root_kind === "active_turn" || pin.root_kind === "pending_intent") releasePin(this.db, pin.pin_id);
       }
       for (const intent of listPendingIntents(this.db)) {
         if (intent.turn_id === turn.turn_id && intent.kind === "launch_turn") {
@@ -1660,6 +2340,11 @@ export class TurnExecutor {
    * Finishes sealing/finalizing without dispatching new inference.
    */
   async reconcileJournaledOutcomes(): Promise<void> {
+    if (this.staleIncarnation()) return;
+    // Finish report publications left staged by a crash window first; their
+    // per-turn outcome gates how the journaled evidence may be applied.
+    const reportStatus = this.reconcileReportPublications();
+
     const rows = this.db.raw
       .prepare(
         `SELECT e.* FROM turn_outcome_evidence e
@@ -1690,12 +2375,15 @@ export class TurnExecutor {
 
       this.faultSkipCommitTurns_.delete(turn.turn_id);
 
+      const unrecoverableReport = reportStatus.get(turn.turn_id);
+      const forceReportFailure = unrecoverableReport?.ok === false;
+
       const isWriter = session.workspace_id !== null && session.workspace_mode !== "review_slot";
       let finalSnapshotId: string | null = null;
       let delta: ManifestDelta | null = null;
       let evidenceError: CoverageError | null = null;
 
-      if (isWriter && row.candidate === "SUCCEEDED" && row.native_outcome === "completed") {
+      if (isWriter && !forceReportFailure && row.candidate === "SUCCEEDED" && row.native_outcome === "completed") {
         try {
           const captured = this.finalCapture(turn, session);
           finalSnapshotId = captured.snapshot.snapshot_id;
@@ -1730,7 +2418,32 @@ export class TurnExecutor {
         ? "new_native_conversation"
         : "native_resume";
 
-      if (evidenceError) {
+      if (forceReportFailure) {
+        // Missing/corrupt/foreign report evidence: explicit EVIDENCE_CAPTURE_FAILED
+        // that PRESERVES the completed native outcome — never invented success,
+        // never UNKNOWN, and never a block on unrelated turns' recovery.
+        this.commitTerminal(
+          turn,
+          session,
+          {
+            candidate: "FAILED",
+            native_outcome: row.native_outcome,
+            termination_reason: row.termination_hint ?? (row.execution_started === 1 ? "normal" : "startup_failure"),
+            execution_started: row.execution_started === 1,
+            finalization_error: `EVIDENCE_CAPTURE_FAILED: ${unrecoverableReport.reason ?? "report publication unrecoverable"}`,
+            error_code: "EVIDENCE_CAPTURE_FAILED",
+            detail: {
+              report_publication_failed: true,
+              cancel_reason: row.termination_hint === "cancelled" ? "cancelled" : null,
+              final_snapshot_id: null,
+            },
+          },
+          continuation,
+          nativeRef,
+          null,
+          true,
+        );
+      } else if (evidenceError) {
         this.commitTerminal(
           turn,
           session,
@@ -1775,7 +2488,7 @@ export class TurnExecutor {
         turn_id: turn.turn_id,
         session_id: session.session_id,
         type: "recovery_outcome_reconciled",
-        payload: { candidate: evidenceError ? "FAILED" : row.candidate },
+        payload: { candidate: forceReportFailure || evidenceError ? "FAILED" : row.candidate },
         created_at: this.clock.now(),
       });
     }
@@ -1810,10 +2523,109 @@ export class TurnExecutor {
   }
 
   /**
+   * Reconcile staging report publications without inference. For every
+   * nonterminal turn whose launch_turn subjournal carries an unfinished report:
+   * - allocated/blob_written → verify blob regularity/hash/size AND the
+   *   project/turn/kind binding, then atomically seal (fenced against stale
+   *   incarnations) — or record an explicit per-turn failure;
+   * - declared (never allocated) → explicit failure: the content was never
+   *   made durable, so success must not be invented;
+   * - sealed → converge the bounded result event from the subjournal.
+   * Returns per-turn status for the evidence application pass. Failures are
+   * isolated per turn: unrelated recovery is never blocked.
+   */
+  private reconcileReportPublications(): Map<string, { ok: boolean; reason?: string }> {
+    const status = new Map<string, { ok: boolean; reason?: string }>();
+
+    const intentRows = this.db.raw
+      .prepare(
+        `SELECT turn_id, session_id, payload FROM intents
+         WHERE kind = 'launch_turn' AND state = 'pending' AND turn_id IS NOT NULL`,
+      )
+      .all() as Array<{ turn_id: string; session_id: string | null; payload: string | null }>;
+
+    for (const row of intentRows) {
+      let sub: ReportSubjournal | null = null;
+      let declared = false;
+      try {
+        const payload = row.payload ? (JSON.parse(row.payload) as Record<string, unknown>) : null;
+        declared = payload !== null && Object.prototype.hasOwnProperty.call(payload, "report");
+        sub = payload ? parseReportSubjournal(payload.report) : null;
+      } catch {
+        status.set(row.turn_id, { ok: false, reason: "report launch journal is corrupt" });
+        continue;
+      }
+      if (declared && !sub) {
+        status.set(row.turn_id, { ok: false, reason: "declared report journal schema is corrupt" });
+        continue;
+      }
+      if (!sub) continue;
+
+      const turn = getTurn(this.db, row.turn_id);
+      if (!turn || !isNonterminalTurnState(turn.state)) continue;
+      const session = getSession(this.db, turn.session_id);
+      if (!session || session.session_id !== sub.session_id || row.session_id !== sub.session_id) {
+        status.set(row.turn_id, { ok: false, reason: "report session binding mismatch" });
+        continue;
+      }
+
+      if (sub.phase === "sealed") {
+        try {
+          this.verifyReportBlob(turn, sub);
+          this.ensureAgentReportedFromSubjournal(turn, session, sub);
+        } catch (err) {
+          if (!(err instanceof StalePublicationError)) status.set(row.turn_id, { ok: false, reason: err instanceof Error ? err.message : String(err) });
+        }
+        continue;
+      }
+
+      if (
+        sub.phase === "declared" ||
+        typeof sub.artifact_id !== "string" ||
+        typeof sub.content_hash !== "string" ||
+        typeof sub.size_bytes !== "number"
+      ) {
+        status.set(row.turn_id, { ok: false, reason: "declared report never made durable" });
+        continue;
+      }
+
+      try {
+        this.verifyReportBlob(turn, sub);
+        this.settleReportPublication(turn, session, sub);
+        this.ensureAgentReportedFromSubjournal(turn, session, sub);
+        status.set(row.turn_id, { ok: true });
+      } catch (err) {
+        if (err instanceof StalePublicationError) continue; // owning executor's job
+        status.set(row.turn_id, { ok: false, reason: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return status;
+  }
+
+  /**
    * TEST-ONLY fault injection (A19): configure a turn to skip terminal commit.
    */
   skipCommitForTest(turnId: string): void {
     this.faultSkipCommitTurns_.add(turnId);
+  }
+
+  /** TEST-ONLY: fail report publication after native completion. */
+  failReportPublicationForTest(turnId: string): void {
+    this.faultReportPublicationTurns_.add(turnId);
+  }
+
+  /**
+   * TEST-ONLY: stop execution like a crash window AFTER the blob journal and
+   * BEFORE seal. Never returns to a normal completion path: the turn stays
+   * nonterminal and only recovery (with the same artifact identity) settles it.
+   */
+  skipReportSealForTest(turnId: string): void {
+    this.faultSkipReportSealTurns_.add(turnId);
+  }
+
+  /** TEST-ONLY: stop execution like a crash AFTER durable allocation, BEFORE the blob write. */
+  skipReportBlobForTest(turnId: string): void {
+    this.faultSkipReportBlobTurns_.add(turnId);
   }
 
   /**

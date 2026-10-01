@@ -14,6 +14,7 @@ import type {
   TurnExecutionRequest,
   TurnExecutionResult,
 } from "../../runtime/adapter.ts";
+import { boundAgentReport } from "../../runtime/adapter.ts";
 import { runHeadlessCli, type HeadlessCliEvents, type HeadlessSpawnSpec } from "../common/headless.ts";
 import { BrokerError } from "../../shared/errors.ts";
 import {
@@ -46,10 +47,19 @@ export interface AntigravityAdapterOptions {
 }
 
 const VALID_ANTIGRAVITY_EFFORTS = new Set(["low", "medium", "high", "max"]);
+const MAX_RETAINED_EVENTS = 10_000;
+
+function agyProvenance(response: string | null, text: string): string | undefined {
+  const sample = `${response ?? ""}\n${text}`;
+  if (/agent-broker context envelope|\[session instructions\]|\[task contract JSON\]|broker-eor/i.test(sample)) {
+    return "partial_projection";
+  }
+  return undefined;
+}
 
 export class AntigravityAdapter implements ProviderAdapter {
   readonly providerId = "antigravity";
-  readonly adapterVersion = "0.2.1";
+  readonly adapterVersion = "0.2.2";
 
   private readonly binary: string;
   private readonly defaultModel?: string;
@@ -165,32 +175,39 @@ export class AntigravityAdapter implements ProviderAdapter {
 
       const events: AntigravityStreamEvent[] = [];
       let nativeRefEmitted = false;
+      let eventsCapped = false;
+
+      const noteNativeRef = (id: string | undefined) => {
+        if (!id || nativeRefEmitted) return;
+        nativeRefEmitted = true;
+        onEvent({ type: "native_ref_obtained", payload: { ref: id } });
+      };
 
       const cliEvents: HeadlessCliEvents = {
         onStdoutLine: (line: string) => {
           const ev = parseAntigravityStreamLine(line);
-          events.push(ev);
+          if (events.length < MAX_RETAINED_EVENTS) {
+            events.push(ev);
+          } else {
+            eventsCapped = true;
+          }
 
           switch (ev.kind) {
             case "text_delta": {
-              const label = ev.text.slice(0, 80);
-              onEvent({
-                type: "progress",
-                payload: { label },
-              });
+              // Discard raw text progress; retain only status labels.
+              onEvent({ type: "progress", payload: { label: "status:text_delta" } });
+              noteNativeRef(ev.conversation_id);
               break;
             }
             case "conversation_id": {
-              if (!nativeRefEmitted && ev.id) {
-                nativeRefEmitted = true;
-                onEvent({
-                  type: "native_ref_obtained",
-                  payload: { ref: ev.id },
-                });
-              }
+              noteNativeRef(ev.id);
               break;
             }
-            case "result":
+            case "result": {
+              noteNativeRef(ev.conversation_id);
+              onEvent({ type: "progress", payload: { label: "status:result" } });
+              break;
+            }
             case "unknown":
               break;
           }
@@ -206,6 +223,11 @@ export class AntigravityAdapter implements ProviderAdapter {
         executionUnknown = true;
         throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
       }
+      if (cliResult.outputLimited) {
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", `Antigravity output limit exceeded (${cliResult.outputLimitReason ?? "total"}).`, {
+          executionStarted: true,
+        });
+      }
       const summary = summarizeAntigravityTurn(events);
 
       // 5. Resolve or throw based on outcome.
@@ -215,15 +237,16 @@ export class AntigravityAdapter implements ProviderAdapter {
           const rawText = (summary.response && summary.response.trim().length > 0)
             ? summary.response
             : summary.text;
-          const boundedSummary = rawText.slice(0, 4000) || "antigravity turn complete";
-
+          const provenance = eventsCapped
+            ? "partial_projection"
+            : agyProvenance(summary.response, summary.text);
           return {
             native_outcome: "completed",
             native_conversation_ref: nativeRef,
-            agent_reported: {
-              summary: boundedSummary,
+            agent_reported: boundAgentReport(rawText || "antigravity turn complete", {
               format_status: "text_only",
-            },
+              ...(provenance ? { provenance } : {}),
+            }),
           };
         }
 

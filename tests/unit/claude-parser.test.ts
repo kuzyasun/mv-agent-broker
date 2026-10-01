@@ -208,7 +208,7 @@ describe("ClaudeAdapter lifecycle and preflight", () => {
   it("initializes with default binary and version", () => {
     const adapter = new ClaudeAdapter();
     expect(adapter.providerId).toBe("claude-code");
-    expect(adapter.adapterVersion).toBe("0.2.1");
+    expect(adapter.adapterVersion).toBe("0.2.2");
     expect(adapter.inspectRuntime("sess-1")).toBeNull();
   });
 

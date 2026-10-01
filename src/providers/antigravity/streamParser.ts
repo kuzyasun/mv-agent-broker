@@ -5,12 +5,13 @@
  */
 
 export type AntigravityStreamEvent =
-  | { kind: "text_delta"; text: string }
+  | { kind: "text_delta"; text: string; conversation_id?: string }
   | {
       kind: "result";
       status: "SUCCESS" | "FAILED" | string;
       response: string | null;
       error: string | null;
+      conversation_id?: string;
     }
   | { kind: "conversation_id"; id: string }
   | { kind: "unknown" };
@@ -78,16 +79,20 @@ export function parseAntigravityStreamLine(line: string): AntigravityStreamEvent
   }
 
   const obj = parsed as Record<string, unknown>;
+  const observedId = findConversationId(obj);
 
-  // Check for step_update text_delta
+  // Check for step_update text_delta (may also carry an observed conversation id).
   if (obj.event === "step_update" && obj.step_update && typeof obj.step_update === "object" && !Array.isArray(obj.step_update)) {
     const su = obj.step_update as Record<string, unknown>;
     if (typeof su.text_delta === "string") {
-      return { kind: "text_delta", text: su.text_delta };
+      return observedId !== null
+        ? { kind: "text_delta", text: su.text_delta, conversation_id: observedId }
+        : { kind: "text_delta", text: su.text_delta };
     }
   }
 
-  // Check for result turn settle
+  // Check for result turn settle — preserve declared final result AND observed ID
+  // from the same record (do not return result before ID extraction).
   if (obj.event === "result" && obj.result && typeof obj.result === "object" && !Array.isArray(obj.result)) {
     const res = obj.result as Record<string, unknown>;
     if (typeof res.status === "string") {
@@ -96,14 +101,14 @@ export function parseAntigravityStreamLine(line: string): AntigravityStreamEvent
         status: res.status,
         response: typeof res.response === "string" ? res.response : null,
         error: typeof res.error === "string" ? res.error : null,
+        ...(observedId !== null ? { conversation_id: observedId } : {}),
       };
     }
   }
 
   // Check for conversation id (top-level or nested in result / step_update)
-  const conversationId = findConversationId(obj);
-  if (conversationId !== null) {
-    return { kind: "conversation_id", id: conversationId };
+  if (observedId !== null) {
+    return { kind: "conversation_id", id: observedId };
   }
 
   return { kind: "unknown" };
@@ -117,21 +122,27 @@ export function summarizeAntigravityTurn(events: AntigravityStreamEvent[]): Anti
   let error: string | null = null;
   let sawResult = false;
 
+  const noteId = (id: string | undefined) => {
+    if (conversationId === null && id && id.trim().length > 0) {
+      conversationId = id.trim();
+    }
+  };
+
   for (const ev of events) {
     switch (ev.kind) {
       case "text_delta":
         text += ev.text;
+        noteId(ev.conversation_id);
         break;
       case "conversation_id":
-        if (conversationId === null && ev.id) {
-          conversationId = ev.id;
-        }
+        noteId(ev.id);
         break;
       case "result":
         sawResult = true;
         status = ev.status;
         response = ev.response;
         error = ev.error;
+        noteId(ev.conversation_id);
         break;
       case "unknown":
         break;

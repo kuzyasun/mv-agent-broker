@@ -25,6 +25,46 @@ export interface WindowsJobOwnership {
   helper_pid: number;
 }
 
+/** Shared stdout/stderr byte + event caps (defaults ≤1 MiB/line, ≤8 MiB/total). */
+export const DEFAULT_MAX_LINE_BYTES = 1 * 1024 * 1024;
+export const DEFAULT_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_MAX_STREAM_EVENTS = 50_000;
+
+export type OutputLimitReason = "line" | "total" | "events";
+
+export interface OutputQuotaState {
+  maxLineBytes: number;
+  maxTotalBytes: number;
+  maxEvents: number;
+  totalBytes: number;
+  events: number;
+  overflowed: boolean;
+  reason: OutputLimitReason | null;
+}
+
+/**
+ * Quota overrides must be finite positive numbers; NaN/Infinity, zero,
+ * negative or non-numeric overrides fall back to the default so a bad
+ * override can never disable a limit.
+ */
+function finitePositiveOverride(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export function createOutputQuota(
+  overrides: Partial<Pick<OutputQuotaState, "maxLineBytes" | "maxTotalBytes" | "maxEvents">> = {},
+): OutputQuotaState {
+  return {
+    maxLineBytes: finitePositiveOverride(overrides.maxLineBytes, DEFAULT_MAX_LINE_BYTES),
+    maxTotalBytes: finitePositiveOverride(overrides.maxTotalBytes, DEFAULT_MAX_TOTAL_BYTES),
+    maxEvents: finitePositiveOverride(overrides.maxEvents, DEFAULT_MAX_STREAM_EVENTS),
+    totalBytes: 0,
+    events: 0,
+    overflowed: false,
+    reason: null,
+  };
+}
+
 export interface WindowsJobLaunchSpec {
   /** Absolute or PATH-resolved application name (direct .exe) — ignored when verbatimCommandLine is set. */
   applicationName: string;
@@ -39,6 +79,8 @@ export interface WindowsJobLaunchSpec {
   signal: AbortSignal;
   resumeTimeoutMs?: number;
   terminateQuiesceMs?: number;
+  /** Combined native stdout+stderr byte cap relayed by the helper (default 8 MiB). */
+  maxNativeOutputBytes?: number;
   /**
    * Called after `launched` and BEFORE resume. Must persist ownership durably.
    * Throwing / rejecting cancels with zero resume.
@@ -65,6 +107,9 @@ export interface WindowsJobResult {
   stderrTail: string;
   /** Relay/ownership callback failure; never a fabricated successful stream. */
   protocolError: string | null;
+  /** True when native output quota was exceeded (cancel requested; wait for quiescence). */
+  outputLimited?: boolean;
+  outputLimitReason?: OutputLimitReason | null;
 }
 
 export class WindowsJobCapabilityError extends Error {
@@ -195,6 +240,7 @@ export function runWindowsJob(spec: WindowsJobLaunchSpec): Promise<WindowsJobRes
     owner_creation_time: ownerCreationTime,
     resume_timeout_ms: spec.resumeTimeoutMs ?? 30_000,
     terminate_quiesce_ms: spec.terminateQuiesceMs ?? 15_000,
+    max_native_output_bytes: finitePositiveOverride(spec.maxNativeOutputBytes, DEFAULT_MAX_TOTAL_BYTES),
   };
   const configLine = `${JSON.stringify(config)}\n`;
   if (Buffer.byteLength(configLine, "utf8") > CONFIG_CAP) {
@@ -234,6 +280,8 @@ export function runWindowsJob(spec: WindowsJobLaunchSpec): Promise<WindowsJobRes
     let controlChain: Promise<void> = Promise.resolve();
     let controlError: Error | null = null;
     let helperClosed = false;
+    let outputLimited = false;
+    let outputLimitReason: OutputLimitReason | null = null;
     let stopTimer: NodeJS.Timeout | null = null;
     let notifyHelperClosed!: () => void;
     const helperClosedPromise = new Promise<void>((resolveClosed) => { notifyHelperClosed = resolveClosed; });
@@ -255,6 +303,8 @@ export function runWindowsJob(spec: WindowsJobLaunchSpec): Promise<WindowsJobRes
         terminationReason,
         stderrTail,
         protocolError: controlError ? "WINDOWS_JOB_PROTOCOL_FAILED" : null,
+        outputLimited,
+        outputLimitReason,
       });
     };
 
@@ -359,6 +409,20 @@ export function runWindowsJob(spec: WindowsJobLaunchSpec): Promise<WindowsJobRes
           sendControl("cancel");
           throw err;
         }
+        return;
+      }
+
+      if (op === "output_limit") {
+        // Helper observed native byte quota overflow: cancel owned job and wait
+        // for quiescence — never force-free from the cap alone.
+        outputLimited = true;
+        const reason = payload.reason;
+        outputLimitReason =
+          reason === "line" || reason === "total" || reason === "events" ? reason : "total";
+        if (!terminationReason) terminationReason = "output_limit";
+        killed = true;
+        sendControl("cancel");
+        relay();
         return;
       }
 
@@ -598,39 +662,106 @@ export interface LineAssembler {
   flush(): void;
 }
 
-/** Decode helper chunk relays into line callbacks (UTF-8 safe across chunk borders). */
+export interface LineAssemblerOptions {
+  maxLineBytes?: number;
+  maxTotalBytes?: number;
+  maxEvents?: number;
+  quota?: OutputQuotaState;
+  onOverflow?: (reason: OutputLimitReason) => void;
+}
+
+/**
+ * Decode helper chunk relays into line callbacks (UTF-8 safe across chunk
+ * borders). Caps are UTF-8 byte-aware: oversize lines, total bytes, or event
+ * counts mark the quota overflowed, invoke onOverflow, and drain/discard
+ * further input without emitting — never a newline or small-chunk bypass.
+ */
 export function createLineAssembler(
   onLine: (line: string) => void,
-  maxLineLength: number = 256 * 1024,
+  opts: number | LineAssemblerOptions = {},
 ): LineAssembler {
+  const normalized: LineAssemblerOptions =
+    typeof opts === "number" ? { maxLineBytes: finitePositiveOverride(opts, DEFAULT_MAX_LINE_BYTES) } : opts;
+  const quota =
+    normalized.quota ??
+    createOutputQuota({
+      maxLineBytes: normalized.maxLineBytes,
+      maxTotalBytes: normalized.maxTotalBytes,
+      maxEvents: normalized.maxEvents,
+    });
+  const onOverflow = normalized.onOverflow;
   const decoder = new StringDecoder("utf8");
   let pending = "";
 
-  const assembler = ((chunk: Buffer) => {
-    pending += decoder.write(chunk);
-    if (pending.length > maxLineLength * 2) {
-      throw new Error("LINE_TOO_LONG");
+  const markOverflow = (reason: OutputLimitReason) => {
+    if (quota.overflowed) return;
+    quota.overflowed = true;
+    quota.reason = reason;
+    pending = "";
+    try {
+      onOverflow?.(reason);
+    } catch {
+      /* overflow notification must not invent success */
     }
+  };
+
+  const emitLine = (raw: string) => {
+    const line = raw.replace(/\r$/, "");
+    if (Buffer.byteLength(line, "utf8") > quota.maxLineBytes) {
+      markOverflow("line");
+      return;
+    }
+    if (quota.events >= quota.maxEvents) {
+      markOverflow("events");
+      return;
+    }
+    quota.events += 1;
+    onLine(line);
+  };
+
+  const assembler = ((chunk: Buffer) => {
+    if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk);
+    if (quota.overflowed) {
+      // Drain decoder state so split UTF-8 sequences do not resurface later.
+      decoder.write(chunk);
+      return;
+    }
+    quota.totalBytes += chunk.byteLength;
+    if (quota.totalBytes > quota.maxTotalBytes) {
+      markOverflow("total");
+      decoder.write(chunk);
+      return;
+    }
+    pending += decoder.write(chunk);
     let idx: number;
     while ((idx = pending.indexOf("\n")) !== -1) {
-      const line = pending.slice(0, idx).replace(/\r$/, "");
-      pending = pending.slice(idx + 1);
-      if (line.length > maxLineLength) {
-        throw new Error("LINE_TOO_LONG");
+      if (quota.overflowed) {
+        pending = "";
+        break;
       }
-      onLine(line);
+      const raw = pending.slice(0, idx);
+      pending = pending.slice(idx + 1);
+      emitLine(raw);
+    }
+    if (!quota.overflowed && Buffer.byteLength(pending, "utf8") > quota.maxLineBytes) {
+      markOverflow("line");
     }
   }) as LineAssembler;
 
   assembler.flush = () => {
+    if (quota.overflowed) {
+      try {
+        decoder.end();
+      } catch {
+        /* ignore */
+      }
+      pending = "";
+      return;
+    }
     pending += decoder.end();
     if (pending.length > 0) {
-      const line = pending.replace(/\r$/, "");
+      emitLine(pending);
       pending = "";
-      if (line.length > maxLineLength) {
-        throw new Error("LINE_TOO_LONG");
-      }
-      onLine(line);
     }
   };
 

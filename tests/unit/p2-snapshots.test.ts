@@ -4,7 +4,7 @@
  * All mock-level; filesystem fixtures are real temp directories.
  */
 import { describe, expect, it } from "vitest";
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { linkSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { createHarness, settle, settleTurn, start, COVERAGE_CONFIG } from "../helpers/harness.ts";
 import { BrokerError } from "../../src/shared/errors.ts";
@@ -36,6 +36,67 @@ function expectBrokerError(fn: () => unknown, code: string): BrokerError {
   }
   throw new Error(`expected BrokerError ${code}, call succeeded`);
 }
+
+// ─── blob verification (readVerified) ────────────────────────────────────────
+
+describe("blob store readVerified", () => {
+  it("rejects a hardlinked blob even when bytes and hash match", () => {
+    const h = createHarness();
+    try {
+      const blobs = openBlobStore(h.blobRoot);
+      const body = blobs.write(h.seed.projectId, "hardlink fixture");
+      const target = path.join(h.blobRoot, h.seed.projectId, body.hash.slice(0, 2), body.hash);
+      const alias = path.join(h.blobRoot, "owned-hardlink-fixture");
+      linkSync(target, alias);
+      expect(() => blobs.readVerified(h.seed.projectId, body.hash, body.size)).toThrow("BLOB_NOT_REGULAR");
+      rmSync(alias);
+      expect(Buffer.from(blobs.readVerified(h.seed.projectId, body.hash, body.size)).toString("utf8")).toBe("hardlink fixture");
+    } finally { h.cleanup(); }
+  });
+  it("verifies size and hash and rejects non-regular owned-file entries", () => {
+    const h = createHarness();
+    try {
+      const blobs = openBlobStore(h.blobRoot);
+      const { hash, size } = blobs.write(h.seed.projectId, "verified-body");
+
+      expect(Buffer.from(blobs.readVerified(h.seed.projectId, hash, size)).toString("utf8")).toBe("verified-body");
+      expect(() => blobs.readVerified(h.seed.projectId, hash, size + 1)).toThrow("BLOB_SIZE_MISMATCH");
+
+      const tamperedPath = path.join(h.blobRoot, h.seed.projectId, hash.slice(0, 2), hash);
+      const original = readFileSync(tamperedPath);
+      writeFileSync(tamperedPath, Buffer.from("VERIFIED-BODY", "utf8")); // same length
+      expect(() => blobs.readVerified(h.seed.projectId, hash, size)).toThrow("BLOB_HASH_MISMATCH");
+
+      // Directory in place of the owned regular file: never followed.
+      rmSync(tamperedPath);
+      mkdirSync(tamperedPath);
+      expect(() => blobs.readVerified(h.seed.projectId, hash, size)).toThrow("BLOB_NOT_REGULAR");
+      rmSync(tamperedPath, { recursive: true });
+
+      // Symlink pointing elsewhere: rejected even when the target has the
+      // right content (skipped where symlinks are unavailable).
+      writeFileSync(tamperedPath, original);
+      const outside = path.join(h.blobRoot, "outside-target.bin");
+      writeFileSync(outside, original);
+      rmSync(tamperedPath);
+      try {
+        symlinkSync(outside, tamperedPath, "file");
+      } catch {
+        return; // platform without symlink privilege: defense covered above
+      }
+      expect(() => blobs.readVerified(h.seed.projectId, hash, size)).toThrow("BLOB_NOT_REGULAR");
+      rmSync(tamperedPath);
+      rmSync(outside);
+
+      expect(() => blobs.readVerified(h.seed.projectId, "a".repeat(64))).toThrow("BLOB_NOT_FOUND");
+      // Restored regular file verifies again; legacy read stays API-compatible.
+      writeFileSync(tamperedPath, original);
+      expect(blobs.read(h.seed.projectId, hash).byteLength).toBe(size);
+    } finally {
+      h.cleanup();
+    }
+  });
+});
 
 // ─── classification unit checks (§8.5, §8.7) ────────────────────────────────
 
@@ -452,7 +513,7 @@ describe("capture semantics", () => {
       const spawn = await h.spawnWorkerSession();
       const anchorCount = () =>
         (h.db.raw
-          .prepare("SELECT COUNT(*) c FROM artifact_pins WHERE owner_session_id = ? AND root_kind = 'session_anchor'")
+          .prepare("SELECT COUNT(*) c FROM artifact_pins p JOIN artifacts a ON a.artifact_id = p.artifact_id WHERE owner_session_id = ? AND root_kind = 'session_anchor' AND a.kind = 'snapshot_manifest'")
           .get(spawn.session_id) as { c: number }).c;
 
       expect(anchorCount()).toBe(1); // initial baseline
@@ -473,6 +534,41 @@ describe("capture semantics", () => {
       await settle(h);
       expect(h.core.sessionStatus(h.seed.coordinatorId, spawn.session_id).state).toBe("CLOSED");
       expect(anchorCount()).toBe(0); // close releases session roots (§6.4)
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("final snapshot anchor transfer never prunes a report pin (non-manifest anchors survive)", async () => {
+    const h = createHarness();
+    try {
+      const spawn = await h.spawnWorkerSession();
+
+      // Seed a session-anchored REPORT artifact (e.g. a deliberate retained
+      // report root) alongside the initial snapshot anchor.
+      const report = h.publishArtifact("retained-report-body", "report");
+      h.db.raw
+        .prepare(
+          "INSERT INTO artifact_pins (pin_id, artifact_id, root_kind, owner_session_id, owner_turn_id, created_at) VALUES (?, ?, 'session_anchor', ?, NULL, ?)",
+        )
+        .run("pin-report-anchor", report.artifact_id, spawn.session_id, 5_000);
+
+      const t1 = h.sendTask(spawn.session_id, "t1-prune-guard");
+      h.adapter.plan(t1.turn_id, [
+        { kind: "workspace_write", files: [{ path: "src/pruned.c", content: "x" }] },
+        { kind: "complete", outcome: "completed" },
+      ]);
+      await start(h, t1);
+      await settle(h);
+      expect(h.core.turnStatus(h.seed.coordinatorId, t1.turn_id).state).toBe("SUCCEEDED");
+
+      // The snapshot anchor set rotated to initial+latest, but the report
+      // anchor was NOT removed by the transfer.
+      const anchors = h.db.raw
+        .prepare("SELECT artifact_id FROM artifact_pins WHERE owner_session_id = ? AND root_kind = 'session_anchor'")
+        .all(spawn.session_id) as Array<{ artifact_id: string }>;
+      expect(anchors.some((a) => a.artifact_id === report.artifact_id)).toBe(true);
+      expect(anchors.length).toBe(4); // initial + latest final + retained report + latest native report
     } finally {
       h.cleanup();
     }

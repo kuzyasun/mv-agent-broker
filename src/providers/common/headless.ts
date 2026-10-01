@@ -16,10 +16,25 @@ import { BrokerError } from "../../shared/errors.ts";
 import {
   assertWindowsJobCapable,
   createLineAssembler,
+  createOutputQuota,
+  DEFAULT_MAX_LINE_BYTES,
+  DEFAULT_MAX_TOTAL_BYTES,
+  DEFAULT_MAX_STREAM_EVENTS,
   runWindowsJob,
   WindowsJobCapabilityError,
+  type OutputLimitReason,
+  type OutputQuotaState,
   type WindowsJobOwnership,
 } from "./windowsJob.ts";
+
+export {
+  createOutputQuota,
+  DEFAULT_MAX_LINE_BYTES,
+  DEFAULT_MAX_TOTAL_BYTES,
+  DEFAULT_MAX_STREAM_EVENTS,
+  type OutputLimitReason,
+  type OutputQuotaState,
+};
 
 export interface HeadlessSpawnSpec {
   binary: string;
@@ -34,6 +49,12 @@ export interface HeadlessSpawnSpec {
   firstLineTimeoutMs: number;
   inactivityTimeoutMs: number;
   signal: AbortSignal;
+  /** UTF-8 byte line cap (default 1 MiB). */
+  maxLineBytes?: number;
+  /** Combined stdout+stderr byte cap (default 8 MiB). */
+  maxTotalBytes?: number;
+  /** Max delivered newline-delimited events (default 50k). */
+  maxStreamEvents?: number;
   /**
    * Durable ownership-before-resume gate (Windows managed path). Core persists
    * launch identity here; throwing refuses ResumeThread (zero resume).
@@ -66,6 +87,9 @@ export interface HeadlessCliResult {
   uncertainAfterResume?: boolean;
   ownership?: WindowsJobOwnership | null;
   terminationReason?: string | null;
+  /** True when line/total/event quota overflowed; definite failure only after quiescence. */
+  outputLimited?: boolean;
+  outputLimitReason?: OutputLimitReason | null;
 }
 
 const CMD_UNSAFE = /["%!^&|<>()\r\n\0]/;
@@ -185,7 +209,7 @@ function killTree(child: ChildProcess): void {
 }
 
 function runHeadlessCliPosix(spec: HeadlessSpawnSpec, events: HeadlessCliEvents): Promise<HeadlessCliResult> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const { command, args, windowsVerbatim } = prepareCommand(spec.binary, spec.args);
     const child = spawn(command, args, {
       cwd: spec.cwd,
@@ -200,6 +224,12 @@ function runHeadlessCliPosix(spec: HeadlessSpawnSpec, events: HeadlessCliEvents)
     let sawFirstLine = false;
     let stderrTail = "";
     let finished = false;
+    let callbackError: Error | null = null;
+    const quota = createOutputQuota({
+      maxLineBytes: spec.maxLineBytes,
+      maxTotalBytes: spec.maxTotalBytes,
+      maxEvents: spec.maxStreamEvents,
+    });
 
     let timer: NodeJS.Timeout | null = null;
     const armTimer = () => {
@@ -218,44 +248,82 @@ function runHeadlessCliPosix(spec: HeadlessSpawnSpec, events: HeadlessCliEvents)
     };
     spec.signal.addEventListener("abort", onAbort, { once: true });
 
+    const noteActivity = () => {
+      if (finished || killed || callbackError || quota.overflowed) return;
+      if (!sawFirstLine) sawFirstLine = true;
+      armTimer();
+    };
+
+    const onOverflow = () => {
+      killed = true;
+      killTree(child);
+    };
+
+    const wrapHandler = (handler: (line: string) => void) => (line: string) => {
+      // A failed callback stops further delivery: buffered lines are never
+      // handed to the failing handler again (no repeated partial delivery).
+      if (callbackError) return;
+      try {
+        handler(line);
+      } catch (err) {
+        callbackError ??= err instanceof Error ? err : new Error(String(err));
+        killed = true;
+        killTree(child);
+      }
+    };
+
+    const onStdout = createLineAssembler(wrapHandler(events.onStdoutLine), { quota, onOverflow });
+    const onStderr = createLineAssembler(wrapHandler(events.onStderrLine), {
+      quota,
+      onOverflow,
+    });
+
     const finish = (exitCode: number | null) => {
       if (finished) return;
       finished = true;
       if (timer) clearTimeout(timer);
       spec.signal.removeEventListener("abort", onAbort);
-      resolve({ exitCode, killed, timedOut, stderrTail });
-    };
-
-    const wireLines = (stream: NodeJS.ReadableStream, handler: (line: string) => void, isStderr: boolean) => {
-      let buffer = "";
-      stream.setEncoding("utf8");
-      stream.on("data", (chunk: string) => {
-        if (!sawFirstLine) {
-          sawFirstLine = true;
-          armTimer();
-        } else {
-          armTimer();
-        }
-        buffer += chunk;
-        let idx: number;
-        while ((idx = buffer.indexOf("\n")) !== -1) {
-          const line = buffer.slice(0, idx).replace(/\r$/, "");
-          buffer = buffer.slice(idx + 1);
-          handler(line);
-        }
-        if (isStderr) {
-          stderrTail = (stderrTail + chunk).slice(-2000);
-        }
-      });
-      stream.on("end", () => {
-        if (buffer.length > 0) handler(buffer.replace(/\r$/, ""));
+      try {
+        onStdout.flush();
+        onStderr.flush();
+      } catch (err) {
+        callbackError ??= err instanceof Error ? err : new Error(String(err));
+      }
+      if (callbackError) {
+        reject(new BrokerError("EXECUTION_UNKNOWN", "Native stream callback failed; POSIX descendant quiescence is unproven.", { executionStarted: null }));
+        return;
+      }
+      resolve({
+        exitCode,
+        killed: killed || quota.overflowed,
+        timedOut,
+        stderrTail,
+        // No quiesced claim: a POSIX child close proves only that the direct
+        // child exited, not whole-domain quiescence (no owned-job protocol).
+        outputLimited: quota.overflowed,
+        outputLimitReason: quota.reason,
+        terminationReason: callbackError
+          ? "stream_callback_failed"
+          : quota.overflowed
+            ? "output_limit"
+            : null,
       });
     };
 
     child.stdout?.on("error", () => undefined);
     child.stderr?.on("error", () => undefined);
-    if (child.stdout) wireLines(child.stdout, events.onStdoutLine, false);
-    if (child.stderr) wireLines(child.stderr, events.onStderrLine, true);
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      noteActivity();
+      onStdout(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      noteActivity();
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (!quota.overflowed) {
+        stderrTail = (stderrTail + buf.toString("utf8")).slice(-2000);
+      }
+      onStderr(buf);
+    });
 
     child.on("error", (err) => {
       stderrTail = (stderrTail + String(err)).slice(-2000);
@@ -303,7 +371,13 @@ async function runHeadlessCliWindows(spec: HeadlessSpawnSpec, events: HeadlessCl
   let resumed = false;
   let stderrTail = "";
   let timer: NodeJS.Timeout | null = null;
+  let callbackError: Error | null = null;
   const ac = new AbortController();
+  const quota = createOutputQuota({
+    maxLineBytes: spec.maxLineBytes,
+    maxTotalBytes: spec.maxTotalBytes,
+    maxEvents: spec.maxStreamEvents,
+  });
 
   const armTimer = () => {
     // Deadlines apply to native IO after ResumeThread — not helper Add-Type/startup.
@@ -325,18 +399,30 @@ async function runHeadlessCliWindows(spec: HeadlessSpawnSpec, events: HeadlessCl
   if (spec.signal.aborted) onOuterAbort();
 
   const noteActivity = () => {
+    if (!resumed || ac.signal.aborted || callbackError || quota.overflowed) return;
     if (!sawFirstLine) sawFirstLine = true;
     armTimer();
   };
 
-  const onStdout = createLineAssembler((line) => {
-    noteActivity();
-    events.onStdoutLine(line);
-  });
-  const onStderr = createLineAssembler((line) => {
-    noteActivity();
-    events.onStderrLine(line);
-  });
+  const onOverflow = () => {
+    killed = true;
+    ac.abort();
+  };
+
+  const wrapHandler = (handler: (line: string) => void) => (line: string) => {
+    // A failed callback stops further delivery of buffered native lines.
+    if (callbackError) return;
+    try {
+      handler(line);
+    } catch (err) {
+      callbackError ??= err instanceof Error ? err : new Error(String(err));
+      killed = true;
+      ac.abort();
+    }
+  };
+
+  const onStdout = createLineAssembler(wrapHandler(events.onStdoutLine), { quota, onOverflow });
+  const onStderr = createLineAssembler(wrapHandler(events.onStderrLine), { quota, onOverflow });
 
   try {
     const result = await runWindowsJob({
@@ -352,6 +438,9 @@ async function runHeadlessCliWindows(spec: HeadlessSpawnSpec, events: HeadlessCl
       envPairs: envToPairs(env),
       childStdin,
       signal: ac.signal,
+      // Validated quota value: a NaN/Infinity override must not leak past the
+      // relay cap either.
+      maxNativeOutputBytes: quota.maxTotalBytes,
       onBeforeResume: async (ownership) => {
         events.onOwnershipEvent?.({ type: "owned_launch", payload: { ...ownership } });
         if (spec.onBeforeResume) await spec.onBeforeResume(ownership);
@@ -367,11 +456,16 @@ async function runHeadlessCliWindows(spec: HeadlessSpawnSpec, events: HeadlessCl
           events.onOwnershipEvent?.({ type: "owned_quiescence", payload: { op, ...payload } });
         } else if (op === "terminated_unproven") {
           events.onOwnershipEvent?.({ type: "owned_unproven", payload });
+        } else if (op === "output_limit") {
+          events.onOwnershipEvent?.({ type: "owned_output_limit", payload });
         }
       },
-      onStdoutChunk: onStdout,
+      onStdoutChunk: (bytes) => { noteActivity(); onStdout(bytes); },
       onStderrChunk: (bytes) => {
-        stderrTail = (stderrTail + bytes.toString("utf8")).slice(-2000);
+        noteActivity();
+        if (!quota.overflowed) {
+          stderrTail = (stderrTail + bytes.toString("utf8")).slice(-2000);
+        }
         onStderr(bytes);
       },
     });
@@ -391,20 +485,28 @@ async function runHeadlessCliWindows(spec: HeadlessSpawnSpec, events: HeadlessCl
     catch {
       throw new BrokerError("EVIDENCE_CAPTURE_FAILED", "Final native stream callback failed after owned quiescence.", { executionStarted: true });
     }
+    if (callbackError) {
+      throw new BrokerError("EVIDENCE_CAPTURE_FAILED", "Native stream callback failed after owned quiescence.", { executionStarted: true });
+    }
 
     if (timer) clearTimeout(timer);
     spec.signal.removeEventListener("abort", onOuterAbort);
 
+    const limited = quota.overflowed || result.outputLimited === true;
     return {
       exitCode: result.exitCode,
-      killed: killed || result.killed,
+      killed: killed || result.killed || limited,
       timedOut,
       stderrTail: (stderrTail + result.stderrTail).slice(-2000),
       resumed: result.resumed,
       quiesced: result.quiesced,
       uncertainAfterResume: result.uncertainAfterResume,
       ownership: result.ownership,
-      terminationReason: result.terminationReason,
+      terminationReason: limited
+        ? "output_limit"
+        : result.terminationReason,
+      outputLimited: limited,
+      outputLimitReason: quota.reason ?? result.outputLimitReason ?? null,
     };
   } catch (e) {
     if (timer) clearTimeout(timer);

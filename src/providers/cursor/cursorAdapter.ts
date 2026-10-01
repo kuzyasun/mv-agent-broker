@@ -15,6 +15,7 @@ import type {
   TurnExecutionRequest,
   TurnExecutionResult,
 } from "../../runtime/adapter.ts";
+import { boundAgentReport } from "../../runtime/adapter.ts";
 import { runHeadlessCli, type HeadlessCliEvents, type HeadlessSpawnSpec } from "../common/headless.ts";
 import { BrokerError } from "../../shared/errors.ts";
 import {
@@ -123,7 +124,7 @@ function assertRegularOwnedFileOrAbsent(filePath: string, fieldName: string): vo
 
 export class CursorAdapter implements ProviderAdapter {
   readonly providerId = "cursor";
-  readonly adapterVersion = "0.2.6";
+  readonly adapterVersion = "0.2.7";
 
   readonly stateRoot?: string;
   private readonly binary: string;
@@ -365,18 +366,19 @@ export class CursorAdapter implements ProviderAdapter {
             break;
           }
           case "assistant_text": {
-            const label = ev.text.slice(0, 80);
+            // Discard assistant prose from progress; only status labels persist.
             onEvent({
               type: "progress",
-              payload: { label },
+              payload: { label: "status:assistant_text" },
             });
             break;
           }
           case "thinking": {
+            // Discard thinking/reasoning payloads before any persistence path.
             break;
           }
           case "tool_call": {
-            const label = (ev.subtype ? `tool_call: ${ev.subtype}` : "tool_call").slice(0, 80);
+            const label = (ev.subtype ? `tool_call:${ev.subtype}` : "tool_call").slice(0, 80);
             onEvent({
               type: "progress",
               payload: { label },
@@ -425,6 +427,12 @@ export class CursorAdapter implements ProviderAdapter {
         retainTurnEvidence = true;
         throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
       }
+      if (cliResult.outputLimited) {
+        retainTurnEvidence = true;
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", `Cursor output limit exceeded (${cliResult.outputLimitReason ?? "total"}).`, {
+          executionStarted: true,
+        });
+      }
       const summary = summarizeCursorTurn(events);
       // A result record does not override an interrupted or failed process.
       if (cliResult.timedOut || cliResult.killed || cliResult.exitCode !== 0) {
@@ -445,15 +453,11 @@ export class CursorAdapter implements ProviderAdapter {
         const rawText = (summary.resultText && summary.resultText.trim().length > 0)
           ? summary.resultText
           : summary.assistantText;
-        const boundedSummary = rawText.slice(0, 4000);
 
         return {
           native_outcome: "completed",
           native_conversation_ref: nativeRef,
-          agent_reported: {
-            summary: boundedSummary,
-            format_status: "text_only",
-          },
+          agent_reported: boundAgentReport(rawText, { format_status: "text_only" }),
         };
       }
 

@@ -276,6 +276,20 @@ function turnResultDto(core: BrokerCore, coordinatorId: string, turn: TurnRecord
     });
   }
   const session = core.sessionStatus(coordinatorId, turn.session_id);
+  const agentReported = core.turnAgentReported(coordinatorId, turn.turn_id);
+  const truncated = agentReported?.truncated === true;
+  const fullMessageArtifactId =
+    typeof agentReported?.full_message_artifact_id === "string"
+      ? agentReported.full_message_artifact_id
+      : null;
+  const reportMeta = core.turnReportArtifact(coordinatorId, turn.turn_id);
+  const artifacts: Array<{ artifact_id: string; kind: string }> = [];
+  if (fullMessageArtifactId) {
+    artifacts.push({
+      artifact_id: fullMessageArtifactId,
+      kind: reportMeta?.kind ?? (session.role === "reviewer" ? "findings" : "report"),
+    });
+  }
   return {
     api_version: "0.2",
     session_id: turn.session_id,
@@ -287,7 +301,9 @@ function turnResultDto(core: BrokerCore, coordinatorId: string, turn: TurnRecord
       native_conversation_ref: session.native_conversation_ref,
       status: session.context_status,
     },
-    agent_reported: core.turnAgentReported(coordinatorId, turn.turn_id),
+    agent_reported: agentReported,
+    summary_truncated: truncated,
+    full_message_artifact_id: fullMessageArtifactId,
     broker_observed: {
       native_outcome: turn.native_outcome,
       termination_reason: turn.termination_reason,
@@ -299,7 +315,7 @@ function turnResultDto(core: BrokerCore, coordinatorId: string, turn: TurnRecord
       error_code: turn.error_code,
     },
     usage: { availability: "unknown", billing_basis: "unknown", measurements: [] },
-    artifacts: [],
+    artifacts,
     warnings: [],
   };
 }

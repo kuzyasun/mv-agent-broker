@@ -7,6 +7,7 @@
  * Only ACCEPTED operations are recorded in the idempotency ledger; a mutable
  * rejection (RESOURCE_BUSY etc.) frees the key for a later attempt (§7.3).
  */
+import { isUtf8 } from "node:buffer";
 import type { RegistryDb } from "../storage/db.ts";
 import {
   appendEvent,
@@ -1865,7 +1866,7 @@ export class BrokerCore {
   ): {
     api_version: string; artifact_id: string; kind: string; state: string;
     size_bytes: number | null; content_type: "text" | "binary";
-    offset: number; max_bytes: number; truncated: boolean; data: string | null;
+    offset: number; max_bytes: number; bytes_read: number; next_offset: number; truncated: boolean; data: string | null;
   } {
     const artifact = getArtifact(this.db, artifactId);
     if (!artifact) {
@@ -1888,7 +1889,7 @@ export class BrokerCore {
     if (!Number.isInteger(rawMax) || rawMax < 1 || rawMax > 64 * 1024) {
       throw new BrokerError("INVALID_REQUEST", "max_bytes must be an integer in [1, 65536].");
     }
-    if (!Number.isInteger(rawOffset) || rawOffset < 0) {
+    if (!Number.isSafeInteger(rawOffset) || rawOffset < 0) {
       throw new BrokerError("INVALID_REQUEST", "offset must be a non-negative integer.");
     }
     const maxBytes = rawMax;
@@ -1898,7 +1899,7 @@ export class BrokerCore {
       return {
         api_version: API_VERSION, artifact_id: artifact.artifact_id, kind: artifact.kind,
         state: artifact.state, size_bytes: artifact.size_bytes, content_type: "binary",
-        offset: 0, max_bytes: 0, truncated: false, data: null,
+        offset: 0, max_bytes: 0, bytes_read: 0, next_offset: 0, truncated: false, data: null,
       };
     }
 
@@ -1913,12 +1914,27 @@ export class BrokerCore {
     if (sha256Hex(bytes) !== artifact.content_hash) {
       throw new BrokerError("ARTIFACT_CORRUPT", "Artifact content does not match its recorded hash.");
     }
-    const slice = bytes.subarray(offset, offset + maxBytes);
-    const truncated = offset + slice.byteLength < bytes.byteLength;
+    if (!isUtf8(bytes)) {
+      throw new BrokerError("ARTIFACT_CORRUPT", "Textual artifact is not valid UTF-8.");
+    }
+    // Offsets are bytes. Do not emit replacement characters at page boundaries.
+    const continuation = (index: number): boolean =>
+      index < bytes.byteLength && (bytes[index]! & 0xc0) === 0x80;
+    if (offset < bytes.byteLength && continuation(offset)) {
+      throw new BrokerError("INVALID_REQUEST", "offset must be a UTF-8 character boundary.");
+    }
+    let end = Math.min(bytes.byteLength, offset + maxBytes);
+    while (end > offset && continuation(end)) end--;
+    if (offset < bytes.byteLength && end === offset) {
+      throw new BrokerError("INVALID_REQUEST", "max_bytes cannot fit the next UTF-8 character.");
+    }
+    const slice = bytes.subarray(offset, end);
+    const nextOffset = offset + slice.byteLength;
+    const truncated = nextOffset < bytes.byteLength;
     return {
       api_version: API_VERSION, artifact_id: artifact.artifact_id, kind: artifact.kind,
       state: artifact.state, size_bytes: bytes.byteLength, content_type: "text",
-      offset, max_bytes: maxBytes, truncated,
+      offset, max_bytes: maxBytes, bytes_read: slice.byteLength, next_offset: nextOffset, truncated,
       data: Buffer.from(slice).toString("utf8"),
     };
   }
@@ -2058,6 +2074,15 @@ export class BrokerCore {
   turnAgentReported(coordinatorId: string, turnId: string) {
     this.turnStatus(coordinatorId, turnId); // Apply the same turn ownership check.
     return getTurnEventPayload(this.db, turnId, "agent_reported");
+  }
+
+  /** Schema-only report/findings artifact descriptor for the public result DTO. */
+  turnReportArtifact(coordinatorId: string, turnId: string): { artifact_id: string; kind: string } | null {
+    this.turnStatus(coordinatorId, turnId);
+    const pub = getTurnEventPayload(this.db, turnId, "report_publication");
+    if (!pub || typeof pub.artifact_id !== "string") return null;
+    const kind = pub.kind === "findings" || pub.kind === "report" ? pub.kind : "report";
+    return { artifact_id: pub.artifact_id, kind };
   }
 
   turnEvents(coordinatorId: string, turnId: string, afterSeq: number, limit: number) {

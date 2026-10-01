@@ -130,9 +130,9 @@ describe("A27: bounded events + malformed output", () => {
       const spawn = await h.spawnWorkerSession();
 
       // 1. 300 progress steps then complete.
-      const progressSteps: Array<{ kind: "progress"; label: string }> = Array.from({ length: 300 }, (_, i) => ({
+      const progressSteps: Array<{ kind: "progress"; label: string }> = Array.from({ length: 300 }, () => ({
         kind: "progress",
-        label: `tick-${i}`,
+        label: "status:running",
       }));
       const t1 = h.sendTask(spawn.session_id, "a27-t1", "Process stream.");
       h.adapter.plan(t1.turn_id, [

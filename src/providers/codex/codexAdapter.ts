@@ -1,5 +1,6 @@
 /** Non-interactive Codex CLI turns; JSONL identity and explicit native resume. */
 import type { AdapterEvent, DispatchGate, ProviderAdapter, RuntimeObservation, TurnExecutionRequest, TurnExecutionResult } from "../../runtime/adapter.ts";
+import { boundAgentReport } from "../../runtime/adapter.ts";
 import { BrokerError } from "../../shared/errors.ts";
 import { runHeadlessCli, type HeadlessCliResult } from "../common/headless.ts";
 import { parseCodexStreamLine } from "./streamParser.ts";
@@ -14,7 +15,7 @@ export const CODEX_ENV_ALLOWLIST = [
 
 export class CodexAdapter implements ProviderAdapter {
   readonly providerId = "codex";
-  readonly adapterVersion = "0.2.1";
+  readonly adapterVersion = "0.2.2";
   private readonly binary: string;
   constructor(opts: CodexAdapterOptions = {}) { this.binary = opts.binary ?? "codex"; }
   preflight(config: Record<string, unknown>): void {
@@ -63,7 +64,7 @@ export class CodexAdapter implements ProviderAdapter {
             }
           } else if (ev.kind === "message") {
             state.text = ev.text;
-            onEvent({ type: "progress", payload: { label: ev.text.slice(0, 80) } });
+            onEvent({ type: "progress", payload: { label: "status:message" } });
           } else if (ev.kind === "complete") state.complete = true;
           else if (ev.kind === "failure") state.failure ??= ev.message;
         },
@@ -75,6 +76,9 @@ export class CodexAdapter implements ProviderAdapter {
       }
     } finally { clearInterval(poll); }
 
+    if (cli.outputLimited) {
+      throw new BrokerError("PROVIDER_PROTOCOL_ERROR", `Codex output limit exceeded (${cli.outputLimitReason ?? "total"}).`, { executionStarted: true });
+    }
     if (cli.timedOut || cli.killed || cli.exitCode !== 0) {
       throw new BrokerError("PROVIDER_PROTOCOL_ERROR", cli.timedOut ? `Codex timed out (${cli.timedOut}).`
         : cli.killed ? "Codex execution interrupted." : state.failure || cli.stderrTail || `Codex exited with code ${cli.exitCode}.`, { executionStarted: true });
@@ -87,7 +91,7 @@ export class CodexAdapter implements ProviderAdapter {
       throw new BrokerError("PROVIDER_PROTOCOL_ERROR", state.failure || "Codex stream closed without a completed turn and agent message.", { executionStarted: true });
     }
     return { native_outcome: "completed", native_conversation_ref: state.ref,
-      agent_reported: { summary: state.text.slice(0, 4000), format_status: "text_only" } };
+      agent_reported: boundAgentReport(state.text, { format_status: "text_only" }) };
   }
 
   async shutdownIdleRuntime(_sessionId: string): Promise<void> { return; }

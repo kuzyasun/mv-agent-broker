@@ -138,6 +138,55 @@ describe("Antigravity stream parser", () => {
       });
     });
 
+    it("parses result SUCCESS with nested conversation_id without dropping the ID", () => {
+      const line = JSON.stringify({
+        event: "result",
+        result: {
+          status: "SUCCESS",
+          response: "Final handoff text.",
+          error: null,
+          conversation_id: "agy-from-result-1",
+        },
+      });
+      const ev = parseAntigravityStreamLine(line);
+      expect(ev).toEqual({
+        kind: "result",
+        status: "SUCCESS",
+        response: "Final handoff text.",
+        error: null,
+        conversation_id: "agy-from-result-1",
+      });
+      const summary = summarizeAntigravityTurn([ev]);
+      expect(summary.sawResult).toBe(true);
+      expect(summary.response).toBe("Final handoff text.");
+      expect(summary.conversationId).toBe("agy-from-result-1");
+    });
+
+    it("preserves text_delta and conversation_id from one step_update record", () => {
+      const line = JSON.stringify({
+        event: "step_update",
+        step_update: { text_delta: "partial ", conversation_id: "agy-delta-id" },
+      });
+      const ev = parseAntigravityStreamLine(line);
+      expect(ev).toEqual({
+        kind: "text_delta",
+        text: "partial ",
+        conversation_id: "agy-delta-id",
+      });
+      expect(summarizeAntigravityTurn([ev]).conversationId).toBe("agy-delta-id");
+    });
+
+    it("never fabricates an ID from request echo and keeps the first observed ID", () => {
+      const events = [
+        parseAntigravityStreamLine(JSON.stringify({ conversation_id: "agy-first" })),
+        parseAntigravityStreamLine(JSON.stringify({
+          event: "result",
+          result: { status: "SUCCESS", response: "ok", conversation_id: "agy-different" },
+        })),
+      ];
+      expect(summarizeAntigravityTurn(events).conversationId).toBe("agy-first");
+    });
+
     it("returns unknown for blank lines and invalid JSON", () => {
       expect(parseAntigravityStreamLine("")).toEqual({ kind: "unknown" });
       expect(parseAntigravityStreamLine("   \t\r\n")).toEqual({ kind: "unknown" });
@@ -232,7 +281,7 @@ describe("Antigravity stream parser", () => {
     it("initializes with default binary and version", () => {
       const adapter = new AntigravityAdapter();
       expect(adapter.providerId).toBe("antigravity");
-      expect(adapter.adapterVersion).toBe("0.2.1");
+      expect(adapter.adapterVersion).toBe("0.2.2");
       expect(adapter.inspectRuntime("sess-1")).toBeNull();
     });
 

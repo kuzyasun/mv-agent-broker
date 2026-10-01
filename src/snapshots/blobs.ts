@@ -4,7 +4,7 @@
  * one project. Cross-project reads are impossible by address layout.
  * Physical-layout reuse never extends ACL (same project only).
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { sha256Hex } from "../shared/ids.ts";
@@ -14,6 +14,14 @@ export interface BlobStore {
   write(projectId: string, content: Uint8Array | string): { hash: string; size: number; deduplicated: boolean };
   /** Read blob bytes; throws Error("BLOB_NOT_FOUND") if absent. */
   read(projectId: string, hash: string): Uint8Array;
+  /**
+   * Read blob bytes with minimal owned-file defense: the addressed entry must
+   * be a regular file (symlinks/directories rejected), its byte size must
+   * match `expectedSize` when given, and its SHA-256 must equal the address.
+   * Throws BLOB_NOT_FOUND / BLOB_NOT_REGULAR / BLOB_SIZE_MISMATCH /
+   * BLOB_HASH_MISMATCH. This is durability verification, not a security claim.
+   */
+  readVerified(projectId: string, hash: string, expectedSize?: number): Uint8Array;
   has(projectId: string, hash: string): boolean;
   sizeOf(projectId: string, hash: string): number | null;
   /** Delete a blob; throws Error("BLOB_NOT_FOUND") if absent. */
@@ -64,6 +72,38 @@ export function openBlobStore(rootDir: string): BlobStore {
       const target = blobPath(projectId, hash);
       if (!existsSync(target)) throw new Error("BLOB_NOT_FOUND");
       return new Uint8Array(readFileSync(target));
+    },
+
+    readVerified(projectId, hash, expectedSize) {
+      const target = blobPath(projectId, hash);
+      for (const directory of [rootDir, path.join(rootDir, projectId), path.dirname(target)]) {
+        let entry;
+        try { entry = lstatSync(directory); } catch { throw new Error("BLOB_NOT_FOUND"); }
+        if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error("BLOB_NOT_REGULAR");
+      }
+      let st;
+      try {
+        // lstat: never follow links — the owned store contains regular files.
+        st = lstatSync(target);
+      } catch {
+        throw new Error("BLOB_NOT_FOUND");
+      }
+      if (!st.isFile() || st.nlink !== 1) throw new Error("BLOB_NOT_REGULAR");
+      if (expectedSize !== undefined && st.size !== expectedSize) throw new Error("BLOB_SIZE_MISMATCH");
+      const descriptor = openSync(target, "r");
+      let bytes: Buffer;
+      try {
+        const opened = fstatSync(descriptor);
+        if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== st.dev || opened.ino !== st.ino) {
+          throw new Error("BLOB_NOT_REGULAR");
+        }
+        bytes = readFileSync(descriptor);
+      } finally { closeSync(descriptor); }
+      if (expectedSize !== undefined && bytes.byteLength !== expectedSize) {
+        throw new Error("BLOB_SIZE_MISMATCH");
+      }
+      if (sha256Hex(bytes) !== hash) throw new Error("BLOB_HASH_MISMATCH");
+      return new Uint8Array(bytes);
     },
 
     has(projectId, hash) {
