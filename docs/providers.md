@@ -248,6 +248,9 @@ Windows APPDATA/LOCALAPPDATA authentication stays native-owned.
 The candidate config uses explicit workspace and sealed input path allowances
 and `sandbox.readBoundary=workspace`. It is partial hardening: the installed CLI
 can feature-gate read control, and first-party plugins can remain discoverable.
+The [native 0.2.3 probe](native-smoke/2026-10-01-cursor-read-boundary/report.md)
+reproduced a harmless outside-file marker that was absent from the prompt:
+scoped read enforcement failed. This profile is not supported.
 Config self-repair, exact read/input-write denial and MCP/network restrictions
 require native falsification before the profile can be advertised as enforced.
 The earlier private-HOME continuity probe read broker evidence to find its

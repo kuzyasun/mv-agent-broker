@@ -10,7 +10,6 @@
 import type { RegistryDb } from "../storage/db.ts";
 import {
   appendEvent,
-  countActiveReservations,
   getAccount,
   getCoordinator,
   getCoverageProfile,
@@ -64,7 +63,16 @@ import type {
 } from "../shared/api-types.ts";
 import { API_VERSION, DEFAULT_LIMITS } from "../shared/api-types.ts";
 import { authorizeOwner, authorizeProjectAccess } from "./authz.ts";
-import { checkTurnCapacity, checkWorkspaceLeaseAvailable, reserveSessionSlot, reserveTurn } from "./capacity.ts";
+import {
+  checkTurnCapacity,
+  checkWorkspaceLeaseAvailable,
+  reserveSessionSlot,
+  reserveTurn,
+  workspaceHasConflictingLease,
+  workspaceLeaseScope,
+  workspaceLeaseTarget,
+  type WorkspaceLeaseTarget,
+} from "./capacity.ts";
 import {
   assertSessionTransition,
   sessionSendAllowed,
@@ -869,6 +877,15 @@ export class BrokerCore {
     this.assertAdmissionOpen();
     // §7.2 step 3 preflight: expensive filesystem hashing outside the tx.
     this.sendSnapshotPreflight(session0, req);
+    // A05 preflight: the writer lease target's physical checkout identity is
+    // resolved with realpath/stat OUTSIDE the admission tx; an unresolved or
+    // retargeted-away alias fails closed here, before any accepted state
+    // exists. The conflict decision itself stays in the authoritative tx
+    // below so the established error priority is preserved (SESSION_BUSY and
+    // RESOURCE_BUSY are decided before any lease refusal, as before).
+    const preflightLeaseTarget = this.writerTurn(req) && session0.workspace_id
+      ? this.writerLeaseTargetOrThrow(session0.workspace_id)
+      : null;
 
     let response: SendResponse;
     try {
@@ -898,7 +915,23 @@ export class BrokerCore {
         const workspaceId = session.workspace_id; // writer lease target (INV-02)
 
         checkTurnCapacity(this.db, this.limits, quotaScope);
-        if (workspaceId && this.writerTurn(req)) checkWorkspaceLeaseAvailable(this.db, workspaceId);
+        // A05: the writer lease scope is the authoritative physical checkout
+        // identity, re-resolved INSIDE the boundary (realpath/stat syscalls —
+        // never a subprocess). Registered/junction/symlink/case aliases of one
+        // checkout share one exclusive writer; path-less workspaces keep the
+        // legacy ID-scoped lease. A conflicting or quarantined alias is a
+        // mutable refusal: the transaction rolls back and frees the key.
+        let leaseTarget: WorkspaceLeaseTarget | null = null;
+        if (workspaceId && this.writerTurn(req)) {
+          leaseTarget = this.writerLeaseTargetOrThrow(workspaceId);
+          if (!preflightLeaseTarget || preflightLeaseTarget.project_id !== leaseTarget.project_id ||
+              workspaceLeaseScope(preflightLeaseTarget) !== workspaceLeaseScope(leaseTarget)) {
+            throw new BrokerError("WORKSPACE_CHANGED", "Checkout identity changed after admission preflight.", {
+              executionStarted: false,
+            });
+          }
+          checkWorkspaceLeaseAvailable(this.db, leaseTarget);
+        }
 
         // Required artifacts re-resolved inside the boundary (§7.1.1): a
         // stale preflight observation cannot admit an expired/unsealed input.
@@ -957,7 +990,8 @@ export class BrokerCore {
           session_id: session.session_id,
           turn_id: turnId,
           quota_scope_id: quotaScope,
-          workspace_id: this.writerTurn(req) ? workspaceId : null,
+          workspace_id: leaseTarget ? leaseTarget.workspace_id : null,
+          workspace_lease_scope: leaseTarget ? workspaceLeaseScope(leaseTarget) : null,
         });
         // §15.3.1 accepted-turn pins: the snapshots this turn depends on stay
         // retained while it is nonterminal; released at terminal commit.
@@ -1208,6 +1242,19 @@ export class BrokerCore {
 
   private writerTurn(req: SendRequest): boolean {
     return "workspace_precondition" in req;
+  }
+
+  /**
+   * A05 writer lease target for a registered workspace id: the physical
+   * checkout identity resolved fresh from the live row (realpath/stat — pure
+   * filesystem syscalls, safe inside the admission tx; no CLI/shell/Git
+   * subprocess ever runs there). A registered path that does not resolve fails
+   * closed instead of falling back to an ownership-bypassing ID scope.
+   */
+  private writerLeaseTargetOrThrow(workspaceId: string): WorkspaceLeaseTarget {
+    const workspace = getWorkspace(this.db, workspaceId);
+    if (!workspace) throw new BrokerError("INVALID_REQUEST", "Unknown workspace reference.");
+    return workspaceLeaseTarget(workspace, { requireResolvable: true });
   }
 
   private quotaScopeFor(session: SessionRecord): string {
@@ -1587,8 +1634,10 @@ export class BrokerCore {
     if (!workspace.canonical_path) {
       throw new BrokerError("INVALID_REQUEST", "Workspace has no resolvable path.");
     }
-    const activeWriters = countActiveReservations(this.db, "workspace_lease", workspace.workspace_id);
-    if (activeWriters > 0) {
+    // A05: alias-aware writer-free precondition — a lease held by any alias
+    // of this physical checkout (including the same workspace id) blocks the
+    // read capture (§10.1.1).
+    if (workspaceHasConflictingLease(this.db, workspaceLeaseTarget(workspace))) {
       throw new BrokerError("WORKSPACE_BUSY", "Workspace currently has a broker-owned writer (§10.1.1).");
     }
     const binding = this.resolveCoverageBinding(workspace);

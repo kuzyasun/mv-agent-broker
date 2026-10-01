@@ -103,3 +103,11 @@ offline tests. Native readiness and mandatory enforcement remain open.
 The [Cursor reviewer configuration checkpoint](native-smoke/2026-10-01-cursor-profile/report.md)
 records Antigravity implementation, managed session history, scoped read config
 and 426 passing offline tests. Configuration is not native enforcement proof.
+The subsequent [scoped-read falsification](native-smoke/2026-10-01-cursor-read-boundary/report.md)
+failed on Cursor 0.2.3: an outside marker absent from the prompt was read.
+Workflow success and agent-reported Write/Shell denials did not promote that
+restricted reviewer profile. A fail-closed hook candidate needs fresh proof.
+The [physical checkout lease checkpoint](native-smoke/2026-10-01-workspace-aliases/report.md)
+records ZCode authoring, independent Cursor review, confirmed bypass repairs
+and 448 passing offline tests. Legacy unbound leases/quarantines remain
+conservative until authoritative reconciliation.

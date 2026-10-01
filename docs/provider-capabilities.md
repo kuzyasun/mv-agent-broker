@@ -75,13 +75,16 @@ unverified. Native rate-limit status was allowed; quota rejection was not tested
 | Windows PowerShell shim launch | native | smoke_tested | shared runner now preserves PATHEXT; Cursor passes Windows profile variables; metadata-only probe reproduces silent exit without PATHEXT |
 | Windows cmd shim boundary checks | native | documented | common infra; Cursor native run used .ps1, not .cmd |
 | cancellation + inactivity timeouts | native | documented | common infra/fake process cancellation; native tool-tree cancellation and quiescence unverified |
-| reviewer read-only / worker writes | unknown | configured | 0.2.3 private per-session home/history plus explicit workspace/input read config; native read control can be feature-gated; --trust is workspace trust, not enforcement |
+| reviewer outside-read boundary | unknown | failed | 0.2.3 reproduced an outside marker absent from the prompt; [native falsification](native-smoke/2026-10-01-cursor-read-boundary/report.md); restricted profile not supported |
+| reviewer Write/Shell denial / worker writes | unknown | configured | 0.2.3 config and agent-reported denials; disposable sentinel absent, native denial receipts unavailable; --trust is workspace trust, not enforcement |
 | quota-error classification | unknown | configured | four successful requests; quota exhaustion not observed; startup timeout no longer mislabeled RATE_LIMITED |
 | structured final output | unsupported | documented | text_only |
 
 Cursor auto ask-mode review delivered its final report through MCP on adapter
 0.2.1 ([checkpoint](native-smoke/2026-10-01-dogfood/report.md)). Read/search-only
 enforcement remains unknown; report delivery does not promote the role profile.
+Scoped outside-read enforcement on 0.2.3 subsequently failed the native marker
+probe; this failure remains recorded independently of later candidate repairs.
 The [0.2.3 checkpoint](native-smoke/2026-10-01-cursor-profile/report.md) records
 offline config/path/history checks. The earlier broad-read private-HOME probe
 had contaminated marker recall and remains rejected evidence.

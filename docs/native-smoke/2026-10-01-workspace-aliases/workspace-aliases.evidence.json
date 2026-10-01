@@ -1,0 +1,27 @@
+{
+  "recorded_at": "2026-10-01",
+  "runtime_commit": "cffcb812e8fcddc35dbd9d86e7b123391d80373b",
+  "author": {
+    "provider": "zcode",
+    "requested_model": "account:zai-individual-coding-plan/GLM-5.3-Flash",
+    "requested_effort": "max",
+    "turn_id": "turn-c59ec4ebe5c5b6a78d5297c5",
+    "native_ref": "sess_b1b09f10-e2d3-4bf5-b1a3-770d5a17e442",
+    "state": "SUCCEEDED",
+    "baseline_snapshot_id": "snap-48523b0015c19d41c8e37754",
+    "author_snapshot_id": "snap-7e78b32bcec1244ad23fa8a5"
+  },
+  "review": {
+    "provider": "cursor", "requested_model": "auto",
+    "turn_id": "turn-df9de6a3db9f0bda6e376518",
+    "native_ref": "cd6f700f-1be4-4e75-81bc-0437682dc5d0",
+    "state": "SUCCEEDED",
+    "target_snapshot_id": "snap-be870a5607e471ba48fb7c3d",
+    "findings": ["legacy lease retarget/clear bypass", "quarantine retarget/clear bypass"],
+    "coordinator_assessment": "confirmed_and_repaired",
+    "final_post_review_repairs": "coordinator_validated_with_regressions"
+  },
+  "coordinator_validation": { "typecheck": "passed", "full_offline_tests": 448, "full_offline_files": 33, "failures": 0 },
+  "native_provider_profile_acceptance": "not_established",
+  "claude_native_launches": 0
+}

@@ -57,6 +57,7 @@ import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, diffManifests, readManifest, type ManifestDelta } from "../snapshots/capture.ts";
 import { diffSnapshots, renderDiffDocument } from "../snapshots/diff.ts";
 import { CoverageError, matchesPrefix, type CoverageConfig } from "../workspaces/coverage.ts";
+import { isPhysicalLeaseScope, resolvePhysicalCheckoutIdentity } from "../workspaces/identity.ts";
 import { loadSessionWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
 import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
 import {
@@ -221,6 +222,17 @@ export class TurnExecutor {
     }
     if (turnNow.state !== "STARTING") return; // concurrent transition happened
 
+    // A05: revalidate the physical checkout binding under the lease before
+    // input preparation and dispatch — an alias retargeted (or removed)
+    // between acceptance and dispatch fails closed with zero inference, even
+    // when the new directory's content would still match the baseline digest
+    // above. Cancel priority is preserved: the CANCELLING re-check wins first.
+    const leaseDrift = this.workspaceLeaseBindingDrift(turnId, session);
+    if (leaseDrift) {
+      this.finalizePreStartKnown(turnNow, session, "WORKSPACE_CHANGED", leaseDrift);
+      return;
+    }
+
     // Preserve the established error priority for a corrupt caller contract,
     // even when the same provision payload also lost its policy binding.
     try {
@@ -300,6 +312,14 @@ export class TurnExecutor {
           const scope = sessionWriteScope(this.db, session);
           if (scope.kind === "invalid") {
             throw new BrokerError("POLICY_UNSUPPORTED", scope.reason, { executionStarted: false });
+          }
+          // A05 authoritative re-check inside the serialized boundary: the
+          // durable lease must still match the workspace's live physical
+          // checkout (realpath/stat syscall, never a subprocess). A retargeted
+          // alias refuses dispatch before execution_started is ever recorded.
+          const leaseDrift = this.workspaceLeaseBindingDrift(turnId, session);
+          if (leaseDrift) {
+            throw new BrokerError("WORKSPACE_CHANGED", leaseDrift, { executionStarted: false });
           }
           updateTurnFields(this.db, turnId, { execution_started: true }, t.state_version, now);
           appendEvent(this.db, {
@@ -946,6 +966,25 @@ export class TurnExecutor {
   }
 
   /**
+   * A05: drift description when the session's workspace no longer resolves
+   * (realpath/stat) to the durable physical checkout identity recorded in its
+   * active workspace_lease — an alias retargeted or removed after admission —
+   * or null when the binding still holds. Legacy workspace_id-scoped leases
+   * carry no physical binding and are never re-validated here.
+   */
+  private workspaceLeaseBindingDrift(turnId: string, session: SessionRecord): string | null {
+    if (!session.workspace_id || session.workspace_mode === "review_slot") return null;
+    const lease = listActiveReservationsByOwner(this.db, turnId).find((r) => r.kind === "workspace_lease");
+    if (!lease || !isPhysicalLeaseScope(lease.scope)) return null;
+    const workspace = getWorkspace(this.db, session.workspace_id);
+    const identity = workspace?.canonical_path ? resolvePhysicalCheckoutIdentity(workspace.canonical_path) : null;
+    if (!identity || identity.scope !== lease.scope) {
+      return "workspace no longer resolves to the leased physical checkout (alias retargeted or removed)";
+    }
+    return null;
+  }
+
+  /**
    * Returns a drift description when the live workspace digest no longer
    * matches the turn's baseline snapshot (§8.2), or null when it matches.
    */
@@ -1061,6 +1100,8 @@ export class TurnExecutor {
    * files may appear in undeclared/protected areas.
    */
   private finalCapture(turn: TurnRecord, session: SessionRecord): { snapshot: SnapshotRecord; delta: ManifestDelta } {
+    const leaseDrift = this.workspaceLeaseBindingDrift(turn.turn_id, session);
+    if (leaseDrift) throw new CoverageError(leaseDrift, "EVIDENCE_CAPTURE_FAILED");
     const workspace = session.workspace_id ? getWorkspace(this.db, session.workspace_id) : null;
     if (!workspace || !workspace.canonical_path) {
       throw new CoverageError("Writer session has no resolvable workspace path", "EVIDENCE_CAPTURE_FAILED");
