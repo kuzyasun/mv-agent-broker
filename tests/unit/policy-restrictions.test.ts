@@ -308,10 +308,15 @@ describe("spawn admission with policy restrictions", () => {
     const h = createHarness();
     try {
       const before = brokerCounts(h);
-      await expectBrokerErrorAsync(() => h.spawnWorkerSession({ policy_restrictions: { sandbox: "none" } }), "POLICY_UNSUPPORTED");
-      await expectBrokerErrorAsync(() => h.spawnWorkerSession({ policy_restrictions: { access: "workspace-write" } }), "INVALID_REQUEST");
-      await expectBrokerErrorAsync(() => h.spawnWorkerSession({ policy_restrictions: { write_scope: ["../x"] } }), "INVALID_REQUEST");
-      await expectBrokerErrorAsync(() => h.spawnWorkerSession({ policy_restrictions: "read_only" }), "INVALID_REQUEST");
+      for (const [restriction, code] of [
+        [{ sandbox: "none" }, "POLICY_UNSUPPORTED"],
+        [{ access: "workspace-write" }, "INVALID_REQUEST"],
+        [{ write_scope: ["../x"] }, "INVALID_REQUEST"],
+        ["read_only", "INVALID_REQUEST"],
+      ] as const) {
+        const error = await expectBrokerErrorAsync(() => h.spawnWorkerSession({ policy_restrictions: restriction }), code);
+        expect(error.executionStarted).toBe(false);
+      }
       expect(brokerCounts(h)).toEqual(before);
       const events = h.db.raw.prepare("SELECT COUNT(*) c FROM events WHERE type='session_spawned'").get() as { c: number };
       expect(events.c).toBe(0);

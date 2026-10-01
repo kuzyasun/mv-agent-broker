@@ -359,6 +359,7 @@ export class BrokerCore {
       throw new BrokerError(
         "POLICY_UNSUPPORTED",
         `Policy profile '${req.policy_profile_id}' version ${POLICY_PROFILE_VERSION} is not registered.`,
+        { executionStarted: false },
       );
     }
     const narrowed = computeEffectiveWritePolicy({
@@ -367,7 +368,7 @@ export class BrokerCore {
       profileConfigJson: profile.config,
       requestedRestrictions: req.policy_restrictions,
     });
-    if (!narrowed.ok) throw new BrokerError(narrowed.code, narrowed.reason);
+    if (!narrowed.ok) throw new BrokerError(narrowed.code, narrowed.reason, { executionStarted: false });
     return narrowed.policy;
   }
 
