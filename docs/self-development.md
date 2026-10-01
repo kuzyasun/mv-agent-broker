@@ -4,6 +4,85 @@ The operator authorized ZCode, Antigravity and Cursor for broker development
 and review, with a coordinator review and commit after each completed package.
 Claude is excluded from this workflow. Offline fixtures do not launch vendors.
 
+## Operator pilot priorities — 2026-10-01
+
+The operator redirected development toward a usable MCP for everyday work and
+lower coordination cost. The v0.2 specification remains the reference; its
+complete acceptance matrix is deferred rather than represented as complete.
+Existing ownership, idempotency, preservation and explicit failure behavior stay
+in place. No new edge-case gate is required merely to start the local pilot.
+
+Success means a coordinator can connect the broker to another repository,
+discover configured routes, delegate a bounded implementation, obtain its
+result, request an independent review when useful, and continue the task.
+Setup must not require private coordinator scripts or manual SQLite edits.
+
+| Next delivery | User value | Minimum acceptance |
+|---|---|---|
+| P1: Operator setup and connection | One documented setup/start path for any chosen repository; generate a client MCP configuration snippet | Fresh state initializes owned bases; validate config without inference; connect a client and run an offline mock task |
+| P2: Named worker/reviewer routes | Choose allowed providers, model/effort and defaults once; reuse them in tasks | Validate configured routes and expose them to the coordinator; one routing smoke; no guessed IDs or hidden substitution |
+| P3: Pilot and issue capture | Use the broker for actual work outside its own repository and record encountered problems | One bounded implementation, review and follow-up through the ordinary MCP path; inspect the actual diff and result; preserve failed evidence |
+
+P1 and P2 are small deliveries that reuse the existing daemon/bridge and
+registry. This is a proposed operator interface, not an already implemented
+configuration loader. A single JSON config should contain CLI pins, project
+registration, named routes and coordinator defaults. Global defaults may be
+overridden per project. Native CLI login remains provider-owned; account profile
+metadata does not switch a subscription plan or create a new vendor login.
+
+The coordinator owns task decomposition and final acceptance. Role preferences
+belong to the broker configuration/coordinator instructions; the MCP connection
+in Codex only exposes the broker's tools. A small instruction file or skill
+should explain how to select a named route and return concise results.
+Configured defaults are distinct from the allowed route list. An alternative
+provider may be selected explicitly or under an operator-approved, visible
+policy; UNKNOWN execution never authorizes a replacement launch.
+
+Retain the operator's existing route choices: ZCode Individual Flash/max workers,
+selected GLM/high reviews, Antigravity Gemini 3.8 medium/high, and Cursor auto.
+ZCode's five-hour quota was reported exhausted; the allowed list does not imply
+current availability. Claude stays excluded from this workflow. Do not silently
+raise effort or change the main coordinator model.
+
+### Delivery and token discipline
+
+- Give each worker one coherent outcome and only the necessary source/context.
+  Return changed paths, meaningful checks, result and remaining problems.
+- Use independent review for substantive code/risk; do not commission repeated
+  vendor reviews for mechanical documentation or already verified minor repairs.
+  The coordinator verifies findings and owns the final diff.
+- Run targeted existing checks for the changed behavior. Run the full suite at
+  integration checkpoints or when a failure/cross-module change justifies it.
+  Add regression tests for observed failures and material expected behavior.
+- Retrieve final results and bounded event deltas. Until event wait is completed,
+  a client can use bounded polling with backoff; avoid repeated full transcripts.
+- Record broker issues with provider/version, session/turn reference, observable
+  error, short reproduction, impact and workaround. Keep credentials/raw native
+  thinking out of the log. Missing quota telemetry remains unknown.
+- Fix immediately when a problem risks losing changes, permits uncontrolled paid
+  execution, misreports completion, or blocks the ordinary workflow. Defer rare
+  recoverable cases with a recorded limitation and workaround.
+
+### Deferred work and native subagents
+
+Complete A01–A53 closure, exhaustive provider/role/platform certification, total
+storage admission and richer event-wait behavior are later hardening work unless
+an actual pilot problem makes one necessary. Existing incomplete package clones
+remain unaccepted; do not integrate them wholesale to close the old plan.
+Fresh inputs/slots initialization is part of P1 because it blocks ordinary setup.
+
+Cursor and Antigravity officially document native CLI subagents. First test one
+small task with the installed version; then decide whether exposing a simple
+native-delegation preference adds value. Do not build a nested orchestration
+platform first. Broker-visible workers and vendor-internal subagents are separate:
+internal models, quotas and child-task controls are not automatically observable
+through the current adapter. Parallel execution can improve elapsed time without
+reducing total usage. No native subagent acceptance has been established here.
+
+References: [Codex MCP connection](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+[Cursor subagents](https://cursor.com/docs/subagents),
+[Antigravity CLI subagents](https://antigravity.google/docs/subagents?tab=cli).
+
 ## Routes
 
 | Role | Route |

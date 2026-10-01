@@ -33,7 +33,9 @@ Known limitations (intentional, fail-closed):
   uses the separate bridge attached to one daemon (ADR-0003 amendment).
 - Native verification is partial; full provider/role/platform profiles remain unverified (spec §13.1/§18.1).
 - `wait_ms` long-poll on `agent_turn_events` is accepted and resolves immediately.
-- Worktree mode does not yet create git worktrees (registered path only).
+- Worktree mode creates broker-managed detached Git worktrees from an explicit
+  registered source and commit; registered worktree paths remain supported
+  ([checkpoint](docs/native-smoke/2026-10-01-worktree-provisioning/report.md)).
 - Artifact storage budget beyond the per-capture 256 MiB source cap unenforced.
 - Daemon-owned deadline supervision runs during execution and graceful drain.
   Polling defaults to 50ms; `AB_DEADLINE_POLL_MS` accepts integers 5..60000.
@@ -50,6 +52,12 @@ procedures: [provider operations guide](docs/providers.md). Exact verification
 status: [capability matrix](docs/provider-capabilities.md).
 Native self-development, frozen broker runtimes and current remaining work:
 [self-development checkpoint](docs/self-development.md).
+
+The current delivery priority is an **operator pilot**: practical setup for
+other repositories, named worker/reviewer routes, and real-task issue capture.
+These setup/routing interfaces are planned, not yet a finished configuration
+product. Full specification acceptance is deferred; existing behavior and
+evidence are preserved. See the pilot priorities in the checkpoint above.
 
 ```bash
 npm install
