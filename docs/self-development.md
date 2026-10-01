@@ -48,7 +48,11 @@ An optional `review` route starts an independent review of the completed
 worker snapshots. `review_from` points to a private successful worker evidence
 file for a standalone review. `review_current: true` captures current integrated
 source via a mock turn, then reviews it against that worker's original baseline.
-The latter does not run another paid implementation task.
+This explicit capture also permits auditing retained changes from a failed
+worker; it preserves the original failed status and records `reviewSource`.
+It does not run another paid implementation task. Final worker/reviewer reports
+must fit 3000 characters, with findings first and relative paths, to stay inside
+the broker's 4000-character summary boundary. A capped report is partial evidence.
 
 Private evidence includes MCP results/events and bounded native reports; no
 credentials are copied into broker storage. Native authentication stays with
@@ -61,6 +65,9 @@ Use a hidden detached job when execution must survive a client turn ending.
 Do not change covered source while a writer holds its turn lease: even a
 coordinator edit can produce a scope violation or unstable final capture.
 Inspect the final actual diff independently of the worker's reported checks.
+Keep coordinator diagnostics in existing nested private directories such as
+`.state/coordinator/`; creating top-level `.state` files during a writer turn
+is observable protected metadata and can fail that turn's final capture.
 
 This development harness is not an operator configuration product or a native
 sandbox guarantee. Ambient vendor MCP/plugins, reviewer read/search-only
@@ -72,7 +79,7 @@ Production adapters do not rely on reading Desktop chat caches for reports.
 
 | Package | Remaining acceptance |
 |---|---|
-| Effective policy and inputs | Apply narrowing restrictions; fail before inference for mandatory unsupported enforcement; verify native read/search-only reviewer and required-input delivery |
+| Effective policy and inputs | Core narrowing and immutable binding completed; native mandatory enforcement, read/search-only reviewer and required-input enforcement remain open |
 | Runtime supervision | Durable launch/process ownership, managed descendant quiescence, crash/disconnect/restart cases and explicit UNKNOWN reconciliation |
 | Preflight and binding | Native CLI/auth/catalog readiness without inference; honest CLI/model/effort/account bindings and error classification |
 | Workspaces/resources | Broker-created Git worktrees, total storage admission including staging, bounded output and event wait behavior |
@@ -84,3 +91,6 @@ The daemon deadline timer and graceful-drain package is the first completed
 implementation portion of this workflow. Evidence and validation are in the
 [checkpoint report](native-smoke/2026-10-01-dogfood/report.md). The complete
 MVP acceptance gate remains open.
+The [effective write-policy checkpoint](native-smoke/2026-10-01-effective-policy/report.md)
+records the next portion, including the preserved failed native worker turn,
+separate integrated capture, Cursor review and coordinator acceptance.

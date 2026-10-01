@@ -17,6 +17,7 @@ import {
   getDaemonState,
   getIdempotencyRecord,
   getProject,
+  getPolicyProfile,
   getSession,
   getSnapshotRecord,
   getTurn,
@@ -70,13 +71,21 @@ import {
   isNonterminalTurnState,
 } from "./transitions.ts";
 import type { TurnExecutor } from "./execution.ts";
+import { computeEffectiveWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
 import type { ProviderAdapter } from "../runtime/adapter.ts";
 import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, CaptureError } from "../snapshots/capture.ts";
 import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
-import { CoverageError, normalizePrefixList, normalizeRelPath, parsePolicyWriteScope, uncoveredWriteScope, validateCoverageConfig, type CoverageConfig, type PolicyWriteScope } from "../workspaces/coverage.ts";
+import { CoverageError, uncoveredWriteScope, validateCoverageConfig, type CoverageConfig } from "../workspaces/coverage.ts";
 
 // ─── Request DTOs (API 0.2 §10) ─────────────────────────────────────────────
+
+/**
+ * Sessions bind policy profile version "1" at spawn (existing convention);
+ * the binding — profile config + fingerprint + narrowed restrictions — is
+ * captured immutably in the provision_session intent payload (§12.1).
+ */
+const POLICY_PROFILE_VERSION = "1";
 
 export interface SpawnRequest {
   project_id: string;
@@ -332,6 +341,34 @@ export class BrokerCore {
     if (req.role === "reviewer" && req.workspace.mode !== "review_slot") {
       throw new BrokerError("INVALID_REQUEST", "role=reviewer requires workspace.mode=review_slot (§8.1).");
     }
+    // §12.1 policy preflight: requested restrictions validated and narrowed
+    // against the operator profile BEFORE any session/reservation exists.
+    this.spawnPolicyPreflight(req);
+  }
+
+  /**
+   * Effective write policy for a spawn (§12.1): narrow the operator profile
+   * by the requested restrictions. Unknown mandatory restrictions are
+   * POLICY_UNSUPPORTED, malformed values INVALID_REQUEST, widening rejected.
+   * Throws instead of returning the error union — admission never continues
+   * on a policy failure.
+   */
+  private spawnPolicyPreflight(req: SpawnRequest): EffectiveWritePolicy {
+    const profile = getPolicyProfile(this.db, req.policy_profile_id, POLICY_PROFILE_VERSION);
+    if (!profile) {
+      throw new BrokerError(
+        "POLICY_UNSUPPORTED",
+        `Policy profile '${req.policy_profile_id}' version ${POLICY_PROFILE_VERSION} is not registered.`,
+      );
+    }
+    const narrowed = computeEffectiveWritePolicy({
+      policy_profile_id: req.policy_profile_id,
+      policy_profile_version: POLICY_PROFILE_VERSION,
+      profileConfigJson: profile.config,
+      requestedRestrictions: req.policy_restrictions,
+    });
+    if (!narrowed.ok) throw new BrokerError(narrowed.code, narrowed.reason);
+    return narrowed.policy;
   }
 
   /**
@@ -346,6 +383,12 @@ export class BrokerCore {
     const now = this.now();
     const sessionId = newId(ID_PREFIX.session);
     const provisionIntent = newId(ID_PREFIX.intent);
+
+    // §12.1: the effective write policy is computed inside the authoritative
+    // admission tx from the profile version the session will bind, and is
+    // then immutable for the session's lifetime (stored in the provision
+    // intent payload; the live profile config never re-widens it).
+    const effectivePolicy = this.spawnPolicyPreflight(req);
 
     // Coverage binding resolves at spawn from the registered workspace
     // profile (§5.2) and is immutable for the session afterwards.
@@ -376,7 +419,7 @@ export class BrokerCore {
       role: req.role,
       instructions_hash: sha256Hex(req.instructions),
       policy_profile_id: req.policy_profile_id,
-      policy_profile_version: "1",
+      policy_profile_version: POLICY_PROFILE_VERSION,
       workspace_id: req.workspace.workspace_id,
       workspace_mode: req.workspace.mode,
       coverage_profile_id: binding?.profile_id ?? null,
@@ -403,7 +446,13 @@ export class BrokerCore {
       session_id: sessionId,
       turn_id: null,
       state: "pending",
-      payload: JSON.stringify({ request_hash: payloadHash, instructions: req.instructions }),
+      // §12.1 durable binding: requested restrictions + profile config/
+      // fingerprint + normalized effective policy, captured at admission.
+      payload: JSON.stringify({
+        request_hash: payloadHash,
+        instructions: req.instructions,
+        effective_policy: effectivePolicy,
+      }),
       created_at: now,
       updated_at: now,
     });
@@ -935,18 +984,19 @@ export class BrokerCore {
   }
 
   /**
-   * §8.7: the coverage contract must cover the whole policy write scope. An
-   * INVALID write scope (bad JSON / bad prefixes) is an operator config
-   * error — reject before inference, not after the run.
+   * §8.7: the coverage contract must cover the whole effective policy write
+   * scope. An INVALID scope (missing or unreadable session binding)
+   * is an operator/config error — reject before inference, not after
+   * the run.
    */
   private checkWriteScopeCoverage(session: SessionRecord): void {
+    const scope = sessionWriteScope(this.db, session);
+    if (scope.kind === "invalid") {
+      throw new BrokerError("POLICY_UNSUPPORTED", `Session policy binding is unusable: ${scope.reason}`, { executionStarted: false });
+    }
     if (!session.coverage_profile_id || !session.coverage_profile_version) return;
     const profile = getCoverageProfile(this.db, session.coverage_profile_id, session.coverage_profile_version);
     if (!profile) return;
-    const scope = this.policyWriteScope(session);
-    if (scope.kind === "invalid") {
-      throw new BrokerError("SNAPSHOT_COVERAGE_MISMATCH", `Policy write scope is invalid (§8.7): ${scope.reason}`);
-    }
     if (scope.kind === "absent") return;
     const config = JSON.parse(profile.config) as CoverageConfig;
     const uncovered = uncoveredWriteScope(scope.prefixes, config);
@@ -956,15 +1006,6 @@ export class BrokerCore {
         `Policy write scope is not covered by the source selector (§8.7): ${uncovered.join(", ")}`,
       );
     }
-  }
-
-  /** Tri-state policy write scope from the session's bound profile (§8.1). */
-  private policyWriteScope(session: SessionRecord): PolicyWriteScope {
-    const row = this.db.raw
-      .prepare("SELECT config FROM policy_profiles WHERE policy_profile_id = ? AND version = ?")
-      .get(session.policy_profile_id, session.policy_profile_version) as { config: string } | undefined;
-    if (!row) return { kind: "invalid", reason: "policy profile not found" };
-    return parsePolicyWriteScope(row.config);
   }
 
   /** Mutable session-level checks — run inside the authoritative tx. */

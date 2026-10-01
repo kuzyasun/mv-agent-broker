@@ -55,7 +55,8 @@ import type {
 import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, diffManifests, readManifest, type ManifestDelta } from "../snapshots/capture.ts";
 import { diffSnapshots, renderDiffDocument } from "../snapshots/diff.ts";
-import { CoverageError, matchesPrefix, normalizePrefixList, parsePolicyWriteScope, type CoverageConfig } from "../workspaces/coverage.ts";
+import { CoverageError, matchesPrefix, type CoverageConfig } from "../workspaces/coverage.ts";
+import { sessionWriteScope } from "./policy.ts";
 import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
 import {
   buildTurnInputManifest,
@@ -219,6 +220,23 @@ export class TurnExecutor {
     }
     if (turnNow.state !== "STARTING") return; // concurrent transition happened
 
+    // Preserve the established error priority for a corrupt caller contract,
+    // even when the same provision payload also lost its policy binding.
+    try {
+      this.persistedTaskContext(session, turnNow);
+    } catch (error) {
+      this.finalizePreStartKnown(turnNow, session, "INPUT_DELIVERY_FAILED", error instanceof Error ? error.message : String(error));
+      return;
+    }
+
+    // The intent may have become unreadable after admission. Every role must
+    // validate the immutable grant before preparing inputs or invoking native.
+    const policyScope = sessionWriteScope(this.db, session);
+    if (policyScope.kind === "invalid") {
+      this.finalizePreStartKnown(turnNow, session, "POLICY_UNSUPPORTED", policyScope.reason);
+      return;
+    }
+
     // Required input delivery BEFORE dispatch (§7.1.1, §13.2.1): resolve →
     // plan → materialize read-only views → seal the TurnInputManifest. Any
     // failure here is a journaled pre-dispatch failure — inference never
@@ -261,6 +279,10 @@ export class TurnExecutor {
           if (t.state === "CANCELLING") throw new DispatchRefusedError(watch.reason ?? "cancelled");
           if (t.state !== "STARTING" && t.state !== "RUNNING") {
             throw new DispatchRefusedError(`turn state is ${t.state}`);
+          }
+          const scope = sessionWriteScope(this.db, session);
+          if (scope.kind === "invalid") {
+            throw new BrokerError("POLICY_UNSUPPORTED", scope.reason, { executionStarted: false });
           }
           updateTurnFields(this.db, turnId, { execution_started: true }, t.state_version, now);
           appendEvent(this.db, {
@@ -716,18 +738,20 @@ export class TurnExecutor {
     return { manifest };
   }
 
-  /**
-   * Deterministic context envelope (§7.1): session/turn binding, workspace
-   * precondition, and clearly-delimited REQUIRED INPUT sections — inline
-   * data inline (within the shared budget), path inputs as exact locations.
-   */
-  private buildEnvelope(session: SessionRecord, turn: TurnRecord, manifest: TurnInputManifest): string {
+  /** Validate the durable caller contract without materializing any input. */
+  private persistedTaskContext(session: SessionRecord, turn: TurnRecord): { instructions: string; task: Record<string, unknown> } {
     const instructions = getSessionInstructions(this.db, session.session_id);
     const task = getTurnEventPayload(this.db, turn.turn_id, "turn_admitted")?.task as Record<string, unknown> | undefined;
     if (instructions === null || sha256Hex(instructions) !== session.instructions_hash ||
         !task || typeof task.goal !== "string" || sha256Hex(task.goal) !== turn.task_goal_hash) {
       throw new BrokerError("INPUT_DELIVERY_FAILED", "Persisted session instructions or task contract is missing or inconsistent.");
     }
+    return { instructions, task };
+  }
+
+  /** Deterministic envelope: caller contract and complete required inputs. */
+  private buildEnvelope(session: SessionRecord, turn: TurnRecord, manifest: TurnInputManifest): string {
+    const { instructions, task } = this.persistedTaskContext(session, turn);
     const lines: string[] = [
       "agent-broker context envelope (deterministic, broker-generated)",
       `turn=${turn.turn_id} session=${session.session_id} role=${session.role}`,
@@ -1060,11 +1084,12 @@ export class TurnExecutor {
     });
     const delta = diffManifests(baselineManifest, captured.manifest);
 
-    // Scope enforcement (§8.5, §8.7): post-detection for write scopes in P2;
-    // a violation fails the turn with evidence, no rollback is attempted.
-    // Fail-closed: an unreadable policy profile cannot silently disable the
-    // check, and a policy without a declared write scope permits no writes.
-    const scope = this.policyWriteScope(session);
+    // Scope enforcement (§8.5, §8.7): post-detection against the session's
+    // IMMUTABLE effective write policy (§12.1 binding); a violation fails the
+    // turn with evidence, no rollback is attempted. Fail-closed: an unreadable
+    // binding or policy profile cannot silently disable the check, and an
+    // empty scope (read_only or undeclared write_scope) permits no writes.
+    const scope = sessionWriteScope(this.db, session);
     if (scope.kind === "invalid") {
       throw new CoverageError("Policy write scope invalid: " + scope.reason, "EVIDENCE_CAPTURE_FAILED");
     }
@@ -1096,14 +1121,6 @@ export class TurnExecutor {
       );
     }
     return { snapshot: captured.snapshot, delta };
-  }
-
-  private policyWriteScope(session: SessionRecord): { kind: "declared"; prefixes: string[] } | { kind: "absent" } | { kind: "invalid"; reason: string } {
-    const row = this.db.raw
-      .prepare("SELECT config FROM policy_profiles WHERE policy_profile_id = ? AND version = ?")
-      .get(session.policy_profile_id, session.policy_profile_version) as { config: string } | undefined;
-    if (!row) return { kind: "invalid", reason: "policy profile not found" };
-    return parsePolicyWriteScope(row.config);
   }
 
   private markUnknown(turn: TurnRecord, session: SessionRecord, cause: unknown): void {

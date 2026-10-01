@@ -90,8 +90,8 @@ if (process.argv[2] === '--serve') {
     const reviewer = role === 'reviewer';
     const session = await tool('agent_session_spawn', { project_id: 'self', idempotency_key: randomUUID(), provider: route.provider, account_profile_id: route.provider, model: route.model, ...(route.effort == null ? {} : { effort: route.effort }), role,
       instructions: reviewer
-        ? 'Independent read-only review. Read the required diff and source in this isolated target snapshot. Do not edit files, run mutating commands, invoke other agents/MCP, commit, or access credentials. Report concrete findings with path/line, severity and reasoning; say if none found. Native permission enforcement remains unverified; obey these boundaries.'
-        : `Implement the assigned bounded package in the repository. Allowed edits ONLY: ${task.write_scope.join(', ')}. Preserve existing changes. Do not stage/commit/push, delegate, access credentials or call MCP. Read nearby source first. Run requested offline checks, fix failures, and self-review actual diff. Return changed files, behavior, exact check results and limitations.`,
+        ? 'Independent read-only review. Read the required diff and source in this isolated target snapshot. Do not edit files, run mutating commands, invoke other agents/MCP, commit, or access credentials. Final report MUST fit 3000 characters: findings first, relative path/line, severity and reasoning; say if none found. Omit scope recaps, absolute paths and introductions. Native permission enforcement remains unverified; obey these boundaries.'
+        : `Implement the assigned bounded package in the repository. Allowed edits ONLY: ${task.write_scope.join(', ')}. Preserve existing changes. Do not stage/commit/push, delegate, access credentials or call MCP. Read nearby source first. Run requested offline checks, fix failures, and self-review actual diff. Final report MUST fit 3000 characters: changed files, behavior, exact check results and limitations.`,
       workspace: { mode: reviewer ? 'review_slot' : 'current', workspace_id: reviewer ? 'review' : 'repo' }, policy_profile_id: reviewer ? 'reviewer' : 'worker' });
     sessions.push(session.session_id);
     const deadlineMs = route.deadline_ms ?? 900000;
@@ -146,7 +146,10 @@ if (process.argv[2] === '--serve') {
     bridge.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     if (reviewFrom) {
       const worker = reviewFrom.turns.find(turn => turn.role === 'worker');
-      if (worker?.status?.state !== 'SUCCEEDED') throw new Error('Review requires a successful worker snapshot binding.');
+      if (!worker?.session?.initial_snapshot_id) throw new Error('Review requires a retained worker baseline.');
+      if (!['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(worker.status?.state)) throw new Error('Review cannot capture a running or unresolved worker.');
+      if (worker.status?.state !== 'SUCCEEDED' && !task.review_current) throw new Error('Review of a failed worker requires an explicit current-source capture.');
+      evidence.reviewSource = { turn_id: worker.accepted.turn_id, state: worker.status?.state, capture_current: !!task.review_current };
       let target = worker.result.broker_observed.final_snapshot_id;
       if (task.review_current) {
         // Capture the integrator's fixes using the public interface and mock;
@@ -154,6 +157,7 @@ if (process.argv[2] === '--serve') {
         const current = await run({ provider: 'mock', model: 'mock', goal: 'Capture the current integrated source for independent review.', deadline_ms: 60000 }, 'worker');
         target = current.target_snapshot_id;
       }
+      if (!target) throw new Error('Review requires a sealed target snapshot.');
       await run(task, 'reviewer', { baseline_snapshot_id: worker.session.initial_snapshot_id, target_snapshot_id: target });
     } else {
       const binding = await run(task, 'worker');

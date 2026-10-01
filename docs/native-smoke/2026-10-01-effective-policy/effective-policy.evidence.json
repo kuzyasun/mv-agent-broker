@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "usage": "unknown",
+  "native_enforcement": "unknown",
+  "runs": [
+    {
+      "name": "isolation",
+      "status": "passed",
+      "runtime_commit": "d7d01b3ba17c46100972eedbd09804330efbf3c6",
+      "runtime_files": 47,
+      "started_at": "2026-09-30T23:36:43.959Z",
+      "finished_at": "2026-09-30T23:36:44.728Z",
+      "turns": [
+        {
+          "role": "worker",
+          "provider": "mock",
+          "requested_model": "mock",
+          "requested_effort": null,
+          "session_id": "session-7a05635b057df26ae52fc0a6",
+          "turn_id": "turn-76026165a3738fb051e192b9",
+          "state": "SUCCEEDED",
+          "native_conversation_ref": "mock-native-turn-76026165a3738fb051e192b9",
+          "baseline_snapshot_id": "snap-ac18f7d036be21bc14371883",
+          "final_snapshot_id": "snap-610c3d16beaab58b5d4fcae2",
+          "native_outcome": "completed",
+          "execution_started": true,
+          "error_code": null,
+          "summary_characters": 2,
+          "summary_at_cap": false
+        }
+      ]
+    },
+    {
+      "name": "worker",
+      "status": "failed",
+      "runtime_commit": "e8a2f70d5716c2d70997b539eba3ab32cb523813",
+      "runtime_files": 47,
+      "started_at": "2026-09-30T23:38:45.594Z",
+      "finished_at": "2026-10-01T00:02:11.251Z",
+      "turns": [
+        {
+          "role": "worker",
+          "provider": "zcode",
+          "requested_model": "account:zai-individual-coding-plan/GLM-5.3-Flash",
+          "requested_effort": "max",
+          "session_id": "session-02f0e6a48c07ddde9d2e0808",
+          "turn_id": "turn-e228a4bc2caebbace84b1404",
+          "state": "FAILED",
+          "native_conversation_ref": "sess_ef34d10a-204a-4e9c-8d34-ecf20d902186",
+          "baseline_snapshot_id": "snap-d9b8dfb2090b66d76b63b666",
+          "final_snapshot_id": null,
+          "native_outcome": "completed",
+          "execution_started": true,
+          "error_code": "SCOPE_VIOLATION",
+          "summary_characters": 4000,
+          "summary_at_cap": true
+        }
+      ]
+    },
+    {
+      "name": "design",
+      "status": "passed",
+      "runtime_commit": "e8a2f70d5716c2d70997b539eba3ab32cb523813",
+      "runtime_files": 47,
+      "started_at": "2026-09-30T23:42:52.085Z",
+      "finished_at": "2026-09-30T23:47:07.573Z",
+      "turns": [
+        {
+          "role": "reviewer",
+          "provider": "antigravity",
+          "requested_model": "gemini-3.8-flash-high",
+          "requested_effort": "high",
+          "session_id": "session-32bf97c3c98de4002b01ebae",
+          "turn_id": "turn-b4738e2a57baf84fe8133866",
+          "state": "SUCCEEDED",
+          "native_conversation_ref": "09fb67f5-f341-4e00-b5b9-887361f602e9",
+          "baseline_snapshot_id": "snap-ac18f7d036be21bc14371883",
+          "final_snapshot_id": null,
+          "native_outcome": "completed",
+          "execution_started": true,
+          "error_code": null,
+          "summary_characters": 4000,
+          "summary_at_cap": true
+        }
+      ]
+    },
+    {
+      "name": "review",
+      "status": "passed",
+      "runtime_commit": "e8a2f70d5716c2d70997b539eba3ab32cb523813",
+      "runtime_files": 47,
+      "started_at": "2026-10-01T00:11:13.440Z",
+      "finished_at": "2026-10-01T00:13:28.053Z",
+      "review_source": {
+        "turn_id": "turn-e228a4bc2caebbace84b1404",
+        "state": "FAILED",
+        "capture_current": true
+      },
+      "turns": [
+        {
+          "role": "worker",
+          "provider": "mock",
+          "requested_model": "mock",
+          "requested_effort": null,
+          "session_id": "session-91d0545d604bfc800972af90",
+          "turn_id": "turn-5fc6ec3d741deaa44f42d920",
+          "state": "SUCCEEDED",
+          "native_conversation_ref": "mock-native-turn-5fc6ec3d741deaa44f42d920",
+          "baseline_snapshot_id": "snap-31a4857f06c310655b1106c8",
+          "final_snapshot_id": "snap-4293e766a2bf761e34ee1760",
+          "native_outcome": "completed",
+          "execution_started": true,
+          "error_code": null,
+          "summary_characters": 2,
+          "summary_at_cap": false
+        },
+        {
+          "role": "reviewer",
+          "provider": "cursor",
+          "requested_model": "auto",
+          "requested_effort": null,
+          "session_id": "session-0b6f5c2116de7068a389af99",
+          "turn_id": "turn-35b53ba842ad8cb6a4cc148a",
+          "state": "SUCCEEDED",
+          "native_conversation_ref": "9788f5f8-58eb-40a4-9ee7-3ddf990a630d",
+          "baseline_snapshot_id": "snap-d9b8dfb2090b66d76b63b666",
+          "final_snapshot_id": null,
+          "native_outcome": "completed",
+          "execution_started": true,
+          "error_code": null,
+          "summary_characters": 1051,
+          "summary_at_cap": false
+        }
+      ]
+    }
+  ],
+  "isolation_proof": {
+    "commit": "d7d01b3ba17c46100972eedbd09804330efbf3c6",
+    "dirty_source_excluded": true,
+    "untracked_source_excluded": true,
+    "frozen_source_equals_git_blob": true
+  },
+  "worker_finalization": {
+    "attribution": "coordinator-created top-level diagnostics in protected .state metadata",
+    "original_state_preserved": true
+  },
+  "coordinator_validation": {
+    "typecheck": "passed",
+    "tests": 343,
+    "test_files": 29,
+    "policy_tests": 27,
+    "caller_contract_tests": 5,
+    "cursor_config_auth_probe": "authenticated without inference",
+    "final_caller_contract_priority_fix": "after sealed Cursor target; verified by coordinator"
+  }
+}
