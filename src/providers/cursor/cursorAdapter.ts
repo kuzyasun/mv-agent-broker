@@ -162,6 +162,34 @@ export function parseCursorModelCatalog(stdout: string): string[] {
   return ids;
 }
 
+const CURSOR_EFFORTS = new Set(["none", "low", "normal", "medium", "high", "xhigh", "max"]);
+
+/**
+ * Cursor exposes reasoning variants as catalog model IDs, not as a CLI
+ * `--effort` option. Keep this mapping in one place so readiness and execute
+ * reject the same unavailable/contradictory selections.
+ */
+export function resolveCursorModel(model: string, effort: string | null): string {
+  const base = model.trim();
+  if (!base) {
+    throw new BrokerError("MODEL_UNAVAILABLE", "Cursor requires an explicit model from its CLI catalog.", { executionStarted: false });
+  }
+  if (!effort) return base;
+  if (!CURSOR_EFFORTS.has(effort)) {
+    throw new BrokerError("MODEL_UNAVAILABLE", `Cursor model-effort combination '${base}+${effort}' is unsupported.`, { executionStarted: false });
+  }
+  const suffix = /-(none|low|normal|medium|high|xhigh|max)(?:-fast)?$/.exec(base)?.[1];
+  if (suffix) {
+    if (suffix === effort) return base;
+    throw new BrokerError("MODEL_UNAVAILABLE", `Cursor model-effort combination '${base}+${effort}' is contradictory or unsupported.`, { executionStarted: false });
+  }
+  const candidate = `${base}-${effort}`;
+  if (!/^[a-z0-9][a-z0-9.-]*$/i.test(candidate)) {
+    throw new BrokerError("MODEL_UNAVAILABLE", `Cursor model-effort combination '${base}+${effort}' is unsupported.`, { executionStarted: false });
+  }
+  return candidate;
+}
+
 function hasSafeNativeStore(storePath: string): boolean {
   const root = path.parse(storePath).root;
   let current = root;
@@ -216,7 +244,7 @@ function assertRegularOwnedFileOrAbsent(filePath: string, fieldName: string): vo
 
 export class CursorAdapter implements ProviderAdapter {
   readonly providerId = "cursor";
-  readonly adapterVersion = "0.2.8";
+  readonly adapterVersion = "0.2.9";
 
   readonly stateRoot?: string;
   private readonly binary: string;
@@ -251,7 +279,7 @@ export class CursorAdapter implements ProviderAdapter {
     const fail = config.failPreflight;
     if (fail instanceof BrokerError) throw fail;
     if (typeof config.model !== "string") return;
-    const model = config.model.trim();
+    const model = resolveCursorModel(config.model.trim(), typeof config.effort === "string" ? config.effort : null);
     if (!model) {
       throw new BrokerError("MODEL_UNAVAILABLE", "Cursor requires an explicit model from its CLI catalog.", { executionStarted: false });
     }
@@ -334,7 +362,7 @@ export class CursorAdapter implements ProviderAdapter {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", "Cursor session configuration is busy or execution is unsettled.", { executionStarted: false });
     }
     // Require an operator-selected model; historical defaults can disappear.
-    const model = req.requested_model || this.defaultModel;
+    const model = resolveCursorModel(req.requested_model || this.defaultModel, req.requested_effort);
     if (!model.trim()) {
       throw new BrokerError("MODEL_UNAVAILABLE", "Cursor requires an explicit model from its CLI catalog.", { executionStarted: false });
     }

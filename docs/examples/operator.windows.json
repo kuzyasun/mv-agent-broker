@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "state_dir": "C:\\agent-broker\\state",
+  "coordinator_id": "coord-windows",
+  "native_binary_pins": {
+    "cursor": "C:\\Users\\<user>\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
+    "antigravity": "C:\\Users\\<user>\\AppData\\Local\\agy\\bin\\agy.exe",
+    "zcode": "C:\\Users\\<user>\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs",
+    "zcode-node": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "projects": [
+    { "project_id": "repo-a", "display_name": "Replace with repository A" }
+  ],
+  "coordinators": [
+    { "coordinator_id": "coord-windows", "display_name": "Windows operator", "allowed_project_ids": ["repo-a"] }
+  ],
+  "accounts": [
+    { "account_profile_id": "cursor-account", "provider": "cursor", "quota_scope_id": "cursor-cli", "auth_mode": "cli-owned" },
+    { "account_profile_id": "antigravity-account", "provider": "antigravity", "quota_scope_id": "antigravity-cli", "auth_mode": "cli-owned" },
+    { "account_profile_id": "zcode-individual", "provider": "zcode", "quota_scope_id": "zcode-individual", "auth_mode": "cli-owned" }
+  ],
+  "workspaces": [
+    { "workspace_id": "repo-a-current", "project_id": "repo-a", "mode": "current", "canonical_path": "C:\\work\\repo-a", "coverage_profile_id": "repo-a-coverage" }
+    ,{ "workspace_id": "repo-a-review", "project_id": "repo-a", "mode": "review_slot", "canonical_path": null, "coverage_profile_id": "repo-a-coverage" }
+  ],
+  "policy_profiles": [
+    { "policy_profile_id": "repo-a-worker", "version": "1", "config": { "access": "workspace_write", "write_scope": ["src", "tests"] } },
+    { "policy_profile_id": "repo-a-reviewer", "version": "1", "config": { "access": "read_only" } }
+  ],
+  "coverage_profiles": [
+    {
+      "coverage_profile_id": "repo-a-coverage",
+      "version": "1",
+      "config": { "source_prefixes": ["src", "tests"], "non_source_prefixes": [], "excluded_prefixes": [".git", "node_modules"] }
+    }
+  ],
+  "routes": [
+    {
+      "route_id": "cursor-economical-worker",
+      "project_id": "repo-a",
+      "provider": "cursor",
+      "account_profile_id": "cursor-account",
+      "model": "gpt-5.6-luna-high",
+      "effort": "high",
+      "role": "worker",
+      "policy_profile_id": "repo-a-worker",
+      "native_subagents": { "mode": "off", "max_agents": 1 }
+    },
+    {
+      "route_id": "cursor-large-example",
+      "project_id": "repo-a",
+      "provider": "cursor",
+      "account_profile_id": "cursor-account",
+      "model": "gpt-5.6-sol-high",
+      "effort": "high",
+      "role": "worker",
+      "policy_profile_id": "repo-a-worker",
+      "native_subagents": { "mode": "prefer", "max_agents": 2 }
+    },
+    {
+      "route_id": "antigravity-medium-worker",
+      "project_id": "repo-a",
+      "provider": "antigravity",
+      "account_profile_id": "antigravity-account",
+      "model": "gemini-3.8-flash",
+      "effort": "medium",
+      "role": "worker",
+      "policy_profile_id": "repo-a-worker"
+    },
+    {
+      "route_id": "zcode-individual-worker",
+      "project_id": "repo-a",
+      "provider": "zcode",
+      "account_profile_id": "zcode-individual",
+      "model": "GLM-5.3-Flash",
+      "effort": "max",
+      "role": "worker",
+      "policy_profile_id": "repo-a-worker"
+    },
+    {
+      "route_id": "zcode-individual-reviewer",
+      "project_id": "repo-a",
+      "provider": "zcode",
+      "account_profile_id": "zcode-individual",
+      "model": "GLM-5.3",
+      "effort": "high",
+      "role": "reviewer",
+      "policy_profile_id": "repo-a-reviewer"
+    }
+  ]
+}

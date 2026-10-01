@@ -6,7 +6,7 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { CursorAdapter, cursorNativeChatStorePath } from "../../src/providers/cursor/cursorAdapter.ts";
+import { CursorAdapter, cursorNativeChatStorePath, resolveCursorModel } from "../../src/providers/cursor/cursorAdapter.ts";
 import * as headless from "../../src/providers/common/headless.ts";
 import type { AdapterEvent, TurnExecutionRequest } from "../../src/runtime/adapter.ts";
 
@@ -111,6 +111,29 @@ function request(overrides: Partial<TurnExecutionRequest> = {}): TurnExecutionRe
 function gate() { let count = 0; return { acquireDispatchPermission: () => { count++; }, cancellationRequested: () => null, count: () => count }; }
 
 describe("Cursor adapter", () => {
+  it("maps an unsuffixed model plus effort to the catalog model ID", () => {
+    expect(resolveCursorModel("gpt-5.6-sol", "high")).toBe("gpt-5.6-sol-high");
+    expect(resolveCursorModel("gpt-5.6-luna-high", "high")).toBe("gpt-5.6-luna-high");
+    expect(resolveCursorModel("gpt-5.6-sol-high-fast", "high")).toBe("gpt-5.6-sol-high-fast");
+    expect(resolveCursorModel("gpt-5.3-codex-normal", "normal")).toBe("gpt-5.3-codex-normal");
+  });
+
+  it("passes the resolved catalog model ID to Cursor without an effort flag", async () => {
+    const f = fixture();
+    const result = await f.adapter.executeTurn(request({
+      requested_model: "gpt-5.6-sol",
+      requested_effort: "high",
+    }), gate(), () => {});
+    const args = JSON.parse(result.agent_reported!.summary).args;
+    expect(args[args.indexOf("--model") + 1]).toBe("gpt-5.6-sol-high");
+    expect(args).not.toContain("--effort");
+  });
+
+  it("rejects unavailable or contradictory model-effort combinations before launch", () => {
+    expect(() => resolveCursorModel("gpt-5.6-sol-xhigh", "high")).toThrow(/unsupported|contradictory/i);
+    expect(() => resolveCursorModel("gpt-5.6-sol", "turbo")).toThrow(/unsupported/i);
+  });
+
   it.each(["worker", "reviewer", "read-only-worker", "empty-worker"] as const)("force approves only the explicitly writable worker: %s", async mode => {
     const f = fixture();
     const policy = { binding_version: 1 as const, access: mode === "read-only-worker" ? "read_only" as const : "workspace_write" as const,
@@ -306,8 +329,8 @@ describe("Cursor adapter", () => {
     expect(existsSync(path.join(f.stateRoot, "sessions", sessionHash, "config", "chats"))).toBe(false);
     expect(existsSync(f.sentinel)).toBe(false);
   });
-  it("bumps adapter version to 0.2.8", () => {
-    expect(new CursorAdapter().adapterVersion).toBe("0.2.8");
+  it("bumps adapter version to 0.2.9 for explicit effort mapping", () => {
+    expect(new CursorAdapter().adapterVersion).toBe("0.2.9");
   });
   it.each(["root", "sessions", "data"])("refuses a private history %s junction before native launch", async component => {
     const f = fixture(); const g = gate();

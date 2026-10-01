@@ -14,7 +14,7 @@ bridge/daemon processes ([evidence](native-smoke/2026-09-30-codex/report.md)).
 Setup, auth ownership, model/effort rules and limitations for every provider:
 [provider operations guide](providers.md).
 
-Current managed Windows transport versions are Cursor 0.2.8, ZCode 0.2.6,
+Current managed Windows transport versions are Cursor 0.2.9, ZCode 0.2.6,
 Antigravity 0.2.3 and Claude/Codex 0.2.2. Native smoke rows below retain their original
 tested adapter versions; they do not validate a new version-bound profile.
 The [Windows supervision checkpoint](native-smoke/2026-10-01-windows-job/report.md)
@@ -159,7 +159,7 @@ that development scenario, not a full native worker security profile.
 ## Readiness observations and durable binding
 
 See the [native readiness checkpoint](native-smoke/2026-10-01-native-readiness/report.md).
-Current contracts are Cursor 0.2.8, Antigravity 0.2.3 and ZCode 0.2.6.
+Current contracts are Cursor 0.2.9, Antigravity 0.2.3 and ZCode 0.2.6.
 Cursor reports observed version/catalog and a recognized CLI authentication marker;
 Agy reports its model catalog; ZCode reports its installed PROGRAM model catalog.
 Unavailable CLI versions or authentication stay null. Runtime/config fingerprints

@@ -132,6 +132,7 @@ import {
   type WorktreeProvisionJournal,
   type WorktreeProvisionStage,
 } from "../workspaces/worktree.ts";
+import type { OperatorRoute } from "../operator/config.ts";
 
 // ─── Request DTOs (API 0.2 §10) ─────────────────────────────────────────────
 
@@ -145,11 +146,12 @@ const POLICY_PROFILE_VERSION = "1";
 export interface SpawnRequest {
   project_id: string;
   idempotency_key: string;
-  provider: string;
-  account_profile_id: string;
-  model: string;
-  effort: string | null;
-  role: AgentRole;
+  route_id?: string;
+  provider?: string;
+  account_profile_id?: string;
+  model?: string;
+  effort?: string | null;
+  role?: AgentRole;
   instructions: string;
   workspace: {
     mode: WorkspaceMode;
@@ -159,9 +161,18 @@ export interface SpawnRequest {
     /** §8.3 additive: explicit full 40/64-hex commit for the detached worktree. */
     base_commit?: string | null;
   };
-  policy_profile_id: string;
+  policy_profile_id?: string;
   policy_restrictions?: Record<string, unknown>;
 }
+
+type ResolvedSpawnRequest = Omit<SpawnRequest, "provider" | "account_profile_id" | "model" | "effort" | "role" | "policy_profile_id"> & {
+  provider: string;
+  account_profile_id: string;
+  model: string;
+  effort: string | null;
+  role: AgentRole;
+  policy_profile_id: string;
+};
 
 export interface TaskContract {
   goal: string;
@@ -312,6 +323,8 @@ export interface BrokerOptions {
    * the lifecycle incarnation). Defaults to a fresh process-unique id.
    */
   incarnation?: string;
+  /** Operator-configured named routes; routes are in-memory, sessions are durable. */
+  routes?: ReadonlyMap<string, OperatorRoute>;
 }
 
 export class BrokerCore {
@@ -325,6 +338,7 @@ export class BrokerCore {
   readonly worktreeGitRunner: WorktreeGitRunner;
   /** §8.3 incarnation fencing identity (unique per broker process). */
   readonly worktreeIncarnation: string;
+  readonly routes: ReadonlyMap<string, OperatorRoute>;
   private readonly worktreeLocks: RepositoryMutationLock;
   /**
    * §8.3 durable repository fence, mirrored in memory: common-dir keys of
@@ -353,6 +367,7 @@ export class BrokerCore {
     this.worktreesRoot = opts.worktreesRoot ?? null;
     this.worktreeGitRunner = opts.worktreeGitRunner ?? createRealWorktreeGitRunner();
     this.worktreeIncarnation = opts.incarnation ?? randomUUID();
+    this.routes = opts.routes ?? new Map();
     this.worktreeLocks = new RepositoryMutationLock(this.worktreeIncarnation);
     this.deferExecution = opts.deferExecution ?? false;
     this.loadWorktreeRepositoryFences();
@@ -887,9 +902,77 @@ export class BrokerCore {
 
   // ─── spawn (§6.1, §7.3) ───────────────────────────────────────────────────
 
-  spawn(coordinatorId: string, req: SpawnRequest): SpawnResponse {
+  private resolveSpawnRequest(req: SpawnRequest): ResolvedSpawnRequest {
+    if (typeof req.instructions !== "string") {
+      throw new BrokerError("INVALID_REQUEST", "instructions must be a string.", { executionStarted: false });
+    }
+    const routeId = req.route_id;
+    if (routeId !== undefined) {
+      if (typeof routeId !== "string" || routeId.length === 0) {
+        throw new BrokerError("INVALID_REQUEST", "route_id must be a non-empty string.", { executionStarted: false });
+      }
+      const route = this.routes.get(routeId);
+      if (!route) {
+        throw new BrokerError("INVALID_REQUEST", `Unknown route '${routeId}'.`, { executionStarted: false });
+      }
+      if (route.project_id !== req.project_id) {
+        throw new BrokerError("UNAUTHORIZED", `Route '${routeId}' is not configured for this project.`, { executionStarted: false });
+      }
+      for (const field of ["provider", "account_profile_id", "model", "effort", "role", "policy_profile_id"] as const) {
+        if (req[field] !== undefined) {
+          throw new BrokerError("INVALID_REQUEST", `route_id cannot be mixed with raw binding field '${field}'.`, {
+            executionStarted: false,
+          });
+        }
+      }
+      const preference = route.native_subagents ?? { mode: "off", max_agents: 1 };
+      const guidance = preference.mode === "off"
+        ? "Perform this task as one agent. Do not delegate to native subagents."
+        : `Prefer native subagents for independent pieces of large tasks when available; request at most ${preference.max_agents} children and wait for their results. Do not simulate delegation when unavailable.`;
+      const advisory = `\n\n[Broker advisory: mode=${preference.mode}, max_agents=${preference.max_agents}. ${guidance} This preference does not enforce agent count, child models, or permissions.]`;
+      return {
+        ...req,
+        provider: route.provider,
+        account_profile_id: route.account_profile_id,
+        model: route.model,
+        effort: route.effort ?? null,
+        role: route.role,
+        policy_profile_id: route.policy_profile_id,
+        instructions: `${req.instructions}${advisory}`,
+      };
+    }
+    const required = ["provider", "account_profile_id", "model", "role", "policy_profile_id"] as const;
+    for (const field of required) {
+      if (req[field] === undefined || req[field] === null || req[field] === "") {
+        throw new BrokerError("INVALID_REQUEST", `Explicit provider binding field '${field}' is required.`, { executionStarted: false });
+      }
+    }
+    if (!["worker", "reviewer", "researcher"].includes(req.role as string)) {
+      throw new BrokerError("INVALID_REQUEST", "role must be worker|reviewer|researcher.", { executionStarted: false });
+    }
+    for (const field of ["provider", "account_profile_id", "model", "policy_profile_id"] as const) {
+      if (typeof req[field] !== "string") {
+        throw new BrokerError("INVALID_REQUEST", `Explicit provider binding field '${field}' must be a string.`, { executionStarted: false });
+      }
+    }
+    if (req.effort !== undefined && req.effort !== null && typeof req.effort !== "string") {
+      throw new BrokerError("INVALID_REQUEST", "effort must be a string or null.", { executionStarted: false });
+    }
+    return {
+      ...req,
+      provider: req.provider!,
+      account_profile_id: req.account_profile_id!,
+      model: req.model!,
+      effort: req.effort ?? null,
+      role: req.role!,
+      policy_profile_id: req.policy_profile_id!,
+    };
+  }
+
+  spawn(coordinatorId: string, request: SpawnRequest): SpawnResponse {
     // Step 1 (§7.2): authorization first — revoked access denies even replay.
-    authorizeProjectAccess(this.db, { coordinatorId, projectId: req.project_id });
+    authorizeProjectAccess(this.db, { coordinatorId, projectId: request.project_id });
+    const req = this.resolveSpawnRequest(request);
 
     const payloadHash = canonicalRequestHash(req);
     const namespace = {
@@ -1018,7 +1101,7 @@ export class BrokerCore {
    * admission transaction (no external process inside a tx). Returns the
    * candidate binding the transaction must revalidate.
    */
-  private spawnPreflight(req: SpawnRequest): SpawnPreflightCandidate {
+  private spawnPreflight(req: ResolvedSpawnRequest): SpawnPreflightCandidate {
     if (Buffer.byteLength(req.instructions, "utf8") > 64 * 1024) {
       throw new BrokerError("INPUT_LIMIT", "Session instructions exceed 64 KiB.");
     }
@@ -1229,7 +1312,7 @@ export class BrokerCore {
    * re-run here; drifted configuration is rejected rather than admitted with
    * stale observations.
    */
-  private revalidateSpawnCandidate(req: SpawnRequest, candidate: SpawnPreflightCandidate): void {
+  private revalidateSpawnCandidate(req: ResolvedSpawnRequest, candidate: SpawnPreflightCandidate): void {
     const adapter = this.adapters.get(req.provider);
     if (!adapter) {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", `Provider '${req.provider}' is not available.`, {
@@ -1280,7 +1363,7 @@ export class BrokerCore {
    * and unchanged. The Git preflight is never re-run here.
    */
   private revalidateWorktreeSource(
-    req: SpawnRequest,
+    req: ResolvedSpawnRequest,
     candidate: SpawnPreflightCandidate,
   ): NonNullable<SpawnPreflightCandidate["worktreeSource"]> | null {
     const workspace = req.workspace;
@@ -1322,7 +1405,7 @@ export class BrokerCore {
    * Throws instead of returning the error union — admission never continues
    * on a policy failure.
    */
-  private spawnPolicyPreflight(req: SpawnRequest): EffectiveWritePolicy {
+  private spawnPolicyPreflight(req: ResolvedSpawnRequest): EffectiveWritePolicy {
     const profile = getPolicyProfile(this.db, req.policy_profile_id, POLICY_PROFILE_VERSION);
     if (!profile) {
       throw new BrokerError(
@@ -1348,7 +1431,7 @@ export class BrokerCore {
    */
   private createProvisioningSession(
     coordinatorId: string,
-    req: SpawnRequest,
+    req: ResolvedSpawnRequest,
     payloadHash: string,
     candidate: SpawnPreflightCandidate,
   ): { sessionId: string; provisionIntentId: string } {
@@ -3122,6 +3205,24 @@ export class BrokerCore {
       .all() as Array<{ policy_profile_id: string; version: string }>;
     for (const p of policies) {
       entries.push({ kind: "policy_profile", id: p.policy_profile_id, display_name: p.policy_profile_id, version: p.version });
+    }
+    for (const route of this.routes.values()) {
+      if (route.project_id !== projectId) continue;
+      entries.push({
+        kind: "route",
+        id: route.route_id,
+        route_id: route.route_id,
+        display_name: route.route_id,
+        project_id: route.project_id,
+        provider: route.provider,
+        account_profile_id: route.account_profile_id,
+        model: route.model,
+        effort: route.effort ?? null,
+        role: route.role,
+        policy_profile_id: route.policy_profile_id,
+        native_subagents: route.native_subagents ?? { mode: "off", max_agents: 1 },
+        native_subagents_enforcement: "advisory",
+      });
     }
 
     entries.sort((a, b) => (String(a.kind) + String(a.id) < String(b.kind) + String(b.id) ? -1 : 1));

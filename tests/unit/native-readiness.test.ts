@@ -101,7 +101,7 @@ function readInvocations(logFile: string): FakeInvocation[] {
     .map((line) => JSON.parse(line) as FakeInvocation);
 }
 
-const CURSOR_CATALOG = "auto - Auto (default)\ngpt-5.3-codex - Codex 5.3\ncomposer-2.5 - Composer 2.5\n";
+const CURSOR_CATALOG = "auto - Auto (default)\ngpt-5.3-codex - Codex 5.3\ngpt-5.6-sol-high - Sol high\ncomposer-2.5 - Composer 2.5\n";
 
 /** Cursor fake: metadata probes + a full stream-json turn mode. */
 function cursorFixture(opts: { version?: string; stateRoot?: string } = {}) {
@@ -156,6 +156,15 @@ describe("cursor readiness probes", () => {
     const f = cursorFixture();
     expectBrokerError(() => f.adapter.preflight({ model: "made-up-model" }), "MODEL_UNAVAILABLE");
     expect(readInvocations(f.logFile).some((i) => i.args.some((a) => a === "--print"))).toBe(false);
+  });
+
+  it("maps effort to an exact catalog ID and rejects unavailable or contradictory choices", () => {
+    const available = cursorFixture();
+    expect(available.adapter.preflight({ model: "gpt-5.6-sol", effort: "high" })).toBeTruthy();
+    const unavailable = cursorFixture();
+    expectBrokerError(() => unavailable.adapter.preflight({ model: "gpt-5.6-sol", effort: "low" }), "MODEL_UNAVAILABLE");
+    const contradictory = cursorFixture();
+    expectBrokerError(() => contradictory.adapter.preflight({ model: "gpt-5.6-sol-xhigh", effort: "high" }), "MODEL_UNAVAILABLE");
   });
 
   it("refuses a missing binary with zero dispatch", () => {

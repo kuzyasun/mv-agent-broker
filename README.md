@@ -53,11 +53,10 @@ status: [capability matrix](docs/provider-capabilities.md).
 Native self-development, frozen broker runtimes and current remaining work:
 [self-development checkpoint](docs/self-development.md).
 
-The current delivery priority is an **operator pilot**: practical setup for
-other repositories, named worker/reviewer routes, and real-task issue capture.
-These setup/routing interfaces are planned, not yet a finished configuration
-product. Full specification acceptance is deferred; existing behavior and
-evidence are preserved. See the pilot priorities in the checkpoint above.
+The operator pilot now has a bounded JSON configuration entrypoint with named
+routes, transactional registry application, and mock-first examples. See the
+[operator guide](docs/operator-guide.md). Full native/provider acceptance
+remains deferred; existing behavior and evidence are preserved.
 
 ```bash
 npm install

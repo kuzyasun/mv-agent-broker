@@ -26,6 +26,7 @@ import { openBlobStore } from "../../src/snapshots/blobs.ts";
 import { openInputViewStore } from "../../src/inputs/views.ts";
 import { openReviewSlotStore } from "../../src/workspaces/slot.ts";
 import { coverageContractHash } from "../../src/workspaces/coverage.ts";
+import type { OperatorRoute } from "../../src/operator/config.ts";
 
 export const COVERAGE_CONFIG = {
   source_prefixes: ["src", "tests"],
@@ -63,7 +64,7 @@ export interface Harness {
   sendTask(sessionId: string, key: string, goal?: string, extra?: Record<string, unknown>): ReturnType<BrokerCore["send"]>;
 }
 
-export function createHarness(opts: { limits?: Partial<Limits>; sessionCap?: number } = {}): Harness {
+export function createHarness(opts: { limits?: Partial<Limits>; sessionCap?: number; routes?: ReadonlyMap<string, OperatorRoute> } = {}): Harness {
   const db = openRegistryDb(":memory:");
   const clock = new ManualClock(1_000_000);
 
@@ -148,7 +149,7 @@ export function createHarness(opts: { limits?: Partial<Limits>; sessionCap?: num
   const adapters = new Map([["mock", adapter]]);
   const limits: Limits = { ...DEFAULT_LIMITS, ...opts.limits };
   const blobStore = openBlobStore(blobRoot);
-  const core = new BrokerCore({ db, clock, adapters, limits, deferExecution: true, blobStore });
+  const core = new BrokerCore({ db, clock, adapters, limits, deferExecution: true, blobStore, routes: opts.routes });
   const executor = new TurnExecutor({ db, clock, limits, adapters, blobs: blobStore, inputViews: openInputViewStore(inputRoot), slots: openReviewSlotStore(slotsRoot) });
   core.attachExecutor(executor);
 

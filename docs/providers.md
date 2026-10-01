@@ -6,7 +6,7 @@ not every feature a vendor application might offer. The per-capability
 [verification matrix](provider-capabilities.md) and linked native evidence
 distinguish implementation, local tests and actual provider execution.
 
-Current transport versions are Cursor 0.2.8, ZCode 0.2.6, Antigravity 0.2.3
+Current transport versions are Cursor 0.2.9, ZCode 0.2.6, Antigravity 0.2.3
 and Claude/Codex 0.2.2. Historical smoke versions are identified separately
 below. [Native policy observations](native-policy-controls.md) explain why
 CLI flags, readiness and individual marker tests do not prove a complete

@@ -10,7 +10,7 @@
  * provider matrix; short smoke runs do not establish full role support.
  */
 import path from "node:path";
-import { mkdirSync } from "node:fs";
+import { lstatSync, mkdirSync } from "node:fs";
 import { openRegistryDb, type RegistryDb } from "../storage/db.ts";
 import { openBlobStore, type BlobStore } from "../snapshots/blobs.ts";
 import { openInputViewStore } from "../inputs/views.ts";
@@ -28,6 +28,7 @@ import { ClaudeAdapter } from "../providers/claude/claudeAdapter.ts";
 import { CodexAdapter } from "../providers/codex/codexAdapter.ts";
 import { ZcodeAdapter } from "../providers/zcode/zcodeAdapter.ts";
 import { AntigravityAdapter } from "../providers/antigravity/antigravityAdapter.ts";
+import type { OperatorRoute } from "../operator/config.ts";
 
 export interface DaemonEnv {
   /** Canonical state directory (registry + blobs + inputs + slots). */
@@ -45,6 +46,35 @@ export interface DaemonEnv {
   limits?: Partial<Limits>;
   clock?: Clock;
   deadlinePollIntervalMs?: number;
+  /** Optional operator-owned registry application after ownership and DB open. */
+  configureRegistry?: (db: RegistryDb) => void | Promise<void>;
+  routes?: ReadonlyMap<string, OperatorRoute>;
+}
+
+function assertDirectoryAncestors(directory: string): void {
+  const root = path.parse(directory).root;
+  let current = root;
+  for (const segment of directory.slice(root.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    const stat = lstatSync(current, { throwIfNoEntry: false });
+    if (!stat) return;
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Unsafe daemon directory ancestor: ${current}`);
+  }
+}
+
+function ensureOwnedStateChild(stateDir: string, name: "inputs" | "slots"): void {
+  const child = path.join(stateDir, name);
+  assertDirectoryAncestors(child);
+  let stat = lstatSync(child, { throwIfNoEntry: false });
+  if (!stat) {
+    try { mkdirSync(child); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    stat = lstatSync(child, { throwIfNoEntry: false });
+  }
+  if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`Unsafe daemon ${name} directory.`);
+  }
 }
 
 export interface Daemon {
@@ -88,9 +118,22 @@ export async function startDaemon(env: DaemonEnv): Promise<Daemon> {
   // mutable registry — a second daemon must lose the lock before it can
   // open/migrate any state.
   const stateDir = path.resolve(env.stateDir);
+  assertDirectoryAncestors(stateDir);
   mkdirSync(stateDir, { recursive: true });
+  assertDirectoryAncestors(stateDir);
   const ownership: StateDirectoryOwnership = await acquireStateDirectoryOwnership(stateDir);
-  const db = openRegistryDb(path.join(stateDir, "registry.sqlite"));
+  let db: RegistryDb | null = null;
+  try {
+    db = openRegistryDb(path.join(stateDir, "registry.sqlite"));
+    ensureOwnedStateChild(stateDir, "inputs");
+    ensureOwnedStateChild(stateDir, "slots");
+    await env.configureRegistry?.(db);
+  } catch (error) {
+    try { db?.close(); } catch { /* database may not have opened */ }
+    await ownership.release();
+    throw error;
+  }
+  if (!db) throw new Error("registry-database-not-open");
   const blobs = openBlobStore(path.join(stateDir, "blobs"));
   const clock = env.clock ?? new RealClock();
   const adapters = buildAdapters(env);
@@ -106,6 +149,7 @@ export async function startDaemon(env: DaemonEnv): Promise<Daemon> {
     limits,
     blobStore: blobs,
     worktreesRoot: path.join(stateDir, "worktrees"),
+    routes: env.routes,
     // §8.3: durable mutation fencing binds to the lifecycle incarnation so a
     // restarted daemon never inherits a dead process's hold identity.
     incarnation: lifecycle.currentIncarnation,

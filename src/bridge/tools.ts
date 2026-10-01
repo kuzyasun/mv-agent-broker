@@ -89,7 +89,7 @@ export function bridgeToolDefs(): McpToolDef[] {
       inputSchema: {
         type: "object",
         properties: {
-          project_id: str, idempotency_key: str, provider: str, account_profile_id: str,
+          project_id: str, idempotency_key: str, route_id: str, provider: str, account_profile_id: str,
           model: str, effort: str, role: { type: "string", enum: ["worker", "reviewer", "researcher"] },
           instructions: str,
           workspace: {
@@ -108,7 +108,11 @@ export function bridgeToolDefs(): McpToolDef[] {
           policy_profile_id: str,
           policy_restrictions: { type: "object", additionalProperties: true },
         },
-        required: ["project_id", "idempotency_key", "provider", "account_profile_id", "model", "role", "instructions", "workspace", "policy_profile_id"],
+        required: ["project_id", "idempotency_key", "instructions", "workspace"],
+        oneOf: [
+          { required: ["route_id"], not: { anyOf: ["provider", "account_profile_id", "model", "effort", "role", "policy_profile_id"].map(key => ({ required: [key] })) } },
+          { required: ["provider", "account_profile_id", "model", "role", "policy_profile_id"], not: { required: ["route_id"] } },
+        ],
         additionalProperties: false,
       },
     },
@@ -358,11 +362,11 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
     }
     case "agent_session_spawn": {
       rejectUnknownKeys(rawArgs, [
-        "project_id", "idempotency_key", "provider", "account_profile_id", "model", "effort",
+        "project_id", "idempotency_key", "route_id", "provider", "account_profile_id", "model", "effort",
         "role", "instructions", "workspace", "policy_profile_id", "policy_restrictions",
       ]);
-      const role = requireString(rawArgs, "role");
-      if (role !== "worker" && role !== "reviewer" && role !== "researcher") {
+      const rawRole = optionalString(rawArgs, "role");
+      if (rawRole !== undefined && rawRole !== "worker" && rawRole !== "reviewer" && rawRole !== "researcher") {
         throw new BrokerError("INVALID_REQUEST", "role must be worker|reviewer|researcher.");
       }
       const workspace = rawArgs.workspace as Record<string, unknown> | undefined;
@@ -374,14 +378,15 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
       rejectUnknownKeys(workspace, ["mode", "workspace_id", "repository_workspace_id", "base_commit"]);
       const repositoryWorkspaceId = optionalString(workspace, "repository_workspace_id");
       const baseCommit = optionalString(workspace, "base_commit");
+      const routeId = optionalString(rawArgs, "route_id");
+      const provider = optionalString(rawArgs, "provider");
+      const accountProfileId = optionalString(rawArgs, "account_profile_id");
+      const model = optionalString(rawArgs, "model");
+      const effort = optionalString(rawArgs, "effort");
+      const policyProfileId = optionalString(rawArgs, "policy_profile_id");
       return core.spawn(ctx.coordinatorId, {
         project_id: requireString(rawArgs, "project_id"),
         idempotency_key: requireString(rawArgs, "idempotency_key"),
-        provider: requireString(rawArgs, "provider"),
-        account_profile_id: requireString(rawArgs, "account_profile_id"),
-        model: requireString(rawArgs, "model"),
-        effort: optionalString(rawArgs, "effort") ?? null,
-        role,
         instructions: requireString(rawArgs, "instructions"),
         workspace: {
           mode: workspace.mode,
@@ -389,7 +394,13 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
           ...(repositoryWorkspaceId !== undefined ? { repository_workspace_id: repositoryWorkspaceId } : {}),
           ...(baseCommit !== undefined ? { base_commit: baseCommit } : {}),
         },
-        policy_profile_id: requireString(rawArgs, "policy_profile_id"),
+        ...(routeId !== undefined ? { route_id: routeId } : {}),
+        ...(provider !== undefined ? { provider } : {}),
+        ...(accountProfileId !== undefined ? { account_profile_id: accountProfileId } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        ...(rawRole !== undefined ? { role: rawRole } : {}),
+        ...(policyProfileId !== undefined ? { policy_profile_id: policyProfileId } : {}),
         ...(rawArgs.policy_restrictions !== undefined
           ? { policy_restrictions: rawArgs.policy_restrictions as Record<string, unknown> }
           : {}),

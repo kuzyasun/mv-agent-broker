@@ -23,11 +23,11 @@ Setup must not require private coordinator scripts or manual SQLite edits.
 | P2: Named worker/reviewer routes | Choose allowed providers, model/effort and defaults once; reuse them in tasks | Validate configured routes and expose them to the coordinator; one routing smoke; no guessed IDs or hidden substitution |
 | P3: Pilot and issue capture | Use the broker for actual work outside its own repository and record encountered problems | One bounded implementation, review and follow-up through the ordinary MCP path; inspect the actual diff and result; preserve failed evidence |
 
-P1 and P2 are small deliveries that reuse the existing daemon/bridge and
-registry. This is a proposed operator interface, not an already implemented
-configuration loader. A single JSON config should contain CLI pins, project
-registration, named routes and coordinator defaults. Global defaults may be
-overridden per project. Native CLI login remains provider-owned; account profile
+P1 and P2 are implemented by the [operator guide](operator-guide.md) and its
+mock/Windows examples. One JSON config contains CLI pins, project registration,
+named worker/reviewer routes, model/effort and advisory subagent preferences.
+JSON edits plus restart select settings for new sessions; existing bindings are
+preserved. Native CLI login remains provider-owned; account profile
 metadata does not switch a subscription plan or create a new vendor login.
 
 The coordinator owns task decomposition and final acceptance. Role preferences
@@ -39,7 +39,11 @@ provider may be selected explicitly or under an operator-approved, visible
 policy; UNKNOWN execution never authorizes a replacement launch.
 
 Retain the operator's existing route choices: ZCode Individual Flash/max workers,
-selected GLM/high reviews, Antigravity Gemini 3.8 medium/high, and Cursor auto.
+selected GLM/high reviews, Antigravity Gemini 3.8 medium/high, and explicit
+Cursor model/effort (auto was withdrawn). The current economical Cursor worker
+uses Luna/high; the stronger large-task preference remains editable by the
+operator. Antigravity long author runs returned server 500 in this package;
+one separate bounded Gemini medium review completed successfully.
 ZCode's five-hour quota was reported exhausted; the allowed list does not imply
 current availability. Claude stays excluded from this workflow. Do not silently
 raise effort or change the main coordinator model.
