@@ -6,7 +6,11 @@ import { createHarness, settle, start } from "../helpers/harness.ts";
 import { insertWorkspace } from "../../src/storage/repo.ts";
 import { openBlobStore } from "../../src/snapshots/blobs.ts";
 import { openReviewSlotStore } from "../../src/workspaces/slot.ts";
+import { sha256Hex } from "../../src/shared/ids.ts";
 import type { SnapshotManifest } from "../../src/shared/api-types.ts";
+
+const HELLO = Buffer.from("hello", "utf8");
+const HELLO_HASH = sha256Hex(HELLO);
 
 function walkFiles(dir: string, base = ""): string[] {
   const current = base ? path.join(dir, base) : dir;
@@ -254,16 +258,18 @@ describe("review slot store guards", () => {
       const tmpDir = mkdtempSync(path.join(tmpdir(), "review-slot-test-"));
       try {
         const store = openReviewSlotStore(tmpDir);
+        const h1 = "a".repeat(64);
+        const h2 = "b".repeat(64);
         expect(() =>
           store.refresh(
             "sess-1",
             makeManifest([
-              { path: "src/A.c", type: "file", content_hash: "h1", executable: false, size: 0 },
-              { path: "src/a.c", type: "file", content_hash: "h2", executable: false, size: 0 },
+              { path: "src/A.c", type: "file", content_hash: h1, executable: false, size: 0 },
+              { path: "src/a.c", type: "file", content_hash: h2, executable: false, size: 0 },
             ]),
             () => new Uint8Array(),
           ),
-        ).toThrow();
+        ).toThrow(/SLOT_ENTRY_DUPLICATE_PATH/);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -278,10 +284,10 @@ describe("review slot store guards", () => {
         "sess-1",
         makeManifest([
           { path: "src", type: "dir", content_hash: null, executable: false, size: null },
-          { path: "src/a.c", type: "file", content_hash: "deadbeef", executable: true, size: 5 },
+          { path: "src/a.c", type: "file", content_hash: HELLO_HASH, executable: true, size: HELLO.byteLength },
         ]),
         (h) => {
-          if (h === "deadbeef") return Buffer.from("hello", "utf8");
+          if (h === HELLO_HASH) return HELLO;
           throw new Error("unexpected hash: " + h);
         },
       );
@@ -301,13 +307,76 @@ describe("review slot store guards", () => {
         store.refresh(
           "sess-1",
           makeManifest([
-            { path: "src/a.c", type: "file", content_hash: "deadbeef", executable: false, size: 10 },
+            { path: "src/a.c", type: "file", content_hash: HELLO_HASH, executable: false, size: HELLO.byteLength },
           ]),
           () => {
             throw new Error("BLOB_READ_FAILED");
           },
         ),
       ).toThrow("BLOB_READ_FAILED");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("invalid hash/size refused before destructive refresh", () => {
+    const tmpDir = mkdtempSync(path.join(tmpdir(), "review-slot-test-"));
+    try {
+      const store = openReviewSlotStore(tmpDir);
+      store.refresh(
+        "sess-1",
+        makeManifest([
+          { path: "keep.txt", type: "file", content_hash: HELLO_HASH, executable: false, size: HELLO.byteLength },
+        ]),
+        () => HELLO,
+      );
+      const prior = path.join(store.slotPath("sess-1"), "keep.txt");
+      expect(readFileSync(prior, "utf8")).toBe("hello");
+
+      expect(() =>
+        store.refresh(
+          "sess-1",
+          makeManifest([{ path: "x", type: "file", content_hash: "deadbeef", executable: false, size: 4 }]),
+          () => Buffer.from("x"),
+        ),
+      ).toThrow("SLOT_ENTRY_INVALID_HASH");
+      expect(readFileSync(prior, "utf8")).toBe("hello");
+
+      expect(() =>
+        store.refresh(
+          "sess-1",
+          makeManifest([{ path: "x", type: "file", content_hash: HELLO_HASH, executable: false, size: null }]),
+          () => HELLO,
+        ),
+      ).toThrow("SLOT_ENTRY_INVALID_SIZE");
+      expect(readFileSync(prior, "utf8")).toBe("hello");
+
+      expect(() =>
+        store.refresh(
+          "sess-1",
+          makeManifest([{ path: "x", type: "file", content_hash: HELLO_HASH, executable: false, size: -1 }]),
+          () => HELLO,
+        ),
+      ).toThrow("SLOT_ENTRY_INVALID_SIZE");
+      expect(readFileSync(prior, "utf8")).toBe("hello");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("callback hash/size mismatch refuses after validation", () => {
+    const tmpDir = mkdtempSync(path.join(tmpdir(), "review-slot-test-"));
+    try {
+      const store = openReviewSlotStore(tmpDir);
+      expect(() =>
+        store.refresh(
+          "sess-1",
+          makeManifest([
+            { path: "src/a.c", type: "file", content_hash: HELLO_HASH, executable: false, size: HELLO.byteLength },
+          ]),
+          () => Buffer.from("HELLO", "utf8"),
+        ),
+      ).toThrow("SLOT_BLOB_HASH_MISMATCH");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

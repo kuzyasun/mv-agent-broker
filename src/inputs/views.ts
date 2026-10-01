@@ -6,9 +6,10 @@
  * to blob storage — bytes are copied, not hardlinked; grants are removed
  * after confirmed quiescence.
  */
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { TurnInputManifest, TurnInputEntry } from "./manifest.ts";
+import { sha256Hex } from "../shared/ids.ts";
 
 const TURN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
@@ -48,6 +49,23 @@ export interface InputViewStore {
   exists(turnId: string): boolean;
 }
 
+function assertOwnedDirectory(dir: string): void {
+  for (let current = path.resolve(dir);;) {
+    let entry;
+    try { entry = lstatSync(current); } catch { throw new Error("INPUT_VIEW_PATH_INVALID"); }
+    if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error("INPUT_VIEW_PATH_INVALID");
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+}
+
+function assertCallbackBytes(entry: TurnInputEntry, bytes: Uint8Array): void {
+  if (bytes.byteLength !== entry.size_bytes || sha256Hex(bytes) !== entry.content_hash) {
+    throw new Error("INPUT_VIEW_BYTES_MISMATCH");
+  }
+}
+
 export function openInputViewStore(rootDir: string): InputViewStore {
   const turnRoot = (turnId: string): string => {
     assertTurnId(turnId);
@@ -59,10 +77,14 @@ export function openInputViewStore(rootDir: string): InputViewStore {
 
     materialize(manifest: TurnInputManifest, readBlob: (contentHash: string) => Uint8Array): { root: string; files: string[] } {
       const root = turnRoot(manifest.turn_id);
+      // Owned regular-directory ancestry before mkdir/publication: a linked
+      // root/ancestor must not create a foreign subdirectory first.
+      assertOwnedDirectory(rootDir);
       if (existsSync(root)) {
         throw new Error("INPUT_VIEW_EXISTS");
       }
       mkdirSync(root, { recursive: true });
+      assertOwnedDirectory(root);
 
       const files: string[] = [];
       for (const entry of manifest.inputs) {
@@ -90,6 +112,7 @@ export function openInputViewStore(rootDir: string): InputViewStore {
         }
 
         const bytes = readBlob(entry.content_hash);
+        assertCallbackBytes(entry, bytes);
         // Atomic publish: write to a temp sibling file then renameSync (§9.2: copy, never hardlink/symlink).
         const tmp = `${target}.tmp-${manifest.turn_id}`;
         try {
@@ -104,8 +127,23 @@ export function openInputViewStore(rootDir: string): InputViewStore {
           }
         }
 
+        // Published view must remain an owned regular file copy — never a
+        // writable hardlink/symlink alias into blob storage.
+        let published;
+        try {
+          published = lstatSync(target);
+        } catch {
+          throw new Error("INPUT_VIEW_PATH_INVALID");
+        }
+        // Unknown/replaced published inode is retained for investigation —
+        // never removed as an assumed owned file. Not an OS immutable lock.
+        if (!published.isFile() || published.isSymbolicLink() || published.nlink !== 1) {
+          throw new Error("INPUT_VIEW_NOT_REGULAR");
+        }
+
         // Best-effort per-file read-only mark (defense-in-depth, §12.6):
         // a 0o500 directory alone does not block in-place writes on POSIX.
+        // Not an OS immutable lock or sandbox claim.
         try {
           chmodSync(target, 0o444);
         } catch {
@@ -130,6 +168,9 @@ export function openInputViewStore(rootDir: string): InputViewStore {
       if (!existsSync(root)) {
         return;
       }
+      assertOwnedDirectory(rootDir);
+      // Refuse linked turn roots without deleting/adopting the link target.
+      assertOwnedDirectory(root);
       try {
         chmodSync(root, 0o700);
       } catch {

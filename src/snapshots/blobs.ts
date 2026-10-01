@@ -76,6 +76,14 @@ export function openBlobStore(rootDir: string): BlobStore {
 
     readVerified(projectId, hash, expectedSize) {
       const target = blobPath(projectId, hash);
+      for (let current = path.resolve(rootDir);;) {
+        let entry;
+        try { entry = lstatSync(current); } catch { throw new Error("BLOB_NOT_FOUND"); }
+        if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error("BLOB_NOT_REGULAR");
+        const parent = path.dirname(current);
+        if (parent === current) break;
+        current = parent;
+      }
       for (const directory of [rootDir, path.join(rootDir, projectId), path.dirname(target)]) {
         let entry;
         try { entry = lstatSync(directory); } catch { throw new Error("BLOB_NOT_FOUND"); }

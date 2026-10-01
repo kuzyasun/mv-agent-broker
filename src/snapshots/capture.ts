@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import type { RegistryDb } from "../storage/db.ts";
 import {
   appendEvent,
+  getArtifact,
   insertArtifact,
   insertBlobRecord,
   insertSnapshotRecord,
@@ -237,14 +238,40 @@ export function readManifest(args: {
   projectId: string;
   snapshot: SnapshotRecord;
 }): SnapshotManifest {
-  const artifact = args.db.raw
-    .prepare("SELECT content_hash FROM artifacts WHERE artifact_id = ?")
-    .get(args.snapshot.manifest_artifact_id) as { content_hash: string | null } | undefined;
-  if (!artifact || !artifact.content_hash) {
+  const artifact = getArtifact(args.db, args.snapshot.manifest_artifact_id);
+  if (!artifact) {
+    throw new CoverageError("Manifest artifact is not ready", "ARTIFACT_NOT_READY");
+  }
+  if (artifact.project_id !== args.projectId || artifact.project_id !== args.snapshot.project_id) {
+    throw new CoverageError("Manifest artifact failed verification", "ARTIFACT_CORRUPT");
+  }
+  if (artifact.state === "expired") {
+    throw new CoverageError("Manifest artifact has expired", "ARTIFACT_EXPIRED");
+  }
+  if (artifact.state !== "sealed" || !artifact.content_hash || artifact.size_bytes === null) {
     throw new CoverageError("Manifest artifact is not sealed", "ARTIFACT_NOT_READY");
   }
-  const bytes = args.blobs.read(args.projectId, artifact.content_hash);
-  return JSON.parse(Buffer.from(bytes).toString("utf8")) as SnapshotManifest;
+  let bytes: Uint8Array;
+  try {
+    bytes = args.blobs.readVerified(args.projectId, artifact.content_hash, artifact.size_bytes);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : "verification failed";
+    if (
+      reason === "BLOB_NOT_FOUND" ||
+      reason === "BLOB_HASH_MISMATCH" ||
+      reason === "BLOB_SIZE_MISMATCH" ||
+      reason === "BLOB_NOT_REGULAR" ||
+      reason === "INVALID_BLOB_ID"
+    ) {
+      throw new CoverageError(`Manifest artifact failed verification (${reason})`, "ARTIFACT_CORRUPT");
+    }
+    throw new CoverageError("Manifest artifact failed verification", "ARTIFACT_CORRUPT");
+  }
+  try {
+    return JSON.parse(Buffer.from(bytes).toString("utf8")) as SnapshotManifest;
+  } catch {
+    throw new CoverageError("Manifest artifact failed verification", "ARTIFACT_CORRUPT");
+  }
 }
 
 export interface ManifestDelta {

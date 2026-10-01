@@ -175,3 +175,8 @@ installed PROGRAM evidence and an independent Cursor sealed-tree review. ZCode
 hook failure is a static fail-open observation, not native denial validation;
 complete worker/reviewer policy profiles remain open. An incomplete Gemini
 background-search report and a failed GLM/high review are preserved separately.
+
+The [required-input integrity checkpoint](native-smoke/2026-10-01-input-integrity/report.md)
+records Cursor implementation/repair, independent Gemini review, coordinator
+ancestor-link corrections and actual zero-dispatch corruption tests. Verified
+byte delivery is separate from native input access/write enforcement.

@@ -440,12 +440,17 @@ export class TurnExecutor {
           .map((entry) => entry.binding),
       );
     } catch (e) {
+      const coverageCode =
+        e instanceof CoverageError &&
+        (e.code === "ARTIFACT_CORRUPT" || e.code === "ARTIFACT_EXPIRED" || e.code === "ARTIFACT_NOT_READY")
+          ? e.code
+          : null;
       const code =
         e instanceof InputPlanError
           ? e.code
           : e instanceof BrokerError
             ? e.code
-            : "INPUT_DELIVERY_FAILED";
+            : coverageCode ?? "INPUT_DELIVERY_FAILED";
       const message = e instanceof Error ? e.message : String(e);
       this.finalizePreStartKnown(turnNow, session, code, message, continuation);
       return;
@@ -1306,6 +1311,39 @@ export class TurnExecutor {
 
   // ─── required input delivery (§7.1.1, §5.6, §13.2.1) ───────────────────────
 
+  /**
+   * Every required-byte consumption validates stored SHA-256/size and a regular
+   * owned inode via readVerified against sealed authoritative metadata. Corrupt,
+   * missing, or linked blobs fail closed as ARTIFACT_CORRUPT before dispatch —
+   * never silently re-hash, reseal, or serve EVIL under GOOD metadata.
+   */
+  private readRequiredVerified(
+    projectId: string,
+    contentHash: string,
+    expectedSize: number,
+    label = "Required artifact",
+  ): Uint8Array {
+    try {
+      return this.blobs.readVerified(projectId, contentHash, expectedSize);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : "verification failed";
+      if (
+        reason === "BLOB_NOT_FOUND" ||
+        reason === "BLOB_HASH_MISMATCH" ||
+        reason === "BLOB_SIZE_MISMATCH" ||
+        reason === "BLOB_NOT_REGULAR" ||
+        reason === "INVALID_BLOB_ID"
+      ) {
+        throw new BrokerError("ARTIFACT_CORRUPT", `${label} content failed verification (${reason}).`, {
+          executionStarted: false,
+        });
+      }
+      throw new BrokerError("ARTIFACT_CORRUPT", `${label} content failed verification.`, {
+        executionStarted: false,
+      });
+    }
+  }
+
   /** Content-type mapping for delivery channels (default profile, §7.1.1). */
   private static contentTypeForArtifact(kind: ArtifactKind): string {
     switch (kind) {
@@ -1361,11 +1399,12 @@ export class TurnExecutor {
       }
       let inlineCandidate: Uint8Array | null = null;
       if (artifact.size_bytes <= INLINE_TOTAL_BYTE_CAP) {
-        try {
-          inlineCandidate = this.blobs.read(projectId, artifact.content_hash);
-        } catch {
-          throw new BrokerError("ARTIFACT_CORRUPT", `Required artifact ${artifactId} content is missing.`);
-        }
+        inlineCandidate = this.readRequiredVerified(
+          projectId,
+          artifact.content_hash,
+          artifact.size_bytes,
+          `Required artifact ${artifactId}`,
+        );
       }
       return {
         origin: "task_artifact" as const,
@@ -1393,9 +1432,17 @@ export class TurnExecutor {
       }
       const baselineManifest = readManifest({ db: this.db, blobs: this.blobs, projectId, snapshot: baselineRecord });
       const targetManifest = readManifest({ db: this.db, blobs: this.blobs, projectId, snapshot: targetRecord });
+      const sizeByHash = new Map<string, number>();
+      for (const entry of [...baselineManifest.entries, ...targetManifest.entries]) {
+        if (entry.type === "file" && entry.content_hash && entry.size !== null) {
+          sizeByHash.set(entry.content_hash, entry.size);
+        }
+      }
       const diff = diffSnapshots(baselineManifest, targetManifest, (hash) => {
+        const expectedSize = sizeByHash.get(hash);
+        if (expectedSize === undefined) return null;
         try {
-          return this.blobs.read(projectId, hash);
+          return this.blobs.readVerified(projectId, hash, expectedSize);
         } catch {
           return null;
         }
@@ -1413,12 +1460,17 @@ export class TurnExecutor {
       if (!baselineArtifact || baselineArtifact.state === "expired") {
         throw new BrokerError("ARTIFACT_EXPIRED", "Review baseline manifest artifact has expired.");
       }
-      if (baselineArtifact.state !== "sealed" || !baselineArtifact.content_hash) {
+      if (baselineArtifact.state !== "sealed" || !baselineArtifact.content_hash || baselineArtifact.size_bytes === null) {
         throw new BrokerError("ARTIFACT_NOT_READY", "Review baseline manifest artifact is not sealed.");
       }
       let baselineInline: Uint8Array | null = null;
-      if (baselineArtifact.size_bytes !== null && baselineArtifact.size_bytes <= INLINE_TOTAL_BYTE_CAP) {
-        baselineInline = this.blobs.read(projectId, baselineArtifact.content_hash);
+      if (baselineArtifact.size_bytes <= INLINE_TOTAL_BYTE_CAP) {
+        baselineInline = this.readRequiredVerified(
+          projectId,
+          baselineArtifact.content_hash,
+          baselineArtifact.size_bytes,
+          "Review baseline manifest",
+        );
       }
       inputs.push({
         origin: "review_baseline",
@@ -1515,9 +1567,27 @@ export class TurnExecutor {
 
     if (pendingReview) {
       try {
-        this.slots!.refresh(session.session_id, pendingReview.target, hash => this.blobs.read(projectId, hash));
+        const slotSizeByHash = new Map<string, number>();
+        for (const entry of pendingReview.target.entries) {
+          if (entry.type === "file" && entry.content_hash && entry.size !== null) {
+            slotSizeByHash.set(entry.content_hash, entry.size);
+          }
+        }
+        this.slots!.refresh(session.session_id, pendingReview.target, (hash) => {
+          const expectedSize = slotSizeByHash.get(hash);
+          if (expectedSize === undefined) {
+            throw new BrokerError("ARTIFACT_CORRUPT", "Review slot source hash is not in the sealed manifest.", {
+              executionStarted: false,
+            });
+          }
+          return this.readRequiredVerified(projectId, hash, expectedSize, "Review slot source");
+        });
       } catch (err) {
-        throw new BrokerError("EVIDENCE_CAPTURE_FAILED", `Review slot refresh failed: ${String(err)}`);
+        if (err instanceof BrokerError) throw err;
+        const reason = err instanceof Error ? err.message : "refresh failed";
+        throw new BrokerError("EVIDENCE_CAPTURE_FAILED", `Review slot refresh failed (${reason}).`, {
+          executionStarted: false,
+        });
       }
       const blob = this.blobs.write(projectId, pendingReview.diff);
       const artifactId = pendingReview.artifactId;
@@ -1533,7 +1603,26 @@ export class TurnExecutor {
 
     // Materialize read-only views (copies, never aliases — §9.2, §12.6).
     if (this.inputViews && manifest.inputs.some((i) => i.delivery === "read_only_path")) {
-      this.inputViews.materialize(manifest, (hash) => this.blobs.read(projectId, hash));
+      const viewSizeByHash = new Map<string, { size: number; inputId: string }>();
+      for (const entry of manifest.inputs) {
+        if (entry.delivery === "read_only_path") {
+          viewSizeByHash.set(entry.content_hash, { size: entry.size_bytes, inputId: entry.input_id });
+        }
+      }
+      this.inputViews.materialize(manifest, (hash) => {
+        const expected = viewSizeByHash.get(hash);
+        if (!expected) {
+          throw new BrokerError("ARTIFACT_CORRUPT", "Materialization hash is not in the sealed manifest.", {
+            executionStarted: false,
+          });
+        }
+        return this.readRequiredVerified(
+          projectId,
+          hash,
+          expected.size,
+          `Required input ${expected.inputId}`,
+        );
+      });
     }
 
     // Publish the sealed manifest as a durable artifact with a journaled
@@ -1611,7 +1700,15 @@ export class TurnExecutor {
     return this.renderEnvelope(session, turn, manifest.inputs.map(entry => ({
       input_id: entry.input_id, content_type: entry.content_type, content_hash: entry.content_hash,
       content: entry.delivery === "inline"
-        ? Buffer.from(this.blobs.read(session.project_id, entry.content_hash)).toString("utf8") : null,
+        ? Buffer.from(
+            this.readRequiredVerified(
+              session.project_id,
+              entry.content_hash,
+              entry.size_bytes,
+              `Required input ${entry.input_id}`,
+            ),
+          ).toString("utf8")
+        : null,
       binding: entry.binding,
     })));
   }

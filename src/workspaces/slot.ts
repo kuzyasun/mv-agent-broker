@@ -6,16 +6,29 @@
  * clearing stale files happens only inside this broker-owned slot,
  * never in a worker checkout.
  */
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SnapshotManifest } from "../shared/api-types.ts";
+import { sha256Hex } from "../shared/ids.ts";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+const HASH_PATTERN = /^[0-9a-f]{64}$/;
 
 function assertSessionId(sessionId: string): void {
   if (!sessionId || !SESSION_ID_PATTERN.test(sessionId) || sessionId.startsWith(".")) {
     throw new Error("INVALID_SESSION_ID");
+  }
+}
+
+function assertOwnedDirectory(dir: string): void {
+  for (let current = path.resolve(dir);;) {
+    let entry;
+    try { entry = lstatSync(current); } catch { throw new Error("SLOT_PATH_INVALID"); }
+    if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error("SLOT_PATH_INVALID");
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
   }
 }
 
@@ -57,6 +70,15 @@ function resolveEntryPath(slotDir: string, entryPath: string): string {
   return targetPath;
 }
 
+function assertFileEntryMetadata(entry: SnapshotManifest["entries"][number]): void {
+  if (!entry.content_hash || !HASH_PATTERN.test(entry.content_hash)) {
+    throw new Error("SLOT_ENTRY_INVALID_HASH");
+  }
+  if (entry.size === null || !Number.isInteger(entry.size) || entry.size < 0) {
+    throw new Error("SLOT_ENTRY_INVALID_SIZE");
+  }
+}
+
 export interface ReviewSlotStore {
   /** The stable per-session slot path (created if missing). */
   slotPath(sessionId: string): string;
@@ -75,9 +97,13 @@ export function openReviewSlotStore(rootDir: string): ReviewSlotStore {
   return {
     slotPath(sessionId: string): string {
       assertSessionId(sessionId);
+      assertOwnedDirectory(rootDir);
       const p = path.join(rootDir, sessionId);
-      if (!existsSync(p)) {
+      if (existsSync(p)) {
+        assertOwnedDirectory(p);
+      } else {
         mkdirSync(p, { recursive: true });
+        assertOwnedDirectory(p);
       }
       return p;
     },
@@ -88,17 +114,21 @@ export function openReviewSlotStore(rootDir: string): ReviewSlotStore {
       readBlob: (contentHash: string) => Uint8Array,
     ): { files: number } {
       assertSessionId(sessionId);
+      assertOwnedDirectory(rootDir);
       const slotDir = path.join(rootDir, sessionId);
 
-      // Validate all entry paths before mutating the filesystem (§9.3),
-      // including unknown entry types and case-folded duplicate paths
-      // (Windows/NTFS is case-insensitive: two entries differing only in
-      // case would silently overwrite each other).
+      // Validate all entry paths and sealed file metadata before mutating the
+      // filesystem (§9.3), including unknown entry types and case-folded
+      // duplicate paths (Windows/NTFS is case-insensitive: two entries
+      // differing only in case would silently overwrite each other).
       const seenFolded = new Set<string>();
       for (const entry of manifest.entries) {
         resolveEntryPath(slotDir, entry.path);
         if (entry.type !== "file" && entry.type !== "dir") {
           throw new Error(`SLOT_ENTRY_UNKNOWN_TYPE: ${String(entry.type)}`);
+        }
+        if (entry.type === "file") {
+          assertFileEntryMetadata(entry);
         }
         const foldKey = process.platform === "win32" ? entry.path.toLowerCase() : entry.path;
         if (seenFolded.has(foldKey)) {
@@ -107,9 +137,15 @@ export function openReviewSlotStore(rootDir: string): ReviewSlotStore {
         seenFolded.add(foldKey);
       }
 
+      // Refuse linked slot roots without deleting or adopting the link target.
+      if (existsSync(slotDir)) {
+        assertOwnedDirectory(slotDir);
+      }
+
       // Broker-managed slot is cleared fully between quiescent turns (§9.3).
       rmSync(slotDir, { recursive: true, force: true });
       mkdirSync(slotDir, { recursive: true });
+      assertOwnedDirectory(slotDir);
 
       let files = 0;
       for (const entry of manifest.entries) {
@@ -118,14 +154,22 @@ export function openReviewSlotStore(rootDir: string): ReviewSlotStore {
         if (entry.type === "dir") {
           mkdirSync(targetPath, { recursive: true });
         } else if (entry.type === "file") {
-          if (!entry.content_hash) {
-            throw new Error(`Snapshot file entry missing content_hash: ${entry.path}`);
-          }
+          // Metadata already validated above; size/hash are definite.
+          const expectedHash = entry.content_hash!;
+          const expectedSize = entry.size!;
 
           mkdirSync(path.dirname(targetPath), { recursive: true });
 
-          const bytes = readBlob(entry.content_hash);
-          // Atomic-ish write: temp sibling + renameSync (§9.3).
+          const bytes = readBlob(expectedHash);
+          // Exact sealed manifest size/hash for authoritative source entries.
+          if (bytes.byteLength !== expectedSize) {
+            throw new Error("SLOT_BLOB_SIZE_MISMATCH");
+          }
+          if (sha256Hex(bytes) !== expectedHash) {
+            throw new Error("SLOT_BLOB_HASH_MISMATCH");
+          }
+          // Atomic-ish write: temp sibling + renameSync (§9.3). Copy only —
+          // never a writable hardlink into blob storage.
           const tmpPath = `${targetPath}.tmp-${randomUUID()}`;
           try {
             writeFileSync(tmpPath, bytes);
@@ -137,6 +181,18 @@ export function openReviewSlotStore(rootDir: string): ReviewSlotStore {
               // Best-effort cleanup of temporary file
             }
             throw err;
+          }
+
+          let published;
+          try {
+            published = lstatSync(targetPath);
+          } catch {
+            throw new Error("SLOT_ENTRY_NOT_REGULAR");
+          }
+          // Unknown/replaced published inode is retained for investigation —
+          // never removed as an assumed owned file.
+          if (!published.isFile() || published.isSymbolicLink() || published.nlink !== 1) {
+            throw new Error("SLOT_ENTRY_NOT_REGULAR");
           }
 
           if (entry.executable) {
