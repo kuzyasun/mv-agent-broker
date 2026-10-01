@@ -188,4 +188,13 @@ describe("ZCode adapter", () => {
     expect(env.zcodeBuiltinProviderConfigPath).toBe(f.builtin);
     expect(() => buildAdapters(env).get("zcode")!.preflight({})).not.toThrow();
   });
+  it("exposes transportEnvelopeLimit descriptor of 6000 chars and retains defensive cap", async () => {
+    const f = fixture();
+    expect(f.adapter.transportEnvelopeLimit).toEqual({ maxChars: 6000 });
+    const g = gate();
+    await expect(
+      f.adapter.executeTurn(request({ task_envelope: "x".repeat(6001) }), g, () => {}),
+    ).rejects.toMatchObject({ code: "INPUT_LIMIT", executionStarted: false });
+    expect(g.count()).toBe(0);
+  });
 });

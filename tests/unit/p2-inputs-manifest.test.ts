@@ -33,6 +33,69 @@ function textOf(bytes: number): Uint8Array {
 }
 
 describe("planInputDelivery delivery selection (§7.1.1)", () => {
+  it("keeps short inline inputs when path bindings would exceed the transport cap", () => {
+    for (const allowed of [true, false]) {
+      const planned = planInputDelivery({
+        inputs: [true, allowed].map((allowMaterialization, i) => ({
+          origin: "task_artifact" as const, artifact: makeArtifact({ artifact_id: `art-${i}`, size_bytes: 1 }),
+          content_type: "text/plain", inlineCandidate: textOf(1), allowMaterialization,
+        })),
+        transportEnvelopeLimit: { maxChars: 100 },
+        evaluateEnvelope: ds => ({ chars: 50 + ds.reduce((sum, d) => sum + (d.delivery === "inline" ? 10 : 100), 0) }),
+      });
+      expect(planned.map(p => p.delivery)).toEqual(["inline", "inline"]);
+    }
+  });
+
+  it("does not use an illegal path for forced-inline inputs during transport replanning", () => {
+    const planned = planInputDelivery({
+      inputs: [true, false].map((allowMaterialization, i) => ({
+        origin: "task_artifact" as const, artifact: makeArtifact({ artifact_id: `art-${i}`, size_bytes: 100 }),
+        content_type: "text/plain", inlineCandidate: textOf(100), allowMaterialization,
+      })),
+      transportEnvelopeLimit: { maxChars: 170 },
+      evaluateEnvelope: ds => ({ chars: 50 + ds.reduce((sum, d) => sum + (d.delivery === "inline" ? 100 : 10), 0) }),
+    });
+    expect(planned.map(p => p.delivery)).toEqual(["read_only_path", "inline"]);
+  });
+
+  it("requires UTF-8 byte observations and finite bounds rather than bypassing a cap", () => {
+    expect(() => planInputDelivery({ inputs: [], transportEnvelopeLimit: {},
+      evaluateEnvelope: () => ({ chars: 10, bytes: 10 }) })).toThrowError(InputPlanError);
+    expect(() => planInputDelivery({ inputs: [], transportEnvelopeLimit: { maxBytes: 100 },
+      evaluateEnvelope: () => ({ chars: 10 }) })).toThrowError(InputPlanError);
+    for (const maxChars of [NaN, Infinity, 0, -1]) {
+      expect(() => planInputDelivery({ inputs: [], transportEnvelopeLimit: { maxChars },
+        evaluateEnvelope: () => ({ chars: 10 }) })).toThrowError(InputPlanError);
+    }
+  });
+
+  it("reserves shared inline bytes for a later input that cannot materialize", () => {
+    const planned = planInputDelivery({
+      inputs: [true, false].map((allowMaterialization, i) => ({
+        origin: "task_artifact" as const, artifact: makeArtifact({ artifact_id: `art-${i}`, size_bytes: 9000 }),
+        content_type: "text/plain", inlineCandidate: textOf(9000), allowMaterialization,
+      })),
+      transportEnvelopeLimit: { maxChars: 20000 }, evaluateEnvelope: ds => ({
+        chars: ds.reduce((sum, d) => sum + (d.inlineContent?.byteLength ?? 100), 0),
+      }),
+    });
+    expect(planned.map(p => p.delivery)).toEqual(["read_only_path", "inline"]);
+  });
+
+  it("can reduce two independently exceeded transport bounds without a false plateau", () => {
+    const planned = planInputDelivery({
+      inputs: [0, 1].map(i => ({ origin: "task_artifact" as const,
+        artifact: makeArtifact({ artifact_id: `art-${i}`, size_bytes: 100 }), content_type: "text/plain",
+        inlineCandidate: textOf(100), allowMaterialization: true })),
+      transportEnvelopeLimit: { maxChars: 200, maxBytes: 400 },
+      evaluateEnvelope: ds => ({
+        chars: (ds[0]!.delivery === "inline" ? 200 : 100) + 100,
+        bytes: 200 + (ds[1]!.delivery === "inline" ? 400 : 200),
+      }),
+    });
+    expect(planned.every(p => p.delivery === "read_only_path")).toBe(true);
+  });
   it("small supported text goes inline with ordered input ids", () => {
     const planned = planInputDelivery({
       inputs: [
@@ -105,6 +168,73 @@ describe("planInputDelivery delivery selection (§7.1.1)", () => {
       expect(e).toBeInstanceOf(InputPlanError);
       expect((e as InputPlanError).code).toBe("INPUT_LIMIT");
     }
+  });
+
+  it("replans inline to read_only_path when transport envelope char cap is exceeded", () => {
+    // 4000 bytes fits within 16 KiB inline budget, but envelope footprint would exceed 6000 chars
+    const candidate = textOf(4000);
+    const planned = planInputDelivery({
+      inputs: [
+        {
+          origin: "task_artifact",
+          artifact: makeArtifact({ size_bytes: 4000 }),
+          content_type: "text/plain",
+          inlineCandidate: candidate,
+          allowMaterialization: true,
+        },
+      ],
+      transportEnvelopeLimit: { maxChars: 6000 },
+      evaluateEnvelope: (deliveries) => {
+        const isInline = deliveries[0]?.delivery === "inline";
+        // Fixed envelope 2500 chars; if inline +4000 chars = 6500 chars (> 6000); if path +100 chars = 2600 chars (<= 6000)
+        return { chars: 2500 + (isInline ? 4000 : 100), bytes: 2500 + (isInline ? 4000 : 100) };
+      },
+    });
+    expect(planned).toHaveLength(1);
+    expect(planned[0]!.delivery).toBe("read_only_path");
+    expect(planned[0]!.inlineContent).toBeNull();
+  });
+
+  it("excessive inline input throws INPUT_LIMIT when materialization is not allowed", () => {
+    expect(() =>
+      planInputDelivery({
+        inputs: [
+          {
+            origin: "task_artifact",
+            artifact: makeArtifact({ size_bytes: 4000 }),
+            content_type: "text/plain",
+            inlineCandidate: textOf(4000),
+            allowMaterialization: false,
+          },
+        ],
+        transportEnvelopeLimit: { maxChars: 6000 },
+        evaluateEnvelope: (deliveries) => {
+          const isInline = deliveries[0]?.delivery === "inline";
+          return { chars: 2500 + (isInline ? 4000 : 100) };
+        },
+      }),
+    ).toThrowError(InputPlanError);
+  });
+
+  it("fixed envelope alone exceeding transport limit throws INPUT_LIMIT", () => {
+    expect(() =>
+      planInputDelivery({
+        inputs: [
+          {
+            origin: "task_artifact",
+            artifact: makeArtifact({ size_bytes: 100 }),
+            content_type: "text/plain",
+            inlineCandidate: textOf(100),
+            allowMaterialization: true,
+          },
+        ],
+        transportEnvelopeLimit: { maxChars: 6000 },
+        evaluateEnvelope: () => {
+          // Even with minimal path delivery, fixed envelope exceeds 6000 chars (e.g. 6200)
+          return { chars: 6200 };
+        },
+      }),
+    ).toThrowError(InputPlanError);
   });
 });
 

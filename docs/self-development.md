@@ -152,3 +152,9 @@ and coordinator crash/retention/Unicode repairs. Native and offline evidence
 remain distinct. The operator renewed GLM quota on 2026-10-01 and authorized
 Individual Flash/max development and selected GLM/high reviews again; the
 earlier provider-1310 failure is historical evidence, not a current quota check.
+
+The [complete input transport checkpoint](native-smoke/2026-10-01-transport-inputs/report.md)
+records Antigravity authorship, retained Cursor SQLite failure, explicit renewed
+GLM review and coordinator repairs. It separates preview diffs from required
+complete diffs and measures the full transport envelope before input publication.
+Native input enforcement and readiness/binding are still separate gates.

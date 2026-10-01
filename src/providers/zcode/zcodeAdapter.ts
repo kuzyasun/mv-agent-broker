@@ -30,7 +30,8 @@ export interface ZcodeAdapterOptions {
 
 export class ZcodeAdapter implements ProviderAdapter {
   readonly providerId = "zcode";
-  readonly adapterVersion = "0.2.3";
+  readonly adapterVersion = "0.2.4";
+  readonly transportEnvelopeLimit = { maxChars: ZCODE_PROMPT_ARG_MAX };
   private readonly opts: ZcodeAdapterOptions;
   constructor(opts: ZcodeAdapterOptions) { this.opts = opts; }
 

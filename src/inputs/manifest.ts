@@ -10,6 +10,7 @@
  */
 import type { ArtifactRecord } from "../shared/api-types.ts";
 import { canonicalRequestHash } from "../shared/canonicalize.ts";
+import type { TransportEnvelopeLimit } from "../runtime/adapter.ts";
 
 export type InputOrigin = "task_artifact" | "review_baseline" | "review_diff";
 export type DeliveryMode = "inline" | "read_only_path";
@@ -90,7 +91,7 @@ export interface PlannedDelivery {
  * within the SHARED budget (in request order); the rest read-only
  * materialization when the profile allows it, otherwise INPUT_LIMIT.
  */
-export function planInputDelivery(args: {
+export interface PlanInputDeliveryArgs {
   inputs: Array<{
     origin: InputOrigin;
     artifact: ArtifactRecord;
@@ -98,11 +99,18 @@ export function planInputDelivery(args: {
     inlineCandidate: Uint8Array | null;
     allowMaterialization: boolean;
   }>;
-}): PlannedDelivery[] {
-  const out: PlannedDelivery[] = [];
-  let inlineBudgetUsed = 0;
+  transportEnvelopeLimit?: TransportEnvelopeLimit | null;
+  evaluateEnvelope?: (
+    deliveries: Array<{
+      input_id: string;
+      delivery: DeliveryMode;
+      inlineContent: Uint8Array | null;
+    }>,
+  ) => { chars: number; bytes?: number };
+}
 
-  args.inputs.forEach((input, index) => {
+export function planInputDelivery(args: PlanInputDeliveryArgs): PlannedDelivery[] {
+  for (const input of args.inputs) {
     assertDeliverableArtifact(input.artifact);
     if (!(SUPPORTED_INLINE_CONTENT_TYPES as readonly string[]).includes(input.content_type)) {
       throw new InputPlanError(
@@ -110,33 +118,89 @@ export function planInputDelivery(args: {
         "INPUT_UNSUPPORTED",
       );
     }
+  }
+
+  const out: PlannedDelivery[] = [];
+  let inlineBudgetUsed = 0;
+
+  for (let index = 0; index < args.inputs.length; index++) {
+    const input = args.inputs[index]!;
     const candidate = input.inlineCandidate;
-    if (candidate && candidate.byteLength <= INLINE_TOTAL_BYTE_CAP - inlineBudgetUsed) {
+    const inputId = `in-${index + 1}`;
+    const forcedFutureBytes = args.transportEnvelopeLimit
+      ? args.inputs.slice(index + 1).reduce((sum, next) => sum + (!next.allowMaterialization
+        ? next.inlineCandidate?.byteLength ?? INLINE_TOTAL_BYTE_CAP + 1 : 0), 0) : 0;
+
+    let fitsInline = false;
+    if (candidate && candidate.byteLength <= INLINE_TOTAL_BYTE_CAP - inlineBudgetUsed - forcedFutureBytes) {
+      fitsInline = true;
+    }
+
+    if (fitsInline && candidate) {
       inlineBudgetUsed += candidate.byteLength;
       out.push({
-        input_id: `in-${index + 1}`,
+        input_id: inputId,
         origin: input.origin,
         delivery: "inline",
         artifact: input.artifact,
         inlineContent: candidate,
       });
-      return;
+      continue;
     }
+
     if (!input.allowMaterialization) {
       throw new InputPlanError(
         `Input ${input.artifact.artifact_id} does not fit the inline budget and materialization is not allowed (§15.1)`,
         "INPUT_LIMIT",
       );
     }
+
     out.push({
-      input_id: `in-${index + 1}`,
+      input_id: inputId,
       origin: input.origin,
       delivery: "read_only_path",
       artifact: input.artifact,
       inlineContent: null,
     });
-  });
+  }
 
+  const limit = args.transportEnvelopeLimit;
+  if (limit) {
+    if (!args.evaluateEnvelope || (limit.maxChars === undefined && limit.maxBytes === undefined) ||
+        [limit.maxChars, limit.maxBytes].some(n => n !== undefined && (!Number.isFinite(n) || n <= 0))) {
+      throw new InputPlanError("Transport bounds require finite positive limits and an envelope evaluator", "INPUT_LIMIT");
+    }
+    const evaluate = args.evaluateEnvelope;
+    const score = (deliveries: PlannedDelivery[]): number => {
+      const footprint = evaluate(deliveries);
+      if (!Number.isFinite(footprint.chars) || footprint.chars < 0 ||
+          (limit.maxBytes !== undefined && (!Number.isFinite(footprint.bytes) || footprint.bytes! < 0))) {
+        throw new InputPlanError("Envelope evaluator did not provide valid required measurements", "INPUT_LIMIT");
+      }
+      return (limit.maxChars === undefined ? 0 : Math.max(0, footprint.chars / limit.maxChars - 1)) +
+        (limit.maxBytes === undefined ? 0 : Math.max(0, footprint.bytes! / limit.maxBytes - 1));
+    };
+    // Evaluate the ACTUAL preferred complete plan first. Short inline values
+    // can cost less than path bindings; future inputs cannot be assumed paths.
+    // Switch only legal channels that reduce the complete measured footprint.
+    let current = score(out);
+    while (current > 0) {
+      let bestIndex = -1;
+      let bestScore = current;
+      for (let i = 0; i < out.length; i++) {
+        if (out[i]!.delivery !== "inline" || !args.inputs[i]!.allowMaterialization) continue;
+        const candidate = out.map((p, index) => index === i
+          ? { ...p, delivery: "read_only_path" as const, inlineContent: null } : p);
+        const next = score(candidate);
+        if (next < bestScore) { bestScore = next; bestIndex = i; }
+      }
+      if (bestIndex < 0) {
+        throw new InputPlanError("Complete envelope exceeds transport limits with available delivery channels", "INPUT_LIMIT");
+      }
+      out[bestIndex] = { ...out[bestIndex]!, delivery: "read_only_path", inlineContent: null };
+      current = bestScore;
+    }
+  }
   return out;
 }
 

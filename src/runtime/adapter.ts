@@ -280,9 +280,20 @@ export interface RuntimeObservation {
   observation: string;
 }
 
+export interface TransportEnvelopeLimit {
+  maxChars?: number;
+  maxBytes?: number;
+}
+
 export interface ProviderAdapter {
   readonly providerId: string;
   readonly adapterVersion: string;
+  /**
+   * Optional internal transport envelope limit descriptor (spec §13.2, §15.1).
+   * Known configured constant for the provider CLI transport (e.g. argv char limit).
+   * When specified, the broker bounds deterministic envelope planning to this limit.
+   */
+  readonly transportEnvelopeLimit?: TransportEnvelopeLimit | number;
 
   /**
    * Inspection/preflight: verify CLI presence/version/config compatibility.

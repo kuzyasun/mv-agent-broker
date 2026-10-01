@@ -75,7 +75,7 @@ import type {
 } from "../runtime/adapter.ts";
 import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, diffManifests, readManifest, type ManifestDelta } from "../snapshots/capture.ts";
-import { diffSnapshots, renderDiffDocument } from "../snapshots/diff.ts";
+import { diffSnapshots, renderCompleteDiffDocument } from "../snapshots/diff.ts";
 import { CoverageError, matchesPrefix, type CoverageConfig } from "../workspaces/coverage.ts";
 import {
   isPhysicalLeaseScope,
@@ -406,7 +406,7 @@ export class TurnExecutor {
     let envelope = `agent-broker envelope turn=${turnId} session=${session.session_id}`;
     let readOnlyInputPaths: readonly string[] = Object.freeze([]);
     try {
-      const prep = this.prepareInputs(turnNow, session);
+      const prep = this.prepareInputs(turnNow, session, adapter);
       envelope = this.buildEnvelope(session, turnNow, prep.manifest);
       // §7.1.1: ONLY the exact broker-generated materialized bindings from the
       // sealed manifest — never paths derived from goal/artifact text.
@@ -1203,9 +1203,14 @@ export class TurnExecutor {
    * selection), materialize read-only views, and seal the TurnInputManifest
    * — all BEFORE dispatch permission. Returns the manifest for the envelope.
    */
-  private prepareInputs(turn: TurnRecord, session: SessionRecord): { manifest: TurnInputManifest } {
+  private prepareInputs(
+    turn: TurnRecord,
+    session: SessionRecord,
+    adapter?: ProviderAdapter,
+  ): { manifest: TurnInputManifest } {
     const projectId = session.project_id;
     const now = this.clock.now();
+    let pendingReview: { target: SnapshotManifest; diff: string; artifactId: string } | null = null;
 
     const inputs: Array<{
       origin: "task_artifact" | "review_baseline" | "review_diff";
@@ -1266,49 +1271,14 @@ export class TurnExecutor {
           return null;
         }
       });
-      const diffDoc = renderDiffDocument(diff, 256 * 1024);
-
-      // §9.3 stable review slot: refresh the broker-owned slot to exactly the
-      // TARGET tree between quiescent turns (this turn is not dispatched yet,
-      // the previous one is terminal). Stale files are cleared ONLY inside
-      // the slot — never in a worker checkout.
-      if (this.slots) {
-        try {
-          this.slots.refresh(session.session_id, targetManifest, (hash) => this.blobs.read(projectId, hash));
-        } catch (err) {
-          throw new BrokerError("EVIDENCE_CAPTURE_FAILED", `Review slot refresh failed: ${String(err)}`);
-        }
-      }
+      const diffDoc = renderCompleteDiffDocument(diff);
 
       const now2 = this.clock.now();
-      const diffBlob = this.blobs.write(projectId, diffDoc);
-      insertBlobRecord(this.db, {
-        project_id: projectId,
-        content_hash: diffBlob.hash,
-        size_bytes: diffBlob.size,
-        created_at: now2,
-      });
+      // Plan from exact bytes without publishing provisional artifacts or
+      // changing the slot when transport limits cannot be satisfied.
+      const diffBlob = { hash: sha256Hex(diffDoc), size: Buffer.byteLength(diffDoc, "utf8") };
       const diffArtifactId = newId("art");
-      insertArtifact(this.db, {
-        artifact_id: diffArtifactId,
-        project_id: projectId,
-        kind: "patch",
-        content_hash: null,
-        size_bytes: null,
-        state: "staging",
-        created_at: now2,
-        sealed_at: null,
-        expired_at: null,
-      });
-      sealArtifact(this.db, diffArtifactId, diffBlob.hash, diffBlob.size, now2);
-      insertPin(this.db, {
-        pin_id: newId("pin"),
-        artifact_id: diffArtifactId,
-        root_kind: "active_turn",
-        owner_session_id: session.session_id,
-        owner_turn_id: turn.turn_id,
-        created_at: now2,
-      });
+      pendingReview = { target: targetManifest, diff: diffDoc, artifactId: diffArtifactId };
 
       const baselineArtifact = getArtifact(this.db, baselineRecord.manifest_artifact_id);
       if (!baselineArtifact || baselineArtifact.state === "expired") {
@@ -1342,14 +1312,45 @@ export class TurnExecutor {
           expired_at: null,
         },
         content_type: "text/plain",
-        inlineCandidate: diffDoc.length <= INLINE_TOTAL_BYTE_CAP ? Buffer.from(diffDoc, "utf8") : null,
+        inlineCandidate: diffBlob.size <= INLINE_TOTAL_BYTE_CAP ? Buffer.from(diffDoc, "utf8") : null,
         allowMaterialization: true,
       });
     }
 
-    const planned = planInputDelivery({ inputs });
     const turnRoot = this.inputViews ? this.inputViews.turnRoot(turn.turn_id) : "";
     const contentTypeById = new Map(inputs.map((i) => [i.artifact.artifact_id, i.content_type]));
+    const readOnlyPathForInput = (inputId: string, artifactId: string) => {
+      const ctype = contentTypeById.get(artifactId) ?? "text/plain";
+      return this.inputViews ? `${turnRoot}/${inputId}${extensionFor(ctype)}` : "";
+    };
+
+    const evaluateEnvelope = (
+      deliveries: Array<{
+        input_id: string;
+        delivery: "inline" | "read_only_path";
+        inlineContent: Uint8Array | null;
+      }>,
+    ): { chars: number; bytes: number } => {
+      const text = this.renderEnvelope(session, turn, deliveries.map((d, i) => ({
+        input_id: d.input_id, content_type: inputs[i]!.content_type,
+        content_hash: inputs[i]!.artifact.content_hash!,
+        content: d.delivery === "inline" ? Buffer.from(d.inlineContent!).toString("utf8") : null,
+        binding: readOnlyPathForInput(d.input_id, inputs[i]!.artifact.artifact_id),
+      })));
+      return { chars: text.length, bytes: Buffer.byteLength(text, "utf8") };
+    };
+
+    const transportEnvelopeLimit = adapter?.transportEnvelopeLimit != null
+      ? typeof adapter.transportEnvelopeLimit === "number"
+        ? { maxChars: adapter.transportEnvelopeLimit }
+        : adapter.transportEnvelopeLimit
+      : null;
+
+    const planned = planInputDelivery({
+      inputs,
+      transportEnvelopeLimit,
+      evaluateEnvelope,
+    });
     const plannedFull = planned.map((p) => ({
       input_id: p.input_id,
       origin: p.origin,
@@ -1381,6 +1382,24 @@ export class TurnExecutor {
     const violations = verifyTurnInputManifest(manifest);
     if (violations.length > 0) {
       throw new BrokerError("INPUT_DELIVERY_FAILED", `Input manifest invalid: ${violations[0]}`);
+    }
+
+    if (pendingReview) {
+      try {
+        this.slots!.refresh(session.session_id, pendingReview.target, hash => this.blobs.read(projectId, hash));
+      } catch (err) {
+        throw new BrokerError("EVIDENCE_CAPTURE_FAILED", `Review slot refresh failed: ${String(err)}`);
+      }
+      const blob = this.blobs.write(projectId, pendingReview.diff);
+      const artifactId = pendingReview.artifactId;
+      this.db.tx(() => {
+        insertBlobRecord(this.db, { project_id: projectId, content_hash: blob.hash, size_bytes: blob.size, created_at: now });
+        insertArtifact(this.db, { artifact_id: artifactId, project_id: projectId, kind: "patch",
+          content_hash: null, size_bytes: null, state: "staging", created_at: now, sealed_at: null, expired_at: null });
+        sealArtifact(this.db, artifactId, blob.hash, blob.size, now);
+        insertPin(this.db, { pin_id: newId("pin"), artifact_id: artifactId, root_kind: "active_turn",
+          owner_session_id: session.session_id, owner_turn_id: turn.turn_id, created_at: now });
+      });
     }
 
     // Materialize read-only views (copies, never aliases — §9.2, §12.6).
@@ -1460,6 +1479,18 @@ export class TurnExecutor {
 
   /** Deterministic envelope: caller contract and complete required inputs. */
   private buildEnvelope(session: SessionRecord, turn: TurnRecord, manifest: TurnInputManifest): string {
+    return this.renderEnvelope(session, turn, manifest.inputs.map(entry => ({
+      input_id: entry.input_id, content_type: entry.content_type, content_hash: entry.content_hash,
+      content: entry.delivery === "inline"
+        ? Buffer.from(this.blobs.read(session.project_id, entry.content_hash)).toString("utf8") : null,
+      binding: entry.binding,
+    })));
+  }
+
+  /** The planner and dispatched prompt share one exact renderer. */
+  private renderEnvelope(session: SessionRecord, turn: TurnRecord, inputs: Array<{
+    input_id: string; content_type: string; content_hash: string; content: string | null; binding: string;
+  }>): string {
     const { instructions, task } = this.persistedTaskContext(session, turn);
     const lines: string[] = [
       "agent-broker context envelope (deterministic, broker-generated)",
@@ -1471,15 +1502,14 @@ export class TurnExecutor {
       ...(turn.review_target_snapshot_id
         ? [`review_target_snapshot=${turn.review_target_snapshot_id} (this replaced the previous code in your cwd)`]
         : []),
-      manifest.inputs.length > 0
-        ? `required inputs (${manifest.inputs.length}) — every input below is required:`
+      inputs.length > 0
+        ? `required inputs (${inputs.length}) — every input below is required:`
         : "required inputs: none",
     ];
-    for (const entry of manifest.inputs) {
-      if (entry.delivery === "inline") {
-        const bytes = this.blobs.read(session.project_id, entry.content_hash);
+    for (const entry of inputs) {
+      if (entry.content !== null) {
         lines.push(`[input ${entry.input_id} ${entry.content_type} sha256=${entry.content_hash}]`);
-        lines.push(Buffer.from(bytes).toString("utf8"));
+        lines.push(entry.content);
         lines.push(`[/input ${entry.input_id}]`);
       } else {
         lines.push(
