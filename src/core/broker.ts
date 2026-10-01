@@ -8,6 +8,9 @@
  * rejection (RESOURCE_BUSY etc.) frees the key for a later attempt (§7.3).
  */
 import { isUtf8 } from "node:buffer";
+import { mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { RegistryDb } from "../storage/db.ts";
 import {
   appendEvent,
@@ -29,6 +32,7 @@ import {
   insertPin,
   insertSession,
   insertTurn,
+  insertWorkspace,
   latestCoverageProfileVersion,
   listSessionsByOwner,
   listEventsByTurn,
@@ -41,6 +45,7 @@ import {
   updateSessionFields,
   updateSnapshotState,
   updateTurnFields,
+  updateWorkspaceQuarantine,
   SqliteConstraintError,
   type IdempotencyRow,
 } from "../storage/repo.ts";
@@ -62,6 +67,7 @@ import type {
   TurnRecord,
   TurnState,
   WorkspaceMode,
+  WorkspaceRecord,
 } from "../shared/api-types.ts";
 import { API_VERSION, DEFAULT_LIMITS } from "../shared/api-types.ts";
 import { authorizeOwner, authorizeProjectAccess } from "./authz.ts";
@@ -104,6 +110,28 @@ import {
   type SessionPhysicalCwdBinding,
 } from "../workspaces/identity.ts";
 import { CoverageError, uncoveredWriteScope, validateCoverageConfig, type CoverageConfig } from "../workspaces/coverage.ts";
+import {
+  WORKTREE_PROVISION_BINDING_VERSION,
+  RepositoryMutationLock,
+  canonicalizeLockKey,
+  computeManagedWorktreePath,
+  createRealWorktreeGitRunner,
+  inspectWorktreeTarget,
+  parseWorktreeJournal,
+  preflightSourceRepository,
+  receiptsMatch,
+  resolveSourceCommonDir,
+  resolvesInsideRoot,
+  worktreeAddDetached,
+  WorktreeGitRunError,
+  WorktreePreflightError,
+  type RepositoryLockTicket,
+  type WorktreeCompletionReceipt,
+  type WorktreeGitRunner,
+  type WorktreeLaunchReceipt,
+  type WorktreeProvisionJournal,
+  type WorktreeProvisionStage,
+} from "../workspaces/worktree.ts";
 
 // ─── Request DTOs (API 0.2 §10) ─────────────────────────────────────────────
 
@@ -123,7 +151,14 @@ export interface SpawnRequest {
   effort: string | null;
   role: AgentRole;
   instructions: string;
-  workspace: { mode: WorkspaceMode; workspace_id: string | null };
+  workspace: {
+    mode: WorkspaceMode;
+    workspace_id: string | null;
+    /** §8.3 additive: registered source repository workspace (mode=worktree). */
+    repository_workspace_id?: string | null;
+    /** §8.3 additive: explicit full 40/64-hex commit for the detached worktree. */
+    base_commit?: string | null;
+  };
   policy_profile_id: string;
   policy_restrictions?: Record<string, unknown>;
 }
@@ -177,6 +212,17 @@ interface SpawnPreflightCandidate {
   policy: EffectiveWritePolicy;
   observation: ProviderReadinessObservation | null;
   fingerprint: string;
+  /** §8.3: validated worktree source binding (broker-created worktrees). */
+  worktreeSource?: {
+    source_workspace_id: string;
+    base_commit: string;
+    /** realpath-resolved shared Git common dir (lock identity). */
+    source_common_dir: string;
+    /** Registered canonical path observed at preflight (drift check). */
+    source_canonical_path: string;
+    /** Coverage binding observed at preflight (drift check). */
+    source_coverage_profile_id: string;
+  };
 }
 
 /**
@@ -208,12 +254,26 @@ export type ProviderBindingLookup =
 
 // ─── Public response shapes ─────────────────────────────────────────────────
 
+/**
+ * §8.3 additive spawn response block for broker-created detached worktrees.
+ * No credential and no filesystem path is disclosed — the workspace reference
+ * is the broker-generated registered id.
+ */
+export interface SpawnWorktreeSummary {
+  workspace_id: string;
+  base_commit: string;
+  /** The source checkout's dirty/untracked content is never copied. */
+  current_checkout_changes_copied: false;
+}
+
 export interface SpawnResponse {
   api_version: string;
   session_id: string;
   state: SessionState;
   initial_snapshot_id: string | null;
   replayed_request: boolean;
+  /** §8.3 additive: present for broker-created worktree sessions, else null. */
+  worktree: SpawnWorktreeSummary | null;
 }
 
 export interface SendResponse {
@@ -243,6 +303,15 @@ export interface BrokerOptions {
   deferExecution?: boolean;
   /** Content-addressed store for snapshot blobs and manifests (§14.1). */
   blobStore: BlobStore;
+  /** §8.3: broker-managed root for detached worktrees (bootstrap: stateDir/worktrees). */
+  worktreesRoot?: string;
+  /** §8.3 test seam: Git subprocess runner for provisioning (default: real git). */
+  worktreeGitRunner?: WorktreeGitRunner;
+  /**
+   * §8.3 broker incarnation identity for durable mutation fencing (bootstrap:
+   * the lifecycle incarnation). Defaults to a fresh process-unique id.
+   */
+  incarnation?: string;
 }
 
 export class BrokerCore {
@@ -251,6 +320,26 @@ export class BrokerCore {
   readonly limits: Limits;
   readonly adapters: Map<string, ProviderAdapter>;
   readonly blobStore: BlobStore;
+  /** §8.3 managed worktree root; null = broker-created worktrees unconfigured. */
+  readonly worktreesRoot: string | null;
+  readonly worktreeGitRunner: WorktreeGitRunner;
+  /** §8.3 incarnation fencing identity (unique per broker process). */
+  readonly worktreeIncarnation: string;
+  private readonly worktreeLocks: RepositoryMutationLock;
+  /**
+   * §8.3 durable repository fence, mirrored in memory: common-dir keys of
+   * repositories with a provision whose owned operation may still be alive
+   * or whose effect is unknown. Populated from the durable journals at
+   * construction and by every uncertain outcome; a fenced repository never
+   * sees another Git mutation while unrelated repositories proceed.
+   */
+  private readonly worktreeFences = new Set<string>();
+  /** Completed Git operations still awaiting authoritative provision verification. */
+  private readonly worktreeVerificationFences = new Map<string, Set<string>>();
+  /** Unreadable repository scope cannot authorize any new Git mutation. */
+  private unknownWorktreeRepositoryScope = false;
+  /** Sessions with one in-flight provision body (idempotency guard). */
+  private readonly activeWorktreeProvisions = new Set<string>();
   private readonly deferExecution: boolean;
   private executor: TurnExecutor | null = null;
   private background: Promise<unknown>[] = [];
@@ -261,7 +350,108 @@ export class BrokerCore {
     this.limits = opts.limits ?? DEFAULT_LIMITS;
     this.adapters = opts.adapters;
     this.blobStore = opts.blobStore;
+    this.worktreesRoot = opts.worktreesRoot ?? null;
+    this.worktreeGitRunner = opts.worktreeGitRunner ?? createRealWorktreeGitRunner();
+    this.worktreeIncarnation = opts.incarnation ?? randomUUID();
+    this.worktreeLocks = new RepositoryMutationLock(this.worktreeIncarnation);
     this.deferExecution = opts.deferExecution ?? false;
+    this.loadWorktreeRepositoryFences();
+  }
+
+  /**
+   * §8.3 durable restart fence: scan the pending provision journals and fence
+   * every repository whose journal proves a dispatched-but-unresolved owned
+   * operation (launch receipt present, stage still adding — or a crafted
+   * receipt at any pre-completion stage). The journal is the durable fence;
+   * this rebuild makes "an old operation may be alive" block new related
+   * provisions immediately after ANY restart, while unrelated repositories
+   * proceed.
+   */
+  private loadWorktreeRepositoryFences(): void {
+    let rows: Array<{ session_id: string | null; payload: string | null }>;
+    try {
+      rows = this.db.raw
+        .prepare("SELECT session_id, payload FROM intents WHERE kind = 'provision_session' AND state = 'pending'")
+        .all() as Array<{ session_id: string | null; payload: string | null }>;
+    } catch {
+      return;
+    }
+    for (const row of rows) {
+      const session = row.session_id ? getSession(this.db, row.session_id) : null;
+      const generated = session?.workspace_id ? getWorkspace(this.db, session.workspace_id) : null;
+      const fenceMalformed = (raw: unknown): void => {
+        let scoped = false;
+        const rawObj = raw && typeof raw === "object" && !Array.isArray(raw)
+          ? raw as Record<string, unknown> : {};
+        if (typeof rawObj.source_common_dir === "string" && path.isAbsolute(rawObj.source_common_dir)) {
+          this.worktreeFences.add(canonicalizeLockKey(rawObj.source_common_dir));
+          scoped = true;
+        }
+        if (typeof rawObj.source_workspace_id === "string") {
+          const source = getWorkspace(this.db, rawObj.source_workspace_id);
+          if (source?.canonical_path) {
+            try {
+              this.worktreeFences.add(canonicalizeLockKey(resolveSourceCommonDir(source.canonical_path)));
+              scoped = true;
+            } catch { /* retain without guessing a checkout lock key */ }
+          }
+        }
+        if (!scoped) this.unknownWorktreeRepositoryScope = true;
+        // Quarantine the session-owned row, never a raw JSON workspace id.
+        if (generated?.mode === "worktree") {
+          updateWorkspaceQuarantine(this.db, generated.workspace_id, true, "worktree-provisioning: malformed-journal-retained");
+        }
+      };
+      if (!row.payload) {
+        if (session?.workspace_mode === "worktree") fenceMalformed(null);
+        continue;
+      }
+      try {
+        const parsed: unknown = JSON.parse(row.payload);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          if (session?.workspace_mode === "worktree") fenceMalformed(null);
+          continue;
+        }
+        const raw = (parsed as Record<string, unknown>).worktree_provisioning;
+        if (raw === undefined && session?.workspace_mode !== "worktree") continue;
+        const journal = parseWorktreeJournal(raw);
+        if (journal) {
+          const completed = (journal.stage === "added" || journal.stage === "ready") &&
+            journal.launch && journal.completion && receiptsMatch(journal.launch, journal.completion);
+          if (completed && !journal.failure && row.session_id) {
+            this.addWorktreeVerificationFence(canonicalizeLockKey(journal.source_common_dir), row.session_id);
+          }
+          if (journal.failure?.reason === "uncertain-owned-operation-retained" ||
+              (journal.launch && !completed) ||
+              ((journal.stage === "added" || journal.stage === "ready") && !completed)) {
+            this.worktreeFences.add(canonicalizeLockKey(journal.source_common_dir));
+            updateWorkspaceQuarantine(
+              this.db,
+              journal.workspace_id,
+              true,
+              "worktree-provisioning: uncertain-owned-operation-retained",
+            );
+          }
+        } else {
+          fenceMalformed(raw);
+        }
+      } catch {
+        if (session?.workspace_mode === "worktree") fenceMalformed(null);
+      }
+    }
+  }
+
+  private addWorktreeVerificationFence(key: string, sessionId: string): void {
+    const owners = this.worktreeVerificationFences.get(key) ?? new Set<string>();
+    owners.add(sessionId);
+    this.worktreeVerificationFences.set(key, owners);
+  }
+
+  private clearFinishedWorktreeVerificationFence(key: string, sessionId: string): void {
+    if (getSession(this.db, sessionId)?.state === "PROVISIONING") return;
+    const owners = this.worktreeVerificationFences.get(key);
+    owners?.delete(sessionId);
+    if (owners?.size === 0) this.worktreeVerificationFences.delete(key);
   }
 
   /** Wait for all fire-and-forget background work (tests, graceful stop). */
@@ -281,9 +471,402 @@ export class BrokerCore {
     this.background.push(entry);
   }
 
+  /**
+   * §8.3 provisioning of one broker-created detached worktree. Tracked
+   * background work: acquire the repository-level mutation lock keyed by the
+   * source's resolved shared common dir, claim the hold in the journal,
+   * inspect the target path, create or reconcile, and — on success — run the
+   * final physical binding/snapshot/session completion WHILE STILL HOLDING
+   * the repository lock. Every step is staged in the durable journal.
+   *
+   * Recovery rules (never inference, never deletion, never adoption):
+   *   - a journal with a launch receipt at stage "adding" means an owned
+   *     operation was dispatched and its effect is UNKNOWN: retain the
+   *     journal, quarantine the generated workspace and fence the repository
+   *     durably — no re-add, no completion, no TTL;
+   *   - stage "added"/"ready" carries durable completion proof (CASed only
+   *     after an owned quiescence receipt) and reconciles via the strict
+   *     owned-worktree verification below;
+   *   - a journal WITHOUT a receipt at stage pending/adding proves the root
+   *     was never resumed (the receipt is persisted BEFORE ResumeThread), so
+   *     a fresh dispatch may start — and must never fabricate a receipt;
+   *   - any preexisting target path on such a proofless provision is
+   *     foreign, even a valid matching Git worktree.
+   */
+  private async provisionDetachedWorktree(sessionId: string): Promise<void> {
+    const session0 = getSession(this.db, sessionId);
+    if (!session0 || session0.state !== "PROVISIONING") return;
+    const initial = readOwnedWorktreeJournal(this.db, sessionId);
+    if (!initial) return;
+    if (this.activeWorktreeProvisions.has(sessionId)) return;
+    this.activeWorktreeProvisions.add(sessionId);
+    const runner = this.worktreeGitRunner;
+    type Outcome =
+      | { kind: "ready" }
+      | { kind: "retained" }
+      | { kind: "retained-uncertain" }
+      | { kind: "superseded" }
+      | { kind: "foreign"; reason: string }
+      | { kind: "git-failed"; reason: string };
+    try {
+      await this.worktreeLocks.withLock(initial.source_common_dir, async (ticket): Promise<void> => {
+        const decide = async (): Promise<Outcome> => {
+          // A prior uncertain outcome durably fences this repository: no new
+          // related Git mutation may start while an old one may be alive.
+          if (this.unknownWorktreeRepositoryScope || this.worktreeFences.has(ticket.key)) return { kind: "retained" };
+          const verificationOwners = this.worktreeVerificationFences.get(ticket.key);
+          if (verificationOwners?.size && !verificationOwners.has(sessionId)) return { kind: "retained" };
+          const session = getSession(this.db, sessionId);
+          if (!session || session.state !== "PROVISIONING") return { kind: "superseded" };
+          const fresh = readOwnedWorktreeJournal(this.db, sessionId);
+          if (!fresh) return { kind: "superseded" };
+          // Claim this exact hold in the journal BEFORE any decision: every
+          // later CAS transition validates the journal's lock token against
+          // THIS hold (hold_id + incarnation), so a stale or reused
+          // process-local sequence can never authorize an owner change.
+          if (!this.claimWorktreeHold(sessionId, fresh.stage, ticket)) return { kind: "superseded" };
+          const source = getWorkspace(this.db, fresh.source_workspace_id);
+          if (!source?.canonical_path) {
+            return { kind: "git-failed", reason: "worktree-source-workspace-missing" };
+          }
+          const inspect = (allowOwned: boolean) =>
+            inspectWorktreeTarget({
+              managedRoot: fresh.managed_root,
+              worktreePath: fresh.worktree_path,
+              sourceCommonDir: fresh.source_common_dir,
+              baseCommit: fresh.base_commit,
+              runner,
+              allowOwned,
+            });
+
+          if (fresh.stage === "ready") {
+            // Restarted when stage was already ready: validate completion matches launch before completing.
+            if (!fresh.launch || !fresh.completion || !receiptsMatch(fresh.launch, fresh.completion)) {
+              return { kind: "retained-uncertain" };
+            }
+            const verified = await inspect(true);
+            if (verified.kind === "owned") {
+              if (!this.casWorktreeJournalStage(sessionId, "ready", "ready", ticket)) return { kind: "superseded" };
+              this.completeProvisioningIfNeeded(sessionId, true); // inside the lock
+              return { kind: "ready" };
+            }
+            if (verified.kind === "absent") {
+              return { kind: "git-failed", reason: "worktree-verified-state-vanished" };
+            }
+            if (verified.kind === "uncertain") return { kind: "retained-uncertain" };
+            return { kind: "foreign", reason: verified.reason };
+          }
+
+          if (fresh.stage === "added") {
+            // Stage "added": durable completion proof (quiesced) required.
+            if (!fresh.launch || !fresh.completion || !receiptsMatch(fresh.launch, fresh.completion)) {
+              return { kind: "retained-uncertain" };
+            }
+            const verified = await inspect(true);
+            if (verified.kind === "owned") {
+              if (!this.casWorktreeJournalStage(sessionId, "added", "ready", ticket)) return { kind: "superseded" };
+              this.completeProvisioningIfNeeded(sessionId, true); // inside the lock
+              return { kind: "ready" };
+            }
+            if (verified.kind === "absent") {
+              // Known-completed state destroyed externally: fail closed with
+              // evidence, never re-add and never adopt a replacement.
+              return { kind: "git-failed", reason: "worktree-verified-state-vanished" };
+            }
+            if (verified.kind === "uncertain") return { kind: "retained-uncertain" };
+            return { kind: "foreign", reason: verified.reason };
+          }
+
+          if (fresh.launch) {
+            // An owned operation was dispatched; its receipt is durable.
+            // Unknown effect — possibly still running or killed mid-flight:
+            // retain unconditionally (the receipt content is never trusted
+            // as completion; only the owned quiescence proof would be).
+            return { kind: "retained-uncertain" };
+          }
+
+          // No receipt: the mutation root was never resumed (pending, or an
+          // adding attempt that provably never executed). Re-dispatching is
+          // safe; any preexisting path is foreign (allowOwned=false).
+          if (fresh.stage === "pending") {
+            if (!this.casWorktreeJournalStage(sessionId, "pending", "adding", ticket)) return { kind: "superseded" };
+          }
+          const found = await inspect(false);
+          if (found.kind === "uncertain") return { kind: "retained" };
+          if (found.kind === "foreign") return { kind: "foreign", reason: found.reason };
+          let completion: WorktreeCompletionReceipt;
+          try {
+            completion = await worktreeAddDetached({
+              sourcePath: source.canonical_path,
+              worktreePath: fresh.worktree_path,
+              baseCommit: fresh.base_commit,
+              runner,
+              onOwnership: (receipt) => {
+                // A queued provision's registered alias may have been retargeted
+                // since admission. Refuse before resume rather than mutating a
+                // repository other than the one whose lock is held.
+                if (canonicalizeLockKey(resolveSourceCommonDir(source.canonical_path!)) !== ticket.key) {
+                  throw new WorktreeGitRunError("worktree-source-repository-drift", true);
+                }
+                this.recordWorktreeLaunchReceipt(sessionId, ticket, receipt);
+              },
+            });
+          } catch (e) {
+            if (e instanceof WorktreeGitRunError && !e.definitive) {
+              // Uncertain after resume: retain the journal with its receipt
+              // and fence the repository durably (no TTL, no PID release).
+              return { kind: "retained-uncertain" };
+            }
+            // Definitive refusal/clean death: launch was refused or failed definitively.
+            // Never adopt preexisting matching files without verified completion proof.
+            const after = await inspect(false);
+            if (after.kind === "uncertain") return { kind: "retained" };
+            if (after.kind === "foreign") return { kind: "foreign", reason: after.reason };
+            return { kind: "git-failed", reason: e instanceof WorktreeGitRunError ? e.reason : "git-execution-failed" };
+          }
+          // Owned quiescence proof received. Record the durable completion
+          // stage FIRST (so a crash still reconciles without duplicate add),
+          // then verify the exact allocation and complete under this hold.
+          if (!this.casWorktreeJournalStage(sessionId, "adding", "added", ticket, completion)) return { kind: "superseded" };
+          const verified = await inspect(true);
+          if (verified.kind === "owned") {
+            if (!this.casWorktreeJournalStage(sessionId, "added", "ready", ticket)) return { kind: "superseded" };
+            this.completeProvisioningIfNeeded(sessionId, true); // inside the lock
+            return { kind: "ready" };
+          }
+          if (verified.kind === "absent") {
+            return { kind: "git-failed", reason: "worktree-add-did-not-produce-the-expected-worktree" };
+          }
+          if (verified.kind === "uncertain") return { kind: "retained-uncertain" };
+          return { kind: "foreign", reason: verified.reason };
+        };
+        // Apply every outcome before releasing the repository lock. A queued
+        // holder must observe the fence, and a late failure cannot affect a
+        // replacement hold after unlock.
+        try {
+          const outcome = await decide();
+          switch (outcome.kind) {
+            case "superseded":
+            case "ready":
+              return; // journals stay pending on uncertainty; ready completed in-lock
+            case "retained": {
+              const journal = readOwnedWorktreeJournal(this.db, sessionId);
+              if (journal && journal.launch && journal.stage !== "added" && journal.stage !== "ready") {
+                updateWorkspaceQuarantine(
+                  this.db,
+                  journal.workspace_id,
+                  true,
+                  "worktree-provisioning: uncertain-owned-operation-retained",
+                );
+              }
+              return;
+            }
+            case "retained-uncertain": {
+              // Durable fence for this repository + quarantine evidence; the
+              // journal keeps stage "adding" with its receipt, intent pending.
+              this.worktreeFences.add(ticket.key);
+              const journal = readOwnedWorktreeJournal(this.db, sessionId);
+              const recorded = journal && this.updateWorktreeJournalPayload(sessionId, journal.stage, (current) =>
+                current.lock?.hold_id === ticket.hold_id && current.lock.incarnation === ticket.incarnation && current.lock.key === ticket.key
+                  ? { ...current, failure: { reason: "uncertain-owned-operation-retained" } } : null);
+              if (journal && recorded) {
+                updateWorkspaceQuarantine(
+                  this.db,
+                  journal.workspace_id,
+                  true,
+                  "worktree-provisioning: uncertain-owned-operation-retained",
+                );
+              }
+              return;
+            }
+            case "foreign":
+              this.failWorktreeProvisioning(sessionId, `foreign-target: ${outcome.reason}`, outcome.reason, ticket);
+              return;
+            case "git-failed":
+              this.failWorktreeProvisioning(sessionId, `git-worktree-add-failed: ${outcome.reason}`, "git-add-failed", ticket);
+              return;
+          }
+        } finally {
+          this.clearFinishedWorktreeVerificationFence(ticket.key, sessionId);
+        }
+      });
+    } finally {
+      this.activeWorktreeProvisions.delete(sessionId);
+    }
+  }
+
+  /**
+   * Record the active repository-lock hold in the pending journal INSIDE a
+   * transaction (fencing claim). Every later stage transition validates
+   * against this exact hold token, so a live/late holder can never commit
+   * under another owner and a reused process-local sequence from a dead
+   * incarnation never authorizes anything.
+   */
+  private claimWorktreeHold(sessionId: string, expectStage: WorktreeProvisionStage, ticket: RepositoryLockTicket): boolean {
+    return this.updateWorktreeJournalPayload(sessionId, expectStage, (journal) => {
+      const lock = journal.lock;
+      if (lock !== null && lock.incarnation === ticket.incarnation && lock.hold_id !== ticket.hold_id) {
+        return null;
+      }
+      return {
+        ...journal,
+        lock: worktreeLockFence(ticket),
+      };
+    });
+  }
+
+  /** Persist the exact owned launch receipt durably BEFORE the root resume. */
+  private recordWorktreeLaunchReceipt(
+    sessionId: string,
+    ticket: RepositoryLockTicket,
+    receipt: WorktreeLaunchReceipt,
+  ): void {
+    const ok = this.updateWorktreeJournalPayload(sessionId, "adding", (journal) => {
+      const lock = journal.lock;
+      const exactHold =
+        lock !== null &&
+        lock.key === ticket.key &&
+        lock.hold_id === ticket.hold_id &&
+        lock.incarnation === ticket.incarnation;
+      if (!exactHold || journal.launch !== null) return null;
+      return {
+        ...journal,
+        launch: receipt,
+      };
+    });
+    if (!ok) {
+      throw new Error("worktree-launch-receipt-not-recorded");
+    }
+  }
+
+  /**
+   * Compare-and-set one journal stage INSIDE a transaction. Fails (false)
+   * when the intent is no longer pending, the stage moved, or the journal's
+   * recorded lock is not the EXACT active hold token (key + hold_id +
+   * incarnation) — the caller treats the provision as superseded and never
+   * transitions on someone else's hold.
+   */
+  private casWorktreeJournalStage(
+    sessionId: string,
+    expectStage: WorktreeProvisionStage,
+    nextStage: WorktreeProvisionStage,
+    ticket: RepositoryLockTicket,
+    completion?: WorktreeCompletionReceipt,
+  ): boolean {
+    const updated = this.updateWorktreeJournalPayload(sessionId, expectStage, (journal) => {
+      const lock = journal.lock;
+      const exactHold =
+        lock !== null &&
+        lock.key === ticket.key &&
+        lock.hold_id === ticket.hold_id &&
+        lock.incarnation === ticket.incarnation;
+      if (!exactHold) return null; // stale/foreign/reused token: refuse
+      if (nextStage === "added") {
+        if (!completion || !journal.launch) return null;
+        if (!receiptsMatch(journal.launch, completion)) return null;
+      }
+      return {
+        ...journal,
+        stage: nextStage,
+        lock: worktreeLockFence(ticket),
+        ...(completion ? { completion } : {}),
+      };
+    });
+    if (updated && nextStage === "added") this.addWorktreeVerificationFence(ticket.key, sessionId);
+    return updated;
+  }
+
+  /**
+   * Transactional journal payload update used by the claim/receipt/CAS
+   * primitives. `edit` returns the new journal or null to refuse. Never
+   * touches malformed journals (they stay retained verbatim).
+   */
+  private updateWorktreeJournalPayload(
+    sessionId: string,
+    expectStage: WorktreeProvisionStage,
+    edit: (journal: WorktreeProvisionJournal) => WorktreeProvisionJournal | null,
+  ): boolean {
+    return this.db.tx(() => {
+      const intent = listPendingIntents(this.db, "provision_session").find((i) => i.session_id === sessionId);
+      if (!intent?.payload) return false;
+      let payload: Record<string, unknown>;
+      try {
+        const parsed: unknown = JSON.parse(intent.payload);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+        payload = parsed as Record<string, unknown>;
+      } catch {
+        return false;
+      }
+      const journal = parseWorktreeJournal(payload.worktree_provisioning);
+      if (!journal) {
+        return false;
+      }
+      if (journal.stage !== expectStage) {
+        return false;
+      }
+      const next = edit(journal);
+      if (!next) return false;
+      payload.worktree_provisioning = next;
+      const updated = this.db.raw
+        .prepare("UPDATE intents SET payload = ?, updated_at = ? WHERE intent_id = ? AND state = 'pending'")
+        .run(JSON.stringify(payload), this.now(), intent.intent_id);
+      return Number(updated.changes) === 1;
+    });
+  }
+
+  /**
+   * §8.3 definitive provisioning failure: the generated workspace row is
+   * quarantined with bounded evidence, the session BLOCKED, the intent failed
+   * — one atomic transaction. The accepted idempotency key remains; the
+   * foreign path itself is never touched.
+   */
+  private failWorktreeProvisioning(sessionId: string, reason: string, evidence: string, ticket: RepositoryLockTicket): void {
+    const now = this.now();
+    this.db.tx(() => {
+      const session = getSession(this.db, sessionId);
+      if (!session || session.state !== "PROVISIONING") return;
+      const journal = readOwnedWorktreeJournal(this.db, sessionId);
+      if (!journal || journal.lock?.hold_id !== ticket.hold_id ||
+          journal.lock.incarnation !== ticket.incarnation || journal.lock.key !== ticket.key) return;
+      if (journal) {
+        updateWorkspaceQuarantine(this.db, journal.workspace_id, true, `worktree-provisioning: ${evidence}`);
+      }
+      assertSessionTransition(session.state, "provisioning_failed");
+      updateSessionFields(
+        this.db,
+        sessionId,
+        { state: "BLOCKED", block_reason: `provisioning-failed: ${reason}` },
+        session.record_version,
+        now,
+      );
+      const intent = listPendingIntents(this.db, "provision_session").find((i) => i.session_id === sessionId);
+      if (intent) updateIntentState(this.db, intent.intent_id, "failed", now);
+      appendEvent(this.db, {
+        turn_id: null,
+        session_id: sessionId,
+        type: "session_provisioning_failed",
+        payload: {
+          reason,
+          evidence,
+          ...(journal ? { workspace_id: journal.workspace_id, base_commit: journal.base_commit } : {}),
+        },
+        created_at: now,
+      });
+    });
+  }
+
   /** Wired post-construction to avoid a constructor cycle. */
   attachExecutor(executor: TurnExecutor): void {
     this.executor = executor;
+  }
+
+  /**
+   * §8.3 bootstrap reconciliation entry: advance retained worktree provisions
+   * (a no-op for sessions already in a defined state). Scheduling only —
+   * callers drain() to await the bounded Git work.
+   */
+  reconcileRetainedProvisions(sessionIds: readonly string[]): void {
+    for (const sessionId of sessionIds) this.completeProvisioningIfNeeded(sessionId);
   }
 
   private requireExecutor(): TurnExecutor {
@@ -386,6 +969,7 @@ export class BrokerCore {
       state: session.state,
       initial_snapshot_id: session.initial_snapshot_id,
       replayed_request: provisionIntentId === null,
+      worktree: this.worktreeSummary(sessionId),
     };
   }
 
@@ -397,12 +981,33 @@ export class BrokerCore {
     }
     const session = getSession(this.db, rec.resolved_id ?? "");
     if (!session) throw new BrokerError("INVALID_REQUEST", "Idempotent record points to a missing session.");
+    // Same accepted key after a lost response (§7.3): the committed session and
+    // its bound resources are returned unchanged; a provisioning window that
+    // is still open is advanced (idempotently) instead of left stuck.
+    if (session.state === "PROVISIONING") this.completeProvisioningIfNeeded(session.session_id);
+    const fresh = getSession(this.db, session.session_id) ?? session;
     return {
       api_version: API_VERSION,
-      session_id: session.session_id,
-      state: session.state,
-      initial_snapshot_id: session.initial_snapshot_id,
+      session_id: fresh.session_id,
+      state: fresh.state,
+      initial_snapshot_id: fresh.initial_snapshot_id,
       replayed_request: true,
+      worktree: this.worktreeSummary(fresh.session_id),
+    };
+  }
+
+  /**
+   * §8.3 additive response block: read from the session-owned provision
+   * journal so replays and failure states report the SAME bound workspace id
+   * and base commit. No credentials, no filesystem paths.
+   */
+  private worktreeSummary(sessionId: string): SpawnWorktreeSummary | null {
+    const journal = readOwnedWorktreeJournal(this.db, sessionId);
+    if (!journal) return null;
+    return {
+      workspace_id: journal.workspace_id,
+      base_commit: journal.base_commit,
+      current_checkout_changes_copied: false,
     };
   }
 
@@ -428,6 +1033,11 @@ export class BrokerCore {
     if (req.role === "reviewer" && req.workspace.mode !== "review_slot") {
       throw new BrokerError("INVALID_REQUEST", "role=reviewer requires workspace.mode=review_slot (§8.1).");
     }
+    // §8.3 workspace field contract, decided BEFORE any accepted resource:
+    // broker-created detached worktrees need a registered same-project source
+    // repository reference plus an explicit full-hex commit; contradictory or
+    // missing fields are rejected here and leave the idempotency key free.
+    const worktreeSource = this.worktreeSpawnPreflight(req);
     // §13.3 account binding: a registered account of the matching provider is
     // required BEFORE any accepted session/reservation exists.
     const account = getAccount(this.db, req.account_profile_id);
@@ -500,8 +1110,116 @@ export class BrokerCore {
       account,
       policy,
       observation: candidate.observation,
+      worktreeSource,
     });
+    if (worktreeSource) candidate.worktreeSource = worktreeSource;
     return candidate;
+  }
+
+  /**
+   * §8.3 worktree spawn preflight (§7.2 step 3): field-shape contradictions
+   * and missing references first, then the registered source repository
+   * checks (same project, repository mode, not quarantined), then the bounded
+   * Git preflight — the canonical path must be a real Git repository and the
+   * explicit base commit must exist. Everything here runs OUTSIDE any
+   * transaction and creates no accepted state; a failure frees the key.
+   * Registered worktree workspaces (mode=worktree + workspace_id) keep their
+   * established contract untouched.
+   */
+  private worktreeSpawnPreflight(req: SpawnRequest): NonNullable<SpawnPreflightCandidate["worktreeSource"]> | null {
+    const workspace = req.workspace;
+    const hasSource = workspace.repository_workspace_id !== undefined && workspace.repository_workspace_id !== null;
+    const hasCommit = workspace.base_commit !== undefined && workspace.base_commit !== null;
+    if (workspace.mode !== "worktree") {
+      if (hasSource || hasCommit) {
+        throw new BrokerError(
+          "INVALID_REQUEST",
+          "repository_workspace_id/base_commit are only valid with workspace.mode=worktree (§8.3).",
+          { executionStarted: false },
+        );
+      }
+      return null;
+    }
+    if (workspace.workspace_id && (hasSource || hasCommit)) {
+      throw new BrokerError(
+        "INVALID_REQUEST",
+        "A registered worktree workspace reference contradicts broker-created worktree fields (§8.3).",
+        { executionStarted: false },
+      );
+    }
+    if (workspace.workspace_id) return null; // registered worktree path: unchanged contract
+    if (!hasSource || !hasCommit) {
+      throw new BrokerError(
+        "INVALID_REQUEST",
+        "Broker-created worktree provisioning requires workspace.repository_workspace_id and workspace.base_commit (§8.3).",
+        { executionStarted: false },
+      );
+    }
+    const repositoryWorkspaceId = workspace.repository_workspace_id!;
+    const baseCommit = workspace.base_commit!;
+    if (typeof repositoryWorkspaceId !== "string" || typeof baseCommit !== "string") {
+      throw new BrokerError("INVALID_REQUEST", "worktree workspace fields must be strings (§8.3).", {
+        executionStarted: false,
+      });
+    }
+    const source = getWorkspace(this.db, repositoryWorkspaceId);
+    if (!source || source.project_id !== req.project_id) {
+      throw new BrokerError("INVALID_REQUEST", "Unknown repository workspace reference for this project (§8.3).", {
+        executionStarted: false,
+      });
+    }
+    if (source.mode !== "current") {
+      throw new BrokerError("INVALID_REQUEST", "Worktree source must be a registered repository workspace (§8.3).", {
+        executionStarted: false,
+      });
+    }
+    if (source.quarantined) {
+      throw new BrokerError("WORKSPACE_BUSY", "Worktree source workspace is quarantined.", {
+        executionStarted: false,
+        details: { workspace_id: source.workspace_id },
+      });
+    }
+    if (!source.canonical_path) {
+      throw new BrokerError("INVALID_REQUEST", "Worktree source workspace has no registered checkout path (§8.3).", {
+        executionStarted: false,
+      });
+    }
+    if (!source.coverage_profile_id) {
+      // Writer sends require a coverage binding (§8.7); a source without one
+      // could never satisfy the initial snapshot contract — reject up front.
+      throw new BrokerError("INVALID_REQUEST", "Worktree source workspace has no coverage binding (§8.7).", {
+        executionStarted: false,
+      });
+    }
+    if (!this.worktreesRoot) {
+      throw new BrokerError(
+        "INVALID_REQUEST",
+        "Broker-created worktree provisioning is not configured on this daemon (§8.3).",
+        { executionStarted: false },
+      );
+    }
+    // Bounded Git reads (rev-parse common dir + verify commit) — safe
+    // subprocess, outside any transaction, no optional locks, no branch or
+    // HEAD guess, nothing created.
+    try {
+      mkdirSync(this.worktreesRoot, { recursive: true });
+      const identity = preflightSourceRepository(source.canonical_path, baseCommit);
+      return {
+        source_workspace_id: source.workspace_id,
+        base_commit: baseCommit,
+        source_common_dir: identity.commonDir,
+        source_canonical_path: source.canonical_path,
+        source_coverage_profile_id: source.coverage_profile_id,
+      };
+    } catch (e) {
+      if (e instanceof WorktreePreflightError) {
+        throw new BrokerError("INVALID_REQUEST", e.message, {
+          executionStarted: false,
+          details: { reason: e.reason },
+        });
+      }
+      throw e;
+    }
   }
 
   /**
@@ -541,9 +1259,11 @@ export class BrokerCore {
     // Re-derive the effective policy from the live profile row (pure DB read);
     // a changed config yields a different fingerprint and refuses admission.
     // The readiness observation is the CAPTURED preflight return (pure
-    // in-memory comparison; no external process runs here).
+    // in-memory comparison; no external process runs here). The §8.3 worktree
+    // source binding is re-read from the live registry rows — drift refuses.
     const policy = cloneFrozenPolicy(this.spawnPolicyPreflight(req));
-    const fresh = spawnCandidateFingerprint({ provider: req.provider, adapterVersion: adapter.adapterVersion, account, policy, observation: candidate.observation });
+    const worktreeSource = this.revalidateWorktreeSource(req, candidate);
+    const fresh = spawnCandidateFingerprint({ provider: req.provider, adapterVersion: adapter.adapterVersion, account, policy, observation: candidate.observation, worktreeSource });
     if (fresh !== candidate.fingerprint) {
       throw new BrokerError(
         "POLICY_UNSUPPORTED",
@@ -551,6 +1271,48 @@ export class BrokerCore {
         { executionStarted: false },
       );
     }
+  }
+
+  /**
+   * §8.3 authoritative revalidation of the worktree source binding (pure
+   * record reads inside the admission transaction): the registered source
+   * repository must still exist, belong to the project, stay unquarantined
+   * and unchanged. The Git preflight is never re-run here.
+   */
+  private revalidateWorktreeSource(
+    req: SpawnRequest,
+    candidate: SpawnPreflightCandidate,
+  ): NonNullable<SpawnPreflightCandidate["worktreeSource"]> | null {
+    const workspace = req.workspace;
+    const hasSource = workspace.repository_workspace_id !== undefined && workspace.repository_workspace_id !== null;
+    const hasCommit = workspace.base_commit !== undefined && workspace.base_commit !== null;
+    if (workspace.mode !== "worktree" || workspace.workspace_id) return null;
+    if (!candidate.worktreeSource) {
+      if (!hasSource || !hasCommit) return null;
+      throw new BrokerError("INVALID_REQUEST", "Worktree source binding vanished during admission (§8.3).", {
+        executionStarted: false,
+      });
+    }
+    const bound = candidate.worktreeSource;
+    const source = getWorkspace(this.db, bound.source_workspace_id);
+    if (
+      !source ||
+      source.project_id !== req.project_id ||
+      source.mode !== "current" ||
+      source.quarantined ||
+      source.canonical_path !== bound.source_canonical_path ||
+      source.coverage_profile_id !== bound.source_coverage_profile_id
+    ) {
+      throw new BrokerError("INVALID_REQUEST", "Worktree source workspace changed during admission (§8.3).", {
+        executionStarted: false,
+      });
+    }
+    if (workspace.repository_workspace_id !== bound.source_workspace_id || workspace.base_commit !== bound.base_commit) {
+      throw new BrokerError("INVALID_REQUEST", "Worktree request fields changed during admission (§8.3).", {
+        executionStarted: false,
+      });
+    }
+    return bound;
   }
 
   /**
@@ -609,10 +1371,54 @@ export class BrokerCore {
     if (workspace && workspace.project_id !== req.project_id) {
       throw new BrokerError("INVALID_REQUEST", "Workspace does not belong to this project.");
     }
-    const binding = this.resolveCoverageBinding(workspace);
+    // §8.3 broker-created worktree: the session binds a NEW broker-generated
+    // workspace row (mode=worktree) placed under the managed root at a
+    // hash-of-session path; the source binding and base commit are journaled
+    // in the provision intent BEFORE any Git command runs.
+    let worktreeRecord: {
+      workspace: WorkspaceRecord;
+      journal: WorktreeProvisionJournal;
+    } | null = null;
+    if (req.workspace.mode === "worktree" && !req.workspace.workspace_id && candidate.worktreeSource) {
+      const source = getWorkspace(this.db, candidate.worktreeSource.source_workspace_id);
+      if (!source || !this.worktreesRoot) {
+        throw new BrokerError("INVALID_REQUEST", "Worktree source binding vanished during admission (§8.3).");
+      }
+      const worktreePath = computeManagedWorktreePath(this.worktreesRoot, sessionId);
+      const workspaceRow: WorkspaceRecord = {
+        workspace_id: newId(ID_PREFIX.workspace),
+        project_id: req.project_id,
+        mode: "worktree",
+        canonical_path: worktreePath,
+        quarantined: false,
+        quarantine_reason: null,
+        coverage_profile_id: source.coverage_profile_id,
+      };
+      worktreeRecord = {
+        workspace: workspaceRow,
+        journal: {
+          binding_version: WORKTREE_PROVISION_BINDING_VERSION,
+          source_workspace_id: source.workspace_id,
+          source_common_dir: candidate.worktreeSource.source_common_dir,
+          base_commit: candidate.worktreeSource.base_commit,
+          workspace_id: workspaceRow.workspace_id,
+          worktree_path: worktreePath,
+          managed_root: this.worktreesRoot,
+          stage: "pending",
+          lock: null,
+          launch: null,
+          completion: null,
+          current_checkout_changes_copied: false,
+        },
+      };
+    }
+
+    const bindingWorkspace = worktreeRecord ? worktreeRecord.workspace : workspace;
+    const binding = this.resolveCoverageBinding(bindingWorkspace);
 
     // Session slot cap (§15.1) checked + reserved in the same boundary.
     reserveSessionSlot(this.db, now, sessionId, req.project_id, this.sessionCap(req.project_id));
+    if (worktreeRecord) insertWorkspace(this.db, worktreeRecord.workspace);
     const session: SessionRecord = {
       session_id: sessionId,
       project_id: req.project_id,
@@ -635,7 +1441,7 @@ export class BrokerCore {
       instructions_hash: sha256Hex(req.instructions),
       policy_profile_id: req.policy_profile_id,
       policy_profile_version: POLICY_PROFILE_VERSION,
-      workspace_id: req.workspace.workspace_id,
+      workspace_id: worktreeRecord ? worktreeRecord.workspace.workspace_id : req.workspace.workspace_id,
       workspace_mode: req.workspace.mode,
       coverage_profile_id: binding?.profile_id ?? null,
       coverage_profile_version: binding?.version ?? null,
@@ -671,6 +1477,10 @@ export class BrokerCore {
         instructions: req.instructions,
         effective_policy: effectivePolicy,
         provider_binding: durableProviderBinding(candidate),
+        // §8.3: the generated workspace row/path, source binding and base
+        // commit are durable BEFORE any Git mutation (worktree add runs only
+        // after this transaction commits, staged via the journal).
+        ...(worktreeRecord ? { worktree_provisioning: worktreeRecord.journal } : {}),
       }),
       created_at: now,
       updated_at: now,
@@ -718,10 +1528,42 @@ export class BrokerCore {
    * the intent journal records which side effects happened.
    * Idempotent: a session already in a defined state is left as-is.
    */
-  private completeProvisioningIfNeeded(sessionId: string): void {
+  private completeProvisioningIfNeeded(sessionId: string, insideLock = false): void {
     const current = getSession(this.db, sessionId);
     if (!current) throw new Error("session-vanished");
     if (current.state !== "PROVISIONING") return;
+
+    // §8.3: a broker-created detached worktree is provisioned as tracked
+    // background work — the long Git child runs OUTSIDE the event loop and
+    // outside any transaction, serialized per repository common dir. The
+    // journal drives staging/reconciliation; once stage "ready" is durable
+    // the normal binding/capture completion below runs unchanged. A journal
+    // that exists but is invalid/unreadable is RETAINED (never interpreted
+    // as an ordinary provision, never completed, never failed by guesswork).
+    const worktreePayload = readProvisionIntentPayload(this.db, sessionId);
+    let worktreeJournal: WorktreeProvisionJournal | null = null;
+    let worktreeBindingMalformed = false;
+    if (worktreePayload?.payload) {
+      try {
+        const parsed: unknown = JSON.parse(worktreePayload.payload);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          const raw = (parsed as Record<string, unknown>).worktree_provisioning;
+          if (raw !== undefined) {
+            worktreeJournal = parseWorktreeJournal(raw);
+            worktreeBindingMalformed = worktreeJournal === null;
+          }
+        } else {
+          worktreeBindingMalformed = true;
+        }
+      } catch {
+        worktreeBindingMalformed = true;
+      }
+    }
+    if (worktreeBindingMalformed) return; // retained verbatim for the operator
+    if (worktreeJournal && !insideLock) {
+      this.track(this.provisionDetachedWorktree(sessionId));
+      return;
+    }
 
     // Review slots (P2-2) and path-less workspaces provision without capture.
     const workspace = current.workspace_id ? getWorkspace(this.db, current.workspace_id) : null;
@@ -745,6 +1587,12 @@ export class BrokerCore {
       physical = resolvePhysicalCheckoutIdentity(workspace.canonical_path);
       if (!physical) {
         this.failProvisioning(sessionId, "checkout-path-has-no-stable-physical-identity");
+        return;
+      }
+      // §8.3 containment: the FS-resolved worktree cwd must stay inside the
+      // managed root it was allocated from — a link escape fails closed.
+      if (worktreeJournal && !resolvesInsideRoot(worktreeJournal.managed_root, physical.resolvedPath)) {
+        this.failProvisioning(sessionId, "worktree-path-escapes-managed-root");
         return;
       }
     }
@@ -2263,6 +3111,10 @@ export class BrokerCore {
       entries.push({
         kind: "workspace", id: ws.workspace_id, display_name: ws.workspace_id,
         mode: ws.mode, coverage_profile_id: ws.coverage_profile_id, quarantined: ws.quarantined === 1,
+        // §8.3 additive: eligible registered repository workspace reference
+        // for broker-created detached worktrees. Only REGISTERED ids are
+        // exposed — never a guessed or caller-supplied path.
+        eligible_worktree_source: ws.mode === "current" && ws.quarantined !== 1 && ws.coverage_profile_id !== null,
       });
     }
     const policies = this.db.raw
@@ -2346,6 +3198,59 @@ function namespaceOf(project_id: string, owner: string, op: OperationName, key: 
 }
 
 /**
+ * Read the session-owned §8.3 worktree provision journal from its provision
+ * intent (any state — replays and failures report the same binding). Null
+ * when the session has no broker-created worktree journal or it is malformed.
+ */
+function readOwnedWorktreeJournal(db: RegistryDb, sessionId: string): WorktreeProvisionJournal | null {
+  const row = readProvisionIntentPayload(db, sessionId);
+  if (!row?.payload) return null;
+  try {
+    const parsed: unknown = JSON.parse(row.payload);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parseWorktreeJournal((parsed as Record<string, unknown>).worktree_provisioning);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Strict journal read distinguishing "no owned worktree binding" from a
+ * binding that EXISTS but is invalid/unreadable. A malformed owned binding
+ * must retain its journal (never be interpreted as an ordinary provision),
+ * so the ambiguity is surfaced to the caller instead of collapsed to null.
+ */
+function readProvisionIntentPayload(
+  db: RegistryDb,
+  sessionId: string,
+): { payload: string | null } | undefined {
+  try {
+    return db.raw
+      .prepare("SELECT payload FROM intents WHERE kind = 'provision_session' AND session_id = ? ORDER BY created_at LIMIT 1")
+      .get(sessionId) as { payload: string | null } | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Durable §8.3 fence fields of one repository-lock hold (exact owner token). */
+function worktreeLockFence(ticket: RepositoryLockTicket): {
+  key: string;
+  seq: number;
+  acquired_at: number;
+  hold_id: string;
+  incarnation: string;
+} {
+  return {
+    key: ticket.key,
+    seq: ticket.seq,
+    acquired_at: ticket.acquired_at,
+    hold_id: ticket.hold_id,
+    incarnation: ticket.incarnation,
+  };
+}
+
+/**
  * Pure comparable fingerprint over every externally-observed spawn input
  * (§7.2): provider, adapter version, registered account binding, the narrowed
  * effective policy and the captured readiness observation (null for
@@ -2360,6 +3265,7 @@ function spawnCandidateFingerprint(parts: {
   account: Pick<AccountProfileRecord, "account_profile_id" | "provider" | "auth_mode" | "quota_scope_id">;
   policy: EffectiveWritePolicy;
   observation: ProviderReadinessObservation | null;
+  worktreeSource: { source_workspace_id: string; base_commit: string; source_common_dir: string; source_canonical_path: string; source_coverage_profile_id: string } | null;
 }): string {
   return sha256Hex(JSON.stringify({
     provider: parts.provider,
@@ -2380,6 +3286,9 @@ function spawnCandidateFingerprint(parts: {
       requested_restrictions: parts.policy.requested_restrictions,
     },
     readiness_fingerprint: parts.observation ? fingerprintReadinessObservation(parts.observation) : null,
+    // §8.3: the validated source binding participates — a changed source row
+    // or base commit yields a different fingerprint and refuses admission.
+    worktree_source: parts.worktreeSource,
   }));
 }
 

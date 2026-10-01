@@ -16,6 +16,8 @@ import {
   type McpToolContext,
   type McpToolDef,
 } from "../../src/bridge/server.ts";
+import { callBridgeTool, bridgeToolDefs } from "../../src/bridge/tools.ts";
+import type { BrokerCore } from "../../src/core/broker.ts";
 
 const mockDefs: McpToolDef[] = [
   {
@@ -297,5 +299,81 @@ describe("runStdioBridge transport loop", () => {
     const parsed2 = JSON.parse(lines[1]!);
     expect(parsed2.id).toBe(2);
     expect(parsed2.result.tools).toEqual(mockDefs);
+  });
+});
+
+// ─── §8.3 additive spawn workspace fields at the bridge boundary ────────────
+
+describe("agent_session_spawn additive worktree workspace fields (§8.3)", () => {
+  function recordingCore() {
+    const calls: Array<Record<string, unknown>> = [];
+    const core = {
+      spawn: (_coordinatorId: string, req: Record<string, unknown>) => {
+        calls.push(req);
+        return { session_id: "session-stub", state: "PROVISIONING", replayed_request: false, worktree: null };
+      },
+    };
+    return { calls, core: core as unknown as BrokerCore };
+  }
+
+  function spawnArgs(workspace: Record<string, unknown>): Record<string, unknown> {
+    return {
+      project_id: "p",
+      idempotency_key: "k",
+      provider: "mock",
+      account_profile_id: "acct",
+      model: "m",
+      role: "worker",
+      instructions: "i",
+      workspace,
+      policy_profile_id: "pol",
+    };
+  }
+
+  it("passes repository_workspace_id and base_commit through to the broker core", async () => {
+    const { calls, core } = recordingCore();
+    await callBridgeTool(
+      { coordinatorId: "coord", core },
+      "agent_session_spawn",
+      spawnArgs({ mode: "worktree", repository_workspace_id: "ws-src", base_commit: "a".repeat(40) }),
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.workspace).toEqual({
+      mode: "worktree",
+      workspace_id: null,
+      repository_workspace_id: "ws-src",
+      base_commit: "a".repeat(40),
+    });
+  });
+
+  it("keeps existing current/review_slot/registered-worktree calls unchanged (no additive keys)", async () => {
+    const { calls, core } = recordingCore();
+    await callBridgeTool(
+      { coordinatorId: "coord", core },
+      "agent_session_spawn",
+      spawnArgs({ mode: "current", workspace_id: "ws-main" }),
+    );
+    expect(calls[0]!.workspace).toEqual({ mode: "current", workspace_id: "ws-main" });
+  });
+
+  it("rejects unknown workspace keys and non-string additive values", async () => {
+    const { core } = recordingCore();
+    const ctx = { coordinatorId: "coord", core };
+    await expect(
+      callBridgeTool(ctx, "agent_session_spawn", spawnArgs({ mode: "worktree", repository_path: "/etc/passwd" })),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(
+      callBridgeTool(ctx, "agent_session_spawn", spawnArgs({ mode: "worktree", base_commit: 123 })),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+  });
+
+  it("advertises the additive properties in the spawn tool schema (closed object)", () => {
+    const def = bridgeToolDefs().find((d) => d.name === "agent_session_spawn")!;
+    const workspace = (def.inputSchema as {
+      properties: { workspace: { properties: Record<string, { type: string }>; additionalProperties: boolean } };
+    }).properties.workspace;
+    expect(workspace.properties.repository_workspace_id).toEqual({ type: "string" });
+    expect(workspace.properties.base_commit).toEqual({ type: "string" });
+    expect(workspace.additionalProperties).toBe(false);
   });
 });

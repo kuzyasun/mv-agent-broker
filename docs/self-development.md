@@ -82,7 +82,7 @@ Production adapters do not rely on reading Desktop chat caches for reports.
 | Effective policy and inputs | Core narrowing and immutable binding completed; native mandatory enforcement, read/search-only reviewer and required-input enforcement remain open |
 | Runtime supervision | Durable launch/process ownership, managed descendant quiescence, crash/disconnect/restart cases and explicit UNKNOWN reconciliation |
 | Preflight and binding | Observed native readiness and lifetime account/config binding completed; actual vendor account identity and mandatory native confinement remain unverified |
-| Workspaces/resources | Bounded output/report artifacts implemented; broker-created Git worktrees, total storage admission including staging and event wait remain |
+| Workspaces/resources | Bounded output/report artifacts and broker-created Git worktrees implemented; total storage admission including staging and event wait remain |
 | Complete native feedback loop | Caller-independent four-turn harness implemented and verified offline; combined native R1/S1/R2/S2 continuity and cancellation during native tools remain open |
 | Operator setup | Validated registry configuration, runnable startup packaging, practical recovery/triage workflow |
 | Acceptance closure | A01–A53 evidence by actual platform/provider/role/profile; retain unknown/failed statuses where no native proof exists |
@@ -185,6 +185,15 @@ The [ZCode quota checkpoint](native-smoke/2026-10-01-zcode-quota/report.md)
 records explicit error attribution, owned fail-fast termination, successful
 Cursor review with coordinator fixes, and 723 passing offline tests/one skip.
 Standalone plain-message/silent-retry attribution remains unknown. The operator
-requested stopping after this package; unfinished worktree/event/storage/operator
-packages are preserved and unaccepted. Fresh owned inputs/slots initialization
+requested stopping after that package, then authorized completion of the retained
+worktree portion. Event/storage/operator packages remain preserved and unaccepted. Fresh owned inputs/slots initialization
 is a separate confirmed remaining issue.
+
+The [detached worktree provisioning checkpoint](native-smoke/2026-10-01-worktree-provisioning/report.md)
+records managed launch/completion receipts, in-lock durable repository fencing,
+malformed-journal retention, exact ownership checks, source-alias drift refusal,
+and preserved dirty worktrees. Antigravity implementation and Cursor independent
+review ran through accepted stable broker a176221; the coordinator fixed confirmed
+findings and verified the final source. Integrated typecheck and full suite passed
+766 tests with one skip across 45 files; 39 worktree tests passed.
+Storage admission, event wait, operator setup, and complete native profiles remain open.

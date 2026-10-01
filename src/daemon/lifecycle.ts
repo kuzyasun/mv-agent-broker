@@ -16,6 +16,7 @@ import { newId, ID_PREFIX } from "../shared/ids.ts";
 import type { Clock } from "../shared/clock.ts";
 import type { DaemonState } from "../shared/api-types.ts";
 import type { RegistryDb } from "../storage/db.ts";
+import { parseWorktreeJournal } from "../workspaces/worktree.ts";
 import {
   appendEvent,
   getDaemonState,
@@ -83,6 +84,8 @@ export interface RecoveryReport {
   restored_reservations: number;
   pending_intents: number;
   quarantined_unknown_turns: string[];
+  /** §8.3: sessions whose owned worktree provision survived restart pending. */
+  retained_worktree_provisions: string[];
 }
 
 export class DaemonLifecycle {
@@ -310,8 +313,44 @@ export class DaemonLifecycle {
     // PROVISIONING session holding its slot forever — finalize it as a
     // failed provisioning (BLOCKED, intent failed); the operator can then
     // safe-close it (§6.4). Orphan CAPTURING snapshots are durably FAILED.
+    // §8.3 exception: a pending owned worktree provision that a Git mutation
+    // may have touched (stage adding/added/ready, or any durable launch
+    // receipt) is NOT inferred here — the journal is retained and bootstrap
+    // reconciliation resolves it under the repository lock (no duplicate
+    // add, no adoption). An owned binding that is invalid/unreadable is
+    // likewise retained verbatim, never treated as an ordinary provision.
+    const retainedWorktreeProvisions: string[] = [];
     for (const intent of listPendingIntents(this.db, "provision_session")) {
       if (!intent.session_id) continue;
+      let retainWorktreeProvision = false;
+      if (intent.payload === null || intent.payload === undefined) {
+        // An accepted provision without its durable payload is unrecoverable
+        // evidence — retained, never inferred into an ordinary finalization.
+        retainWorktreeProvision = intent.payload === null;
+      }
+      if (intent.payload) {
+        try {
+          const parsed: unknown = JSON.parse(intent.payload);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            const raw = (parsed as Record<string, unknown>).worktree_provisioning;
+            if (raw !== undefined) {
+              const journal = parseWorktreeJournal(raw);
+              retainWorktreeProvision =
+                journal === null ||
+                journal.stage !== "pending" ||
+                journal.launch !== null;
+            }
+          } else {
+            retainWorktreeProvision = true;
+          }
+        } catch {
+          retainWorktreeProvision = true;
+        }
+      }
+      if (retainWorktreeProvision) {
+        retainedWorktreeProvisions.push(intent.session_id);
+        continue;
+      }
       this.db.tx(() => {
         const s = getSession(this.db, intent.session_id!);
         if (!s || s.state !== "PROVISIONING") {
@@ -353,6 +392,7 @@ export class DaemonLifecycle {
       restored_reservations: reservations.length,
       pending_intents: pendingIntents.length,
       quarantined_unknown_turns: [...new Set(quarantinedUnknown)],
+      retained_worktree_provisions: [...new Set(retainedWorktreeProvisions)],
     };
   }
 

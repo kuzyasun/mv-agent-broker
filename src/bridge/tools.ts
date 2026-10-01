@@ -85,7 +85,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_spawn",
-      description: "Create a durable logical session (PROVISIONING→IDLE) without inference (§6.1). Idempotent.",
+      description: "Create a durable logical session (PROVISIONING→IDLE) without inference (§6.1). Idempotent. mode=worktree with repository_workspace_id+base_commit requests a broker-created detached Git worktree (§8.3).",
       inputSchema: {
         type: "object",
         properties: {
@@ -94,7 +94,14 @@ export function bridgeToolDefs(): McpToolDef[] {
           instructions: str,
           workspace: {
             type: "object",
-            properties: { mode: { type: "string", enum: ["current", "worktree", "review_slot"] }, workspace_id: str },
+            properties: {
+              mode: { type: "string", enum: ["current", "worktree", "review_slot"] },
+              workspace_id: str,
+              // §8.3 additive: registered source repository reference and the
+              // explicit full-hex base commit for a broker-created worktree.
+              repository_workspace_id: str,
+              base_commit: str,
+            },
             required: ["mode"],
             additionalProperties: false,
           },
@@ -362,6 +369,11 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
       if (!workspace || (workspace.mode !== "current" && workspace.mode !== "worktree" && workspace.mode !== "review_slot")) {
         throw new BrokerError("INVALID_REQUEST", "workspace.mode must be current|worktree|review_slot.");
       }
+      // §8.3 additive workspace fields: type-checked here, business rules
+      // (contradictions, registration, commit existence) stay in the core.
+      rejectUnknownKeys(workspace, ["mode", "workspace_id", "repository_workspace_id", "base_commit"]);
+      const repositoryWorkspaceId = optionalString(workspace, "repository_workspace_id");
+      const baseCommit = optionalString(workspace, "base_commit");
       return core.spawn(ctx.coordinatorId, {
         project_id: requireString(rawArgs, "project_id"),
         idempotency_key: requireString(rawArgs, "idempotency_key"),
@@ -374,6 +386,8 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
         workspace: {
           mode: workspace.mode,
           workspace_id: typeof workspace.workspace_id === "string" ? workspace.workspace_id : null,
+          ...(repositoryWorkspaceId !== undefined ? { repository_workspace_id: repositoryWorkspaceId } : {}),
+          ...(baseCommit !== undefined ? { base_commit: baseCommit } : {}),
         },
         policy_profile_id: requireString(rawArgs, "policy_profile_id"),
         ...(rawArgs.policy_restrictions !== undefined

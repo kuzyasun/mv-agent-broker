@@ -99,7 +99,17 @@ export async function startDaemon(env: DaemonEnv): Promise<Daemon> {
   const lifecycle = new DaemonLifecycle(db, clock);
   const recovery = await lifecycle.start(stateDir, ownership);
 
-  const core = new BrokerCore({ db, clock, adapters, limits, blobStore: blobs });
+  const core = new BrokerCore({
+    db,
+    clock,
+    adapters,
+    limits,
+    blobStore: blobs,
+    worktreesRoot: path.join(stateDir, "worktrees"),
+    // §8.3: durable mutation fencing binds to the lifecycle incarnation so a
+    // restarted daemon never inherits a dead process's hold identity.
+    incarnation: lifecycle.currentIncarnation,
+  });
   const executor = new TurnExecutor({
     db,
     clock,
@@ -116,6 +126,17 @@ export async function startDaemon(env: DaemonEnv): Promise<Daemon> {
     await executor.reconcileJournaledOutcomes();
   } catch (err) {
     console.error("Outcome reconciliation failed:", err);
+  }
+
+  // §8.3: resolve worktree provisions the recovery barrier retained (a Git
+  // mutation may have happened) BEFORE readiness is served further — owned
+  // paths reconcile without duplicate creation, foreign paths quarantine
+  // with evidence, uncertain outcomes stay retained for the next restart.
+  try {
+    core.reconcileRetainedProvisions(recovery.retained_worktree_provisions);
+    await core.drain();
+  } catch (err) {
+    console.error("Worktree provisioning reconciliation failed:", err);
   }
 
   const deadlineMonitor = new DeadlineMonitor(executor, { intervalMs: pollIntervalMs });
