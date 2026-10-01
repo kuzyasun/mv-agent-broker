@@ -38,6 +38,7 @@ import {
   listPinsByOwner,
   updateIntentState,
   updateSessionFields,
+  updateSnapshotState,
   updateTurnFields,
   SqliteConstraintError,
   type IdempotencyRow,
@@ -89,6 +90,13 @@ import {
 import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, CaptureError } from "../snapshots/capture.ts";
 import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
+import {
+  PHYSICAL_CWD_BINDING_VERSION,
+  readSessionPhysicalBinding,
+  resolvePhysicalCheckoutIdentity,
+  type PhysicalCheckoutIdentity,
+  type SessionPhysicalCwdBinding,
+} from "../workspaces/identity.ts";
 import { CoverageError, uncoveredWriteScope, validateCoverageConfig, type CoverageConfig } from "../workspaces/coverage.ts";
 
 // ─── Request DTOs (API 0.2 §10) ─────────────────────────────────────────────
@@ -669,6 +677,32 @@ export class BrokerCore {
       workspace.canonical_path !== null &&
       current.coverage_profile_id !== null;
 
+    // A06: durably bind the session to the FS-resolved physical checkout of
+    // its future native cwd. Resolution happens OUTSIDE the transaction
+    // (realpath/stat) and the binding is written into the session-owned
+    // provision intent payload in the SAME transaction that completes
+    // provisioning — immutable afterwards. Only physical writer sessions
+    // bind; review slots and path-less workspaces keep their contracts. A
+    // registered checkout without a stable physical identity fails
+    // provisioning: the session must never dispatch a cwd it cannot pin, and
+    // an unsupported native filesystem is refused, never faked as supported.
+    let physical: PhysicalCheckoutIdentity | null = null;
+    if (current.workspace_id && current.workspace_mode !== "review_slot" && workspace?.canonical_path) {
+      physical = resolvePhysicalCheckoutIdentity(workspace.canonical_path);
+      if (!physical) {
+        this.failProvisioning(sessionId, "checkout-path-has-no-stable-physical-identity");
+        return;
+      }
+    }
+    const physicalBinding: SessionPhysicalCwdBinding | null = physical
+      ? {
+          binding_version: PHYSICAL_CWD_BINDING_VERSION,
+          canonical_cwd: physical.resolvedPath,
+          lease_scope: physical.scope,
+          bound_at: this.now(),
+        }
+      : null;
+
     if (needsCapture && workspace?.canonical_path && current.coverage_profile_id && current.coverage_profile_version) {
       const profile = getCoverageProfile(this.db, current.coverage_profile_id, current.coverage_profile_version);
       if (!profile) {
@@ -684,13 +718,17 @@ export class BrokerCore {
         return;
       }
       try {
+        if (physicalBinding && resolvePhysicalCheckoutIdentity(physicalBinding.canonical_cwd)?.scope !== physicalBinding.lease_scope) {
+          throw new Error("physical-checkout-changed-before-provision-capture");
+        }
         const captured = captureSnapshot({
           db: this.db,
           blobs: this.blobStore,
           clock: this.clock,
           projectId: current.project_id,
           workspaceId: workspace.workspace_id,
-          workspaceRoot: workspace.canonical_path,
+          // The baseline describes the PINNED checkout, not the alias spelling.
+          workspaceRoot: physicalBinding?.canonical_cwd ?? workspace.canonical_path,
           coverage: {
             profile_id: profile.coverage_profile_id,
             version: profile.version,
@@ -698,6 +736,10 @@ export class BrokerCore {
             config,
           },
         });
+        if (physicalBinding && resolvePhysicalCheckoutIdentity(physicalBinding.canonical_cwd)?.scope !== physicalBinding.lease_scope) {
+          updateSnapshotState(this.db, captured.snapshot.snapshot_id, "FAILED", "physical-checkout-changed-during-provision-capture");
+          throw new Error("physical-checkout-changed-during-provision-capture");
+        }
         const now = this.now();
         this.db.tx(() => {
           const session = getSession(this.db, sessionId);
@@ -723,6 +765,7 @@ export class BrokerCore {
             owner_turn_id: null,
             created_at: now,
           });
+          if (physicalBinding) this.recordProvisionPhysicalBinding(sessionId, physicalBinding, now);
           const intent = listPendingIntents(this.db, "provision_session").find((i) => i.session_id === sessionId);
           if (intent) updateIntentState(this.db, intent.intent_id, "completed", now);
           appendEvent(this.db, {
@@ -743,21 +786,49 @@ export class BrokerCore {
 
     // No capture needed (review slot / path-less) — metadata-only completion.
     const now = this.now();
-    this.db.tx(() => {
-      const session = getSession(this.db, sessionId);
-      if (!session || session.state !== "PROVISIONING") return;
-      assertSessionTransition(session.state, "provisioning_completed");
-      updateSessionFields(this.db, sessionId, { state: "IDLE" }, session.record_version, now);
-      const intent = listPendingIntents(this.db, "provision_session").find((i) => i.session_id === sessionId);
-      if (intent) updateIntentState(this.db, intent.intent_id, "completed", now);
-      appendEvent(this.db, {
-        turn_id: null,
-        session_id: sessionId,
-        type: "session_provisioned",
-        payload: { initial_snapshot_id: null },
-        created_at: now,
+    try {
+      this.db.tx(() => {
+        const session = getSession(this.db, sessionId);
+        if (!session || session.state !== "PROVISIONING") return;
+        assertSessionTransition(session.state, "provisioning_completed");
+        updateSessionFields(this.db, sessionId, { state: "IDLE" }, session.record_version, now);
+        if (physicalBinding) this.recordProvisionPhysicalBinding(sessionId, physicalBinding, now);
+        const intent = listPendingIntents(this.db, "provision_session").find((i) => i.session_id === sessionId);
+        if (intent) updateIntentState(this.db, intent.intent_id, "completed", now);
+        appendEvent(this.db, {
+          turn_id: null,
+          session_id: sessionId,
+          type: "session_provisioned",
+          payload: { initial_snapshot_id: null },
+          created_at: now,
+        });
       });
-    });
+    } catch (error) {
+      this.failProvisioning(sessionId, String(error));
+    }
+  }
+
+  /**
+   * A06: write the physical cwd binding into the pending provision intent —
+   * called INSIDE the completion transaction, so the binding becomes durable
+   * atomically with the session leaving PROVISIONING and is immutable after.
+   */
+  private recordProvisionPhysicalBinding(sessionId: string, binding: SessionPhysicalCwdBinding, now: number): void {
+    const intent = listPendingIntents(this.db, "provision_session").find((i) => i.session_id === sessionId);
+    if (!intent?.payload) throw new Error("physical-cwd-binding-journal-unavailable");
+    let payload: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(intent.payload);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid-binding-journal");
+      payload = parsed as Record<string, unknown>;
+    } catch {
+      throw new Error("physical-cwd-binding-journal-invalid");
+    }
+    payload.physical_workspace = binding;
+    const updated = this.db.raw
+      .prepare("UPDATE intents SET payload = ?, updated_at = ? WHERE intent_id = ? AND state = 'pending'")
+      .run(JSON.stringify(payload), now, intent.intent_id);
+    if (Number(updated.changes) !== 1) throw new Error("physical-cwd-binding-journal-not-written");
   }
 
   /** §6.1: failed provisioning → BLOCKED with recorded reason; no deletion. */
@@ -886,6 +957,17 @@ export class BrokerCore {
     const preflightLeaseTarget = this.writerTurn(req) && session0.workspace_id
       ? this.writerLeaseTargetOrThrow(session0.workspace_id)
       : null;
+    // A06 preflight: a session with a durable physical cwd binding may only
+    // send while the registered alias still resolves to exactly that bound
+    // physical root (checked with realpath/stat OUTSIDE the tx). A retargeted
+    // alias, an externally replaced root or a byte-identical copy is refused
+    // here — before any accepted state or inference exists. Unbound or
+    // malformed bindings are not reinterpreted here: their explicit fail-closed
+    // refusals happen pre-dispatch in the executor, after the established
+    // contract/policy priorities.
+    const preflightPhysical = preflightLeaseTarget?.physical
+      ? this.validateSessionPhysicalBinding(session0, preflightLeaseTarget.physical)
+      : null;
 
     let response: SendResponse;
     try {
@@ -929,6 +1011,27 @@ export class BrokerCore {
             throw new BrokerError("WORKSPACE_CHANGED", "Checkout identity changed after admission preflight.", {
               executionStarted: false,
             });
+          }
+          // A06 authoritative cheap recheck (§7.2): the immutable session
+          // binding must still pin exactly the physical checkout the alias
+          // resolves to. Record reads plus realpath/stat syscalls only —
+          // never a subprocess inside the boundary.
+          if (preflightLeaseTarget.physical && preflightPhysical) {
+            const lookup = readSessionPhysicalBinding(this.db, session.session_id);
+            if (lookup.kind !== "bound" ||
+                lookup.binding.canonical_cwd !== preflightPhysical.canonical_cwd ||
+                lookup.binding.lease_scope !== preflightPhysical.lease_scope) {
+              throw new BrokerError("WORKSPACE_CHANGED", "Session physical cwd binding changed during admission.", {
+                executionStarted: false,
+              });
+            }
+            if (lookup.binding.lease_scope !== leaseTarget.physical?.scope) {
+              throw new BrokerError(
+                "WORKSPACE_CHANGED",
+                "Registered workspace alias no longer resolves to the session's bound physical checkout (retargeted or replaced).",
+                { executionStarted: false },
+              );
+            }
           }
           checkWorkspaceLeaseAvailable(this.db, leaseTarget);
         }
@@ -1255,6 +1358,36 @@ export class BrokerCore {
     const workspace = getWorkspace(this.db, workspaceId);
     if (!workspace) throw new BrokerError("INVALID_REQUEST", "Unknown workspace reference.");
     return workspaceLeaseTarget(workspace, { requireResolvable: true });
+  }
+
+  /**
+   * A06 send preflight (§7.2 step 3): validate the session's durable physical
+   * cwd binding against the freshly resolved checkout identity — all
+   * filesystem resolution OUTSIDE the admission tx. Returns the bound binding
+   * the authoritative transaction must recheck, or null when the session
+   * carries no usable binding (unbound pre-package journals and malformed
+   * payloads keep their established fail-closed refusals further along the
+   * send/execution pipeline — they are never reinterpreted as the alias).
+   */
+  private validateSessionPhysicalBinding(session: SessionRecord, target: PhysicalCheckoutIdentity): SessionPhysicalCwdBinding | null {
+    const lookup = readSessionPhysicalBinding(this.db, session.session_id);
+    if (lookup.kind !== "bound") return null;
+    if (lookup.binding.lease_scope !== target.scope) {
+      throw new BrokerError(
+        "WORKSPACE_CHANGED",
+        "Registered workspace alias no longer resolves to the session's bound physical checkout (retargeted or replaced).",
+        { executionStarted: false },
+      );
+    }
+    const pinned = resolvePhysicalCheckoutIdentity(lookup.binding.canonical_cwd);
+    if (!pinned || pinned.scope !== lookup.binding.lease_scope) {
+      throw new BrokerError(
+        "WORKSPACE_CHANGED",
+        "Session's pinned physical checkout no longer resolves to its bound identity (renamed or recreated externally).",
+        { executionStarted: false },
+      );
+    }
+    return lookup.binding;
   }
 
   private quotaScopeFor(session: SessionRecord): string {

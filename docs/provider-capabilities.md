@@ -76,7 +76,9 @@ unverified. Native rate-limit status was allowed; quota rejection was not tested
 | Windows cmd shim boundary checks | native | documented | common infra; Cursor native run used .ps1, not .cmd |
 | cancellation + inactivity timeouts | native | documented | common infra/fake process cancellation; native tool-tree cancellation and quiescence unverified |
 | reviewer outside-read boundary | unknown | failed | 0.2.3 reproduced an outside marker absent from the prompt; [native falsification](native-smoke/2026-10-01-cursor-read-boundary/report.md); restricted profile not supported |
-| trusted all-tool preToolUse hook | unknown | configured | 0.2.4 flat native config, pinned policy hash/physical grants and bounded receipts passed offline checks; [checkpoint](native-smoke/2026-10-01-cursor-hooks/report.md); live hook invocation/enforcement pending |
+| trusted all-tool preToolUse hook | unknown | configured | 0.2.4 flat native config, pinned policy hash/physical grants and bounded receipts passed offline checks; [checkpoint](native-smoke/2026-10-01-cursor-hooks/report.md); full forbidden-tool/input-paging enforcement remains unverified |
+| hook outside-Read denial on 0.2.4 | native | smoke_tested | exact outside-path denial receipt, 7 hook receipts, no marker disclosure; [native probe](native-smoke/2026-10-01-cursor-hooks-native/report.md); limited scenario only |
+| private reviewer native continuity on 0.2.4 | unknown | failed | same UUID, S1/S2 readable, fresh memory tag not recalled; per-turn CURSOR_CONFIG_DIR cleanup destroys native chats; [clean probe](native-smoke/2026-10-01-cursor-clean-continuity/report.md) |
 | reviewer Write/Shell denial / worker writes | unknown | configured | 0.2.3 config and agent-reported denials; disposable sentinel absent, native denial receipts unavailable; --trust is workspace trust, not enforcement |
 | quota-error classification | unknown | configured | four successful requests; quota exhaustion not observed; startup timeout no longer mislabeled RATE_LIMITED |
 | structured final output | unsupported | documented | text_only |

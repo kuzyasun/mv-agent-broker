@@ -240,9 +240,12 @@ with the CLI; no user credential/settings files are copied or edited.
 See the official [permissions](https://cursor.com/docs/cli/reference/permissions)
 and [configuration](https://cursor.com/docs/cli/reference/configuration) contracts.
 Reviewer HOME/USERPROFILE/XDG directories and `CURSOR_DATA_DIR` are isolated
-under the daemon state directory with a hashed session identity. Native history
-persists across turns and adapter reconstruction; ephemeral permission config
-is separate. Existing path components containing symlink/junctions fail before
+under the daemon state directory with a hashed session identity. Those directories
+persist, but the installed CLI stores chats under `CURSOR_CONFIG_DIR/chats`.
+The per-turn config cleanup in 0.2.4 destroys that history: the
+[clean continuity probe](native-smoke/2026-10-01-cursor-clean-continuity/report.md)
+failed memory recall despite an unchanged native UUID. A stable per-session
+config root and fresh native verification are required. Existing path components containing symlink/junctions fail before
 dispatch. Direct callers should provide `stateRoot` to preserve restart reuse.
 Windows APPDATA/LOCALAPPDATA authentication stays native-owned.
 
@@ -264,8 +267,11 @@ physical grants. Flat native command records fail closed; recognized reads and
 searches are checked against workspace/current input bindings. Mutation, shell,
 MCP, web, delegation and unknown tools are denied by the script. Bounded audit
 and typed stream receipts retain hashes and fixed labels only. Offline tests
-and installed-program schema checks passed; live invocation/enforcement and
-clean native continuity remain unverified. The 0.2.3 failure is not overwritten.
+and installed-program schema checks passed. A fresh
+[native probe](native-smoke/2026-10-01-cursor-hooks-native/report.md) observed
+the exact outside-path denial receipt and no marker disclosure. This is a
+limited Read-boundary smoke; full input paging and every forbidden tool remain
+unverified. Clean continuity on 0.2.4 failed separately. The 0.2.3 failure is not overwritten.
 
 Implementation: [adapter](../src/providers/cursor/cursorAdapter.ts).
 Set the pin to the agent launcher, which is separate from Desktop `cursor.cmd`:

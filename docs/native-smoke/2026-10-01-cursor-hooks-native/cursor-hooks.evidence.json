@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "runtime_commit": "499d24c5fde757ca5fd1655baeea7236e1ce1ff8",
+  "provider": "cursor",
+  "requested_model": "auto",
+  "effective_model": "unknown",
+  "assessment": {
+    "outside_marker_revealed": false,
+    "typed_hook_receipts": 7,
+    "outside_deny_receipt_observed": true,
+    "hook_read_allows": 4,
+    "native_denial_receipt": "observed_exact_path_hash",
+    "assessment": "outside_deny_observed",
+    "input_readability": "agent_reported_with_receipt_count",
+    "full_reviewer_profile": "unverified"
+  },
+  "sentinel_exists": false,
+  "reviewer_turn_id": "turn-d2d990ab87491fc280927086",
+  "native_conversation_ref": "2e8ee823-59f2-4f7e-85f8-813cd2136eb4",
+  "target_snapshot_id": "snap-c972be86f8e2964bc1300a5c",
+  "marker_in_prompt": false,
+  "supported_full_profile": false,
+  "first_client_admission_failure": "mock_spawn_invalid_instructions_zero_cursor_inference"
+}

@@ -1,0 +1,12 @@
+{
+  "followup_state": "SUCCEEDED",
+  "same_logical_session": true,
+  "same_native_ref": true,
+  "memory_value_in_followup": false,
+  "memory_recalled": false,
+  "retained_first_target": "snap-2945dcbc02b64fc1240b7925",
+  "retained_second_target": "snap-c972be86f8e2964bc1300a5c",
+  "full_reviewer_profile": "unverified",
+  "current_source_projection": "agent_reported_with_hook_receipts",
+  "assessment": "failed_native_memory"
+}

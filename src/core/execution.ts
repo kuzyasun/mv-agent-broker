@@ -34,6 +34,7 @@ import {
   sealArtifact,
   updateIntentState,
   updateSessionFields,
+  updateSnapshotState,
   updateTurnFields,
 } from "../storage/repo.ts";
 import { BrokerError } from "../shared/errors.ts";
@@ -57,7 +58,11 @@ import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, diffManifests, readManifest, type ManifestDelta } from "../snapshots/capture.ts";
 import { diffSnapshots, renderDiffDocument } from "../snapshots/diff.ts";
 import { CoverageError, matchesPrefix, type CoverageConfig } from "../workspaces/coverage.ts";
-import { isPhysicalLeaseScope, resolvePhysicalCheckoutIdentity } from "../workspaces/identity.ts";
+import {
+  isPhysicalLeaseScope,
+  readSessionPhysicalBinding,
+  resolvePhysicalCheckoutIdentity,
+} from "../workspaces/identity.ts";
 import { loadSessionWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
 import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
 import {
@@ -258,6 +263,19 @@ export class TurnExecutor {
     // touch the durable grant or the gate's fresh DB reads (§12.1).
     const effectivePolicy: EffectiveWritePolicy = cloneFrozenPolicy(policyLookup.policy);
 
+    // A06: resolve the session's durable physical cwd binding under the held
+    // lease. A physical writer turn dispatches the PINNED cwd — the exact
+    // FS-resolved path bound at provisioning — never a re-resolved mutable
+    // alias. Sessions provisioned without a binding (pre-package journals)
+    // cannot safely reinterpret their registered alias: explicit pre-dispatch
+    // incompatibility requiring a replacement session; the recorded native
+    // context and history are retained (no fresh-conversation fallback).
+    const pinned = this.resolvePinnedDispatchCwd(turnId, session);
+    if (!pinned.ok) {
+      this.finalizePreStartKnown(turnNow, session, pinned.code, pinned.message);
+      return;
+    }
+
     // Required input delivery BEFORE dispatch (§7.1.1, §13.2.1): resolve →
     // plan → materialize read-only views → seal the TurnInputManifest. Any
     // failure here is a journaled pre-dispatch failure — inference never
@@ -350,12 +368,18 @@ export class TurnExecutor {
       native_conversation_ref: session.native_conversation_ref,
       task_envelope: envelope,
       workspace_mode: session.workspace_mode,
+      // A06: the pinned physical cwd for bound writer sessions — exact bytes
+      // from the durable binding, stable across resume and daemon restart.
+      // Review slots keep the broker-owned slot path; path-less and legacy
+      // ID-scoped leases keep the live registered canonical_path contract.
       workspace_path:
         session.workspace_mode === "review_slot"
           ? this.slots?.slotPath(session.session_id) ?? null
-          : session.workspace_id
-            ? (getWorkspace(this.db, session.workspace_id)?.canonical_path ?? null)
-            : null,
+          : pinned.cwd !== null
+            ? pinned.cwd
+            : session.workspace_id
+              ? (getWorkspace(this.db, session.workspace_id)?.canonical_path ?? null)
+              : null,
       deadline_at: turn.deadline_at ?? 0,
       clock: this.clock,
       // Validated durable binding + sealed manifest bindings; both frozen so
@@ -970,12 +994,24 @@ export class TurnExecutor {
    * (realpath/stat) to the durable physical checkout identity recorded in its
    * active workspace_lease — an alias retargeted or removed after admission —
    * or null when the binding still holds. Legacy workspace_id-scoped leases
-   * carry no physical binding and are never re-validated here.
+   * carry no physical binding and are never re-validated here. For sessions
+   * WITH a durable cwd binding, the pinned checkout must still carry the held
+   * lease's identity as well (external rename/recreate detection).
    */
   private workspaceLeaseBindingDrift(turnId: string, session: SessionRecord): string | null {
     if (!session.workspace_id || session.workspace_mode === "review_slot") return null;
     const lease = listActiveReservationsByOwner(this.db, turnId).find((r) => r.kind === "workspace_lease");
     if (!lease || !isPhysicalLeaseScope(lease.scope)) return null;
+    const binding = readSessionPhysicalBinding(this.db, session.session_id);
+    if (binding.kind === "bound") {
+      if (binding.binding.lease_scope !== lease.scope) {
+        return "session physical cwd binding does not match the held workspace lease";
+      }
+      const pinned = resolvePhysicalCheckoutIdentity(binding.binding.canonical_cwd);
+      if (!pinned || pinned.scope !== lease.scope) {
+        return "pinned physical checkout no longer resolves to the held lease (renamed or recreated externally)";
+      }
+    }
     const workspace = getWorkspace(this.db, session.workspace_id);
     const identity = workspace?.canonical_path ? resolvePhysicalCheckoutIdentity(workspace.canonical_path) : null;
     if (!identity || identity.scope !== lease.scope) {
@@ -985,8 +1021,61 @@ export class TurnExecutor {
   }
 
   /**
+   * A06: the cwd pinned by the session's durable physical binding, resolved
+   * against the turn's held workspace lease — or `cwd: null` for review
+   * slots, path-less workspaces and legacy ID-scoped leases (their dispatch
+   * contracts are unchanged). Every failure is an explicit pre-dispatch
+   * refusal; an unbound physical session is never reinterpreted as its
+   * mutable registered alias.
+   */
+  private resolvePinnedDispatchCwd(
+    turnId: string,
+    session: SessionRecord,
+  ): { ok: true; cwd: string | null } | { ok: false; code: string; message: string } {
+    if (!session.workspace_id || session.workspace_mode === "review_slot") return { ok: true, cwd: null };
+    const lease = listActiveReservationsByOwner(this.db, turnId).find((r) => r.kind === "workspace_lease");
+    const lookup = readSessionPhysicalBinding(this.db, session.session_id);
+    if ((!lease || !isPhysicalLeaseScope(lease.scope)) && lookup.kind === "unbound") {
+      return { ok: true, cwd: null };
+    }
+    if (lookup.kind === "unbound") {
+      return {
+        ok: false,
+        code: "INVALID_REQUEST",
+        message: "Session has no durable physical cwd binding; its historical working directory cannot be proved — spawn a replacement session (native context is retained).",
+      };
+    }
+    if (lookup.kind === "malformed") {
+      return {
+        ok: false,
+        code: "POLICY_UNSUPPORTED",
+        message: `Session physical cwd binding is unusable: ${lookup.reason}`,
+      };
+    }
+    const binding = lookup.binding;
+    if (!lease || binding.lease_scope !== lease.scope) {
+      return {
+        ok: false,
+        code: "WORKSPACE_CHANGED",
+        message: "Session physical cwd binding does not match the held workspace lease.",
+      };
+    }
+    const pinnedIdentity = resolvePhysicalCheckoutIdentity(binding.canonical_cwd);
+    if (!pinnedIdentity || pinnedIdentity.scope !== lease.scope) {
+      return {
+        ok: false,
+        code: "WORKSPACE_CHANGED",
+        message: "Pinned physical checkout no longer resolves to the held lease (renamed or recreated externally).",
+      };
+    }
+    return { ok: true, cwd: binding.canonical_cwd };
+  }
+
+  /**
    * Returns a drift description when the live workspace digest no longer
    * matches the turn's baseline snapshot (§8.2), or null when it matches.
+   * A06: the digest is taken from the session's PINNED checkout when bound —
+   * the re-check must describe the checkout this turn will write.
    */
   private checkBaselineDrift(turn: TurnRecord, session: SessionRecord): string | null {
     const baseline = getSnapshotRecord(this.db, turn.baseline_snapshot_id!);
@@ -998,12 +1087,25 @@ export class TurnExecutor {
     const profile = getCoverageProfile(this.db, session.coverage_profile_id!, session.coverage_profile_version!);
     if (!profile) return "coverage profile missing";
     const config = JSON.parse(profile.config) as CoverageConfig;
-    const inventory = takeInventory(workspace.canonical_path, config);
-    const digest = computeSourceDigest(inventory.entries, {
-      profile_id: profile.coverage_profile_id,
-      version: profile.version,
-      contract_hash: profile.contract_hash,
-    });
+    const binding = readSessionPhysicalBinding(this.db, session.session_id);
+    const root = binding.kind === "bound" ? binding.binding.canonical_cwd : workspace.canonical_path;
+    if (binding.kind === "bound") {
+      const pinned = resolvePhysicalCheckoutIdentity(root);
+      if (!pinned || pinned.scope !== binding.binding.lease_scope) {
+        return "pinned physical checkout no longer resolves to the session's bound identity";
+      }
+    }
+    let digest: string;
+    try {
+      const inventory = takeInventory(root, config);
+      digest = computeSourceDigest(inventory.entries, {
+        profile_id: profile.coverage_profile_id,
+        version: profile.version,
+        contract_hash: profile.contract_hash,
+      });
+    } catch {
+      return "workspace source state unreadable for the baseline re-check";
+    }
     if (digest !== baseline.source_digest) {
       return "workspace source state changed since the expected snapshot (§8.2)";
     }
@@ -1121,15 +1223,44 @@ export class TurnExecutor {
       config,
     };
 
+    // A06: the final capture reads the session's PINNED checkout under the
+    // exact held lease — never a re-resolved mutable alias — with the pinned
+    // root's identity re-verified immediately before and after the capture.
+    // A root renamed/recreated mid-turn is an evidence failure for the known
+    // native completion; a foreign checkout is never promoted as the final
+    // source. (Arbitrary external rename/recreate still requires per-tool
+    // native enforcement; this closes the capture window only.)
+    const binding = readSessionPhysicalBinding(this.db, session.session_id);
+    if (binding.kind === "malformed") {
+      throw new CoverageError(`Session physical cwd binding is unusable: ${binding.reason}`, "EVIDENCE_CAPTURE_FAILED");
+    }
+    const captureRoot = binding.kind === "bound" ? binding.binding.canonical_cwd : workspace.canonical_path;
+    if (binding.kind === "bound" &&
+        resolvePhysicalCheckoutIdentity(captureRoot)?.scope !== binding.binding.lease_scope) {
+      throw new CoverageError(
+        "Pinned physical checkout does not resolve to the bound identity before final capture",
+        "EVIDENCE_CAPTURE_FAILED",
+      );
+    }
+
     const captured = captureSnapshot({
       db: this.db,
       blobs: this.blobs,
       clock: this.clock,
       projectId: session.project_id,
       workspaceId: workspace.workspace_id,
-      workspaceRoot: workspace.canonical_path,
+      workspaceRoot: captureRoot,
       coverage,
     });
+
+    if (binding.kind === "bound" &&
+        resolvePhysicalCheckoutIdentity(captureRoot)?.scope !== binding.binding.lease_scope) {
+      updateSnapshotState(this.db, captured.snapshot.snapshot_id, "FAILED", "physical-checkout-changed-during-final-capture");
+      throw new CoverageError(
+        "Pinned physical checkout identity changed during final capture",
+        "EVIDENCE_CAPTURE_FAILED",
+      );
+    }
 
     if (!turn.baseline_snapshot_id) {
       throw new CoverageError("Writer turn has no baseline snapshot", "EVIDENCE_CAPTURE_FAILED");

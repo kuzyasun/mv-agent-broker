@@ -12,6 +12,7 @@
  */
 import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import type { RegistryDb } from "../storage/db.ts";
 
 /** Namespace prefix marking a workspace_lease scope as a physical checkout identity. */
 export const PHYSICAL_LEASE_SCOPE_PREFIX = "checkout:";
@@ -50,4 +51,81 @@ export function resolvePhysicalCheckoutIdentity(canonicalPath: string): Physical
   } catch {
     return null;
   }
+}
+
+// ─── session-bound physical cwd (A06: dispatch pins the checkout) ───────────
+
+/** Binding schema version for the session-owned physical cwd binding. */
+export const PHYSICAL_CWD_BINDING_VERSION = 1;
+
+/**
+ * Durable binding of a session to the PHYSICAL checkout its native cwd was
+ * pinned to at provisioning. Stored inside the session-owned provision_session
+ * intent payload (no DDL, no public API change); immutable once the intent
+ * completes. Turns dispatch this exact cwd — never a re-resolved mutable
+ * registered alias — so a junction retarget after dispatch cannot move native
+ * workspace IO to a checkout this session does not lease.
+ */
+export interface SessionPhysicalCwdBinding {
+  binding_version: number;
+  /** FS-resolved absolute physical cwd, dispatched verbatim. */
+  canonical_cwd: string;
+  /** The physical checkout identity scope the cwd resolved to at binding time. */
+  lease_scope: string;
+  bound_at: number;
+}
+
+export type SessionPhysicalBindingLookup =
+  | { kind: "bound"; binding: SessionPhysicalCwdBinding }
+  | { kind: "unbound" }
+  | { kind: "malformed"; reason: string };
+
+/**
+ * Read the durable physical cwd binding from the session's provision intent.
+ * `unbound` marks sessions provisioned before this binding existed: their
+ * historical cwd cannot be proved against the mutable registered alias, so
+ * callers must refuse another turn (replacement required; recorded native
+ * context and history retained) instead of reinterpreting the alias.
+ * Unreadable payloads fail closed as `malformed`.
+ */
+export function readSessionPhysicalBinding(db: RegistryDb, sessionId: string): SessionPhysicalBindingLookup {
+  const row = db.raw
+    .prepare("SELECT payload FROM intents WHERE kind = 'provision_session' AND session_id = ? LIMIT 1")
+    .get(sessionId) as { payload: string | null } | undefined;
+  if (!row || row.payload === null) return { kind: "unbound" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.payload);
+  } catch {
+    return { kind: "malformed", reason: "provision payload is not valid JSON" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "malformed", reason: "provision payload is not an object" };
+  }
+  const raw = (parsed as { physical_workspace?: unknown }).physical_workspace;
+  if (raw === undefined) return { kind: "unbound" };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { kind: "malformed", reason: "physical_workspace binding is not an object" };
+  }
+  const b = raw as Record<string, unknown>;
+  if (
+    b.binding_version !== PHYSICAL_CWD_BINDING_VERSION ||
+    typeof b.canonical_cwd !== "string" ||
+    !path.isAbsolute(b.canonical_cwd) ||
+    typeof b.lease_scope !== "string" ||
+    !isPhysicalLeaseScope(b.lease_scope) ||
+    typeof b.bound_at !== "number" ||
+    !Number.isFinite(b.bound_at)
+  ) {
+    return { kind: "malformed", reason: "physical_workspace binding fields are malformed" };
+  }
+  return {
+    kind: "bound",
+    binding: {
+      binding_version: PHYSICAL_CWD_BINDING_VERSION,
+      canonical_cwd: b.canonical_cwd,
+      lease_scope: b.lease_scope,
+      bound_at: b.bound_at,
+    },
+  };
 }

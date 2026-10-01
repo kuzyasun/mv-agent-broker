@@ -115,3 +115,15 @@ The [0.2.4 hook checkpoint](native-smoke/2026-10-01-cursor-hooks/report.md)
 records partial Antigravity authoring, ZCode completion, independent GLM/high
 review and coordinator repairs. The prior native outside-read failure remains
 recorded; configured hooks require a fresh accepted-runtime falsification.
+
+The [0.2.4 native hook probe](native-smoke/2026-10-01-cursor-hooks-native/report.md)
+observed exact outside-path Read denial. Full restricted profile acceptance
+remains open. The separate
+[clean continuity probe](native-smoke/2026-10-01-cursor-clean-continuity/report.md)
+failed memory recall; per-turn config cleanup removes native Cursor history.
+
+The [physical session cwd checkpoint](native-smoke/2026-10-01-workspace-binding/report.md)
+records ZCode implementation, independent Cursor review and coordinator repairs
+with 489 passing offline tests. New physical sessions bind a resolved cwd;
+historically unbound physical sessions need explicit replacement while retaining
+their recorded native context. Runtime process-tree ownership remains open.
