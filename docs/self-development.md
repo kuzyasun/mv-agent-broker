@@ -81,9 +81,9 @@ Production adapters do not rely on reading Desktop chat caches for reports.
 |---|---|
 | Effective policy and inputs | Core narrowing and immutable binding completed; native mandatory enforcement, read/search-only reviewer and required-input enforcement remain open |
 | Runtime supervision | Durable launch/process ownership, managed descendant quiescence, crash/disconnect/restart cases and explicit UNKNOWN reconciliation |
-| Preflight and binding | Core admission preflight and immutable handoff completed; native CLI/auth/catalog readiness and lifetime account/config binding remain open |
+| Preflight and binding | Observed native readiness and lifetime account/config binding completed; actual vendor account identity and mandatory native confinement remain unverified |
 | Workspaces/resources | Bounded output/report artifacts implemented; broker-created Git worktrees, total storage admission including staging and event wait remain |
-| Complete native feedback loop | Worker → review findings artifact → fix → review, R1/S1/R2/S2 continuity, cancellation during native tools |
+| Complete native feedback loop | Caller-independent four-turn harness implemented and verified offline; combined native R1/S1/R2/S2 continuity and cancellation during native tools remain open |
 | Operator setup | Validated registry configuration, runnable startup packaging, practical recovery/triage workflow |
 | Acceptance closure | A01–A53 evidence by actual platform/provider/role/profile; retain unknown/failed statuses where no native proof exists |
 
@@ -163,3 +163,9 @@ The [readiness and provider-binding checkpoint](native-smoke/2026-10-01-native-r
 records the retained GLM five-hour quota failure, Gemini repair, independent Cursor reviews,
 and primary complete-program/launch/account-binding repairs. Observed metadata remains
 separate from requests and actual native account identity; mandatory profiles stay unverified.
+
+The [caller-independent feedback harness](native-feedback.md) records sealed R1
+findings delivery to FIX, same worker/reviewer continuation, an active bridge
+disconnect, restart before FIX, actual foreign-coordinator ACL denial, and exact
+S2 review-slot files. Typecheck and the integrated full suite passed 649 tests
+with one platform skip. These offline results do not promote a mandatory native profile.
