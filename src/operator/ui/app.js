@@ -15,6 +15,70 @@
     if (text !== undefined) node.textContent = text;
     return node;
   };
+  const clickedTimers = new WeakMap();
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    const button = target instanceof Element ? target.closest(".button") : null;
+    if (!button || button.disabled) return;
+    clearTimeout(clickedTimers.get(button));
+    button.classList.add("is-clicked");
+    clickedTimers.set(button, setTimeout(() => {
+      button.classList.remove("is-clicked");
+      clickedTimers.delete(button);
+    }, 400));
+  }, true);
+
+  const busyButtons = new WeakMap();
+  async function withButtonBusy(button, callback) {
+    if (button.disabled || busyButtons.has(button)) return;
+    const message = buttonMessages.get(button);
+    if (message) {
+      clearTimeout(message.timer);
+      button.textContent = message.label;
+      buttonMessages.delete(button);
+    }
+    const previous = {
+      contents: [...button.childNodes].map((node) => node.cloneNode(true)),
+      disabled: button.disabled,
+      ariaBusy: button.getAttribute("aria-busy"),
+      ariaLabel: button.getAttribute("aria-label"),
+    };
+    busyButtons.set(button, previous);
+    const label = button.textContent.trim();
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.setAttribute("aria-label", `${label} in progress`);
+    const spinner = make("span");
+    spinner.className = "button-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    button.replaceChildren(spinner, document.createTextNode(`${label}…`));
+    try {
+      return await callback();
+    } finally {
+      button.replaceChildren(...previous.contents);
+      button.disabled = previous.disabled;
+      if (previous.ariaBusy === null) button.removeAttribute("aria-busy");
+      else button.setAttribute("aria-busy", previous.ariaBusy);
+      if (previous.ariaLabel === null) button.removeAttribute("aria-label");
+      else button.setAttribute("aria-label", previous.ariaLabel);
+      busyButtons.delete(button);
+    }
+  }
+
+  const buttonMessages = new WeakMap();
+  function showButtonMessage(button, message, duration = 1000) {
+    const previous = buttonMessages.get(button);
+    if (previous) clearTimeout(previous.timer);
+    const label = previous ? previous.label : button.textContent;
+    button.textContent = message;
+    const timer = setTimeout(() => {
+      if (buttonMessages.get(button)?.timer !== timer) return;
+      button.textContent = label;
+      buttonMessages.delete(button);
+    }, duration);
+    buttonMessages.set(button, { label, timer });
+  }
+
   const option = (value, label, selected) => {
     const node = make("option", label);
     node.value = value;
@@ -120,19 +184,18 @@
       refresh.className = "button secondary";
       refresh.type = "button";
       refresh.addEventListener("click", async () => {
-        refresh.disabled = true;
-        status(`Reading pinned ${route.provider} metadata…`);
-        try {
-          const body = await api("/api/models/refresh", { method: "POST", body: JSON.stringify({ provider: route.provider }) });
-          catalogues.set(route.provider, body.options || []);
-          const observed = body.observation;
-          status(`${observed.models.length} ${route.provider} entries · ${observed.source} · ${new Date(observed.observed_at).toLocaleString()}. ${observed.detail || "Catalogue only; authentication and quota are unknown."}`, observed.models.length ? "success" : "error");
-          renderRoutes();
-        } catch (error) {
-          status(error.message, "error");
-        } finally {
-          refresh.disabled = false;
-        }
+        await withButtonBusy(refresh, async () => {
+          status(`Reading pinned ${route.provider} metadata…`);
+          try {
+            const body = await api("/api/models/refresh", { method: "POST", body: JSON.stringify({ provider: route.provider }) });
+            catalogues.set(route.provider, body.options || []);
+            const observed = body.observation;
+            status(`${observed.models.length} ${route.provider} entries · ${observed.source} · ${new Date(observed.observed_at).toLocaleString()}. ${observed.detail || "Catalogue only; authentication and quota are unknown."}`, observed.models.length ? "success" : "error");
+            renderRoutes();
+          } catch (error) {
+            status(error.message, "error");
+          }
+        });
       });
       const duplicate = make("button", "Duplicate");
       duplicate.className = "button secondary";
@@ -401,8 +464,25 @@
     }
   }
 
-  $("reload").addEventListener("click", () => { if (!dirty || window.confirm("Discard unsaved changes and reload?")) load(); });
-  $("save").addEventListener("click", save);
+  let configOperation = null;
+  async function runConfigOperation(button, callback) {
+    if (configOperation) return;
+    configOperation = button;
+    const peer = button === $("save") ? $("reload") : $("save");
+    const peerDisabled = peer.disabled;
+    peer.disabled = true;
+    try {
+      await withButtonBusy(button, callback);
+    } finally {
+      peer.disabled = peerDisabled;
+      configOperation = null;
+    }
+  }
+
+  $("reload").addEventListener("click", () => {
+    if (!dirty || window.confirm("Discard unsaved changes and reload?")) runConfigOperation($("reload"), load);
+  });
+  $("save").addEventListener("click", () => runConfigOperation($("save"), save));
   $("add-route").addEventListener("click", () => {
     const project = find(state.projects, "project_id", projectFilter) || state.projects[0];
     const account = state.accounts[0];
@@ -427,9 +507,20 @@
   $("apply-advanced").addEventListener("click", () => action(() => { syncAdvanced(); render(); status("Advanced edits applied to the form. Save to persist them."); }));
   for (const [button, field] of [["copy-json", "mcp-json"], ["copy-toml", "codex-toml"]]) {
     $(button).addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText($(field).value); status("Connection snippet copied.", "success"); }
-      catch { $(field).focus(); $(field).select(); status("Select and copy the highlighted snippet manually."); }
+      let copied = false;
+      await withButtonBusy($(button), async () => {
+        try {
+          await navigator.clipboard.writeText($(field).value);
+          copied = true;
+          status("Connection snippet copied.", "success");
+        } catch {
+          $(field).focus();
+          $(field).select();
+          status("Select and copy the highlighted snippet manually.");
+        }
+      });
+      if (copied) showButtonMessage($(button), "Copied!");
     });
   }
-  load();
+  runConfigOperation($("reload"), load);
 })();

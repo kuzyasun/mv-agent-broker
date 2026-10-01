@@ -29,12 +29,22 @@ h2 { margin: .15rem 0 0; font-size: 1.35rem; letter-spacing: -.025em; }
 .profile-help { margin: .9rem 0; padding: .8rem 1rem; border: 1px solid #d8e3f5; border-radius: 10px; background: #f7faff; color: #435167; line-height: 1.45; }
 .profile-help p { margin: .65rem 0 0; }
 .profile-help code { color: #173c8c; }
-.button { border: 0; border-radius: 9px; padding: .65rem .9rem; font: inherit; font-weight: 700; cursor: pointer; }
+.button { border: 0; border-radius: 9px; padding: .65rem .9rem; font: inherit; font-weight: 700; cursor: pointer; transition: background-color .15s ease, box-shadow .15s ease, filter .15s ease, transform .05s ease; }
 .button.primary { background: var(--green); color: #fff; }
-.button.primary:hover { background: #11533b; }
+.button.primary:hover:not(:disabled) { background: #11533b; }
 .button.secondary { background: #e8eef8; color: #173c8c; }
+.button.secondary:hover:not(:disabled) { background: #d8e3f5; }
 .button.danger { background: #f9e8e8; color: var(--red); }
+.button.danger:hover:not(:disabled) { background: #f3d7d7; }
+.button:active:not(:disabled), .button.is-clicked { transform: translateY(1px); box-shadow: inset 0 2px 4px rgba(24, 33, 43, .2); filter: brightness(.9); }
 .button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #91b5ff; outline-offset: 2px; }
+.button:disabled { cursor: wait; opacity: .78; }
+.button-spinner { display: inline-block; width: .85em; height: .85em; margin-right: .35em; border: .14em solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -.1em; animation: button-spin .7s linear infinite; }
+@keyframes button-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .button { transition: none; }
+  .button-spinner { animation: none; }
+}
 .status { min-height: 2.5rem; margin-bottom: .8rem; padding: .7rem .9rem; border-radius: 9px; background: transparent; }
 .status:empty { display: none; }
 .status.success { background: #e8f5ef; color: var(--green); }
