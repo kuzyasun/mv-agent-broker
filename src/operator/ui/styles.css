@@ -65,6 +65,10 @@ input, select, textarea { width: 100%; border: 1px solid #c9d2df; border-radius:
 input:disabled { background: #eef2f7; color: var(--muted); cursor: not-allowed; }
 textarea { min-height: 7rem; resize: vertical; }
 .code { min-height: 11rem; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; line-height: 1.45; }
+.catalogue-summary, .catalogue-message, .catalogue-help, .manual-model { grid-column: 1 / -1; }
+.catalogue-summary, .catalogue-help { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.4; font-weight: 400; }
+.catalogue-message { margin: 0; padding: .55rem .7rem; border-radius: 8px; background: #fff9e6; color: #624d11; font-size: .78rem; line-height: 1.4; font-weight: 400; }
+.manual-model { margin-top: .1rem; }
 .project-list { display: grid; gap: .85rem; }
 .project-card .project-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
 .project-card .wide { grid-column: 1 / -1; }

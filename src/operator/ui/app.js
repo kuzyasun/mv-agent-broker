@@ -85,6 +85,67 @@
     node.selected = selected;
     return node;
   };
+  const modelSearches = new WeakMap();
+  const fallbackEfforts = {
+    cursor: ["", "none", "low", "normal", "medium", "high", "xhigh", "max"],
+    antigravity: ["", "low", "medium", "high", "max"],
+    zcode: ["", "low", "high", "max"],
+  };
+  const catalogueFor = (provider) => {
+    const catalogue = catalogues.get(provider);
+    return catalogue && Array.isArray(catalogue.options)
+      ? catalogue
+      : { options: [], observation: null };
+  };
+  const observedModel = (provider, model) => catalogueFor(provider).options.find((entry) => entry.model === model);
+  const effortValuesFor = (route, model = route.model) => {
+    const known = observedModel(route.provider, model);
+    return [...(known ? known.efforts : fallbackEfforts[route.provider] || [""])];
+  };
+  const adjustEffortForModel = (route) => {
+    const values = effortValuesFor(route);
+    const current = route.effort ?? "";
+    if (values.includes(current)) return;
+    route.effort = values.includes("") ? null : (values[0] || null);
+  };
+  const modelOptionLabel = (model, current, observed) => {
+    if (current && !observed) return `${model} (configured; not observed)`;
+    return model;
+  };
+  const populateModelSelect = (select, route, search = "") => {
+    const catalogue = catalogueFor(route.provider);
+    const query = search.trim().toLocaleLowerCase();
+    const options = catalogue.options.filter((entry) => !query || entry.model.toLocaleLowerCase().includes(query));
+    const current = route.model || "";
+    const currentObserved = options.some((entry) => entry.model === current);
+    const allCurrentObserved = Boolean(current) && Boolean(observedModel(route.provider, current));
+    const visible = options.slice();
+    if (current && !currentObserved) {
+      visible.unshift({ model: current, efforts: effortValuesFor(route), configured: !allCurrentObserved });
+    }
+    select.replaceChildren(...visible.map((entry) => option(
+      entry.model,
+      modelOptionLabel(entry.model, entry.model === current, !entry.configured),
+      entry.model === current,
+    )));
+    if (current && visible.some((entry) => entry.model === current)) select.value = current;
+  };
+  const catalogueSummary = (provider) => {
+    const catalogue = catalogueFor(provider);
+    const observation = catalogue.observation;
+    if (!observation) return "No model catalogue has been refreshed yet.";
+    const rawCount = Array.isArray(observation.models) ? observation.models.length : 0;
+    const refreshed = Number.isFinite(observation.observed_at)
+      ? new Date(observation.observed_at).toLocaleString()
+      : "unknown";
+    return `Observed raw entries: ${rawCount} · selectable models: ${catalogue.options.length} · last refresh: ${refreshed} · source: ${observation.source}`;
+  };
+  const catalogueMessage = (provider) => {
+    const catalogue = catalogueFor(provider);
+    if (!catalogue.observation) return "Refresh this provider to inspect its model catalogue. Manual model IDs remain available.";
+    if (!catalogue.options.length) return "The refreshed catalogue is unavailable or empty. No model will be substituted; enter a model ID manually.";
+    return "";
+  };
   const status = (message, kind = "") => {
     const node = $("status");
     node.textContent = message;
@@ -117,7 +178,7 @@
   function routeSummary(route) {
     const mode = route.native_subagents && route.native_subagents.mode || "off";
     const effort = route.effort || "No override";
-    return `Provider ${route.provider || "not set"} · role ${route.role || "not set"} · mode ${nativeModeLabels[mode] || mode} · effort ${effort}`;
+    return `Provider ${route.provider || "not set"} · model ${route.model || "not set"} · role ${route.role || "not set"} · mode ${nativeModeLabels[mode] || mode} · effort ${effort}`;
   }
 
   function markDirty() {
@@ -188,9 +249,9 @@
           status(`Reading pinned ${route.provider} metadata…`);
           try {
             const body = await api("/api/models/refresh", { method: "POST", body: JSON.stringify({ provider: route.provider }) });
-            catalogues.set(route.provider, body.options || []);
-            const observed = body.observation;
-            status(`${observed.models.length} ${route.provider} entries · ${observed.source} · ${new Date(observed.observed_at).toLocaleString()}. ${observed.detail || "Catalogue only; authentication and quota are unknown."}`, observed.models.length ? "success" : "error");
+            const observed = body.observation || { models: [], source: "unknown", observed_at: NaN, detail: null };
+            catalogues.set(route.provider, { options: Array.isArray(body.options) ? body.options : [], observation: observed });
+            status(`${observed.models.length} ${route.provider} entries · ${observed.source} · ${Number.isFinite(observed.observed_at) ? new Date(observed.observed_at).toLocaleString() : "unknown"}. ${observed.detail || "Catalogue only; authentication and quota are unknown."}`, observed.models.length ? "success" : "error");
             renderRoutes();
           } catch (error) {
             status(error.message, "error");
@@ -247,20 +308,70 @@
       accessField.querySelector("input").readOnly = true;
       fields.append(accessField);
 
-      const modelLabel = make("label", "Model (catalogue is advisory; manual entry allowed)");
-      const model = document.createElement("input");
-      model.value = route.model || "";
-      model.setAttribute("list", `models-${index}`);
-      model.addEventListener("input", () => setField(route, "model", model.value));
-      model.addEventListener("change", () => { setField(route, "model", model.value); renderRoutes(); });
-      const datalist = document.createElement("datalist");
-      datalist.id = `models-${index}`;
-      (catalogues.get(route.provider) || []).forEach((entry) => datalist.append(option(entry.model, `${entry.model} (${entry.efforts.join(", ")})`, false)));
-      modelLabel.append(model, datalist);
+      const pickerHelp = make("p", catalogueSummary(route.provider));
+      pickerHelp.className = "catalogue-summary";
+      fields.append(pickerHelp);
+      const pickerMessage = catalogueMessage(route.provider);
+      if (pickerMessage) {
+        const message = make("p", pickerMessage);
+        message.className = "catalogue-message";
+        fields.append(message);
+      }
+      if (route.provider === "antigravity") {
+        const explanation = make("p", "Antigravity entries are grouped by base model; observed -low, -medium, -high, and -max suffixes become Effort choices.");
+        explanation.className = "catalogue-help";
+        fields.append(explanation);
+      }
+      const searchLabel = make("label");
+      searchLabel.append(make("span", "Search models"));
+      const search = document.createElement("input");
+      search.type = "search";
+      search.placeholder = "Filter by model ID";
+      search.value = modelSearches.get(route) || "";
+      searchLabel.append(search);
+      fields.append(searchLabel);
+      const modelLabel = make("label");
+      modelLabel.append(make("span", "Model"));
+      const model = document.createElement("select");
+      model.setAttribute("aria-describedby", `catalogue-summary-${index}`);
+      populateModelSelect(model, route, search.value);
+      model.addEventListener("change", () => {
+        route.model = model.value;
+        adjustEffortForModel(route);
+        markDirty();
+        renderRoutes();
+      });
+      modelLabel.append(model);
       fields.append(modelLabel);
-      const known = (catalogues.get(route.provider) || []).find((entry) => entry.model === route.model);
-      const fallback = { cursor: ["", "none", "low", "normal", "medium", "high", "xhigh", "max"], antigravity: ["", "low", "medium", "high", "max"], zcode: ["", "low", "high", "max"] };
-      const effortValues = [...(known ? known.efforts : fallback[route.provider] || [""])];
+      pickerHelp.id = `catalogue-summary-${index}`;
+      search.addEventListener("input", () => {
+        modelSearches.set(route, search.value);
+        populateModelSelect(model, route, search.value);
+      });
+      const manual = make("details");
+      manual.className = "manual-model";
+      if (!observedModel(route.provider, route.model)) manual.open = true;
+      manual.append(make("summary", "Enter a model ID manually"));
+      const manualLabel = make("label");
+      manualLabel.append(make("span", "Manual model ID"));
+      const manualInput = document.createElement("input");
+      manualInput.value = route.model || "";
+      manualInput.addEventListener("input", () => {
+        if (route.model !== manualInput.value) {
+          route.model = manualInput.value;
+          markDirty();
+          summary.textContent = routeSummary(route);
+        }
+      });
+      manualInput.addEventListener("change", () => {
+        adjustEffortForModel(route);
+        renderRoutes();
+      });
+      manualLabel.append(manualInput);
+      manual.append(manualLabel);
+      fields.append(manual);
+      const known = observedModel(route.provider, route.model);
+      const effortValues = effortValuesFor(route);
       const currentEffort = route.effort ?? "";
       if (!effortValues.includes(currentEffort)) effortValues.push(currentEffort);
       fields.append(selectField("Effort (parent/model limits apply)", currentEffort, effortValues.map((value) => ({ value, label: value || "No override" })), (value) => {

@@ -83,6 +83,14 @@ policy's access is displayed, while the wizard creates a separate read-only
 review policy. Changing shared bound policies requires new IDs/versions through
 configuration rather than changing privileges of old sessions.
 
+Click **Refresh model catalogue**, then choose from the **Model** dropdown.
+**Search models** filters by part of a model ID, independently of the selected
+model. Each card shows the catalogue entry count and refresh time. Antigravity
+effort variants are grouped under their base model. **Enter a model ID manually**
+allows a configured or custom ID; an ID absent from the catalogue is labelled
+unobserved. Refresh does not change the selected model. Selecting a different
+model keeps a compatible effort or selects an effort offered by that model.
+
 Model refresh uses saved binary pins and accounts. Save advanced account/pin
 changes before refreshing; use **Apply advanced edits to form** to update
 selectors while editing. Configured/manual choices are not observed catalogs.
