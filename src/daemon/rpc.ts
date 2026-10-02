@@ -31,6 +31,7 @@ export interface OperatorRpcHandlers {
   coordinatorId: string;
   status(): Record<string, unknown>;
   stop(): OperatorStopPlan;
+  turnError?(params: Record<string, unknown>): Record<string, unknown>;
 }
 
 export interface DaemonRpcOptions {
@@ -336,6 +337,35 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             sendError(reqId, "INTERNAL_ERROR", message);
+          }
+          break;
+        }
+
+        case "operator/turn-error": {
+          const operator = this.opts.operator;
+          const coordinator = getCoordinator(this.opts.core.db, handshakedCoordinatorId);
+          if (!operator?.turnError) {
+            sendError(reqId, "METHOD_NOT_FOUND", "Method not found: operator/turn-error");
+            break;
+          }
+          if (handshakedCoordinatorId !== operator.coordinatorId || !coordinator || coordinator.revoked) {
+            sendError(reqId, "UNAUTHORIZED", "operator coordinator is not authorized");
+            break;
+          }
+          const params = (msg.params as Record<string, unknown> | undefined) ?? {};
+          try {
+            send({ jsonrpc: "2.0", id: reqId, result: operator.turnError(params) });
+          } catch (err: unknown) {
+            if (err instanceof BrokerError) {
+              send({
+                jsonrpc: "2.0",
+                id: reqId,
+                error: { code: err.code, message: err.message, data: err.toJSON() },
+              });
+            } else {
+              const message = err instanceof Error ? err.message : String(err);
+              sendError(reqId, "INTERNAL_ERROR", message);
+            }
           }
           break;
         }

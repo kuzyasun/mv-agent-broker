@@ -9,7 +9,7 @@ import { listNonterminalTurns, listPendingIntents } from "../storage/repo.ts";
 import { BrokerError } from "../shared/errors.ts";
 import { applyOperatorConfig, loadOperatorConfig, operatorConfigFingerprint, type OperatorConfig } from "./config.ts";
 import { readRuntimeRecord, startOperator, statusOperator, stopOperator } from "./operations.ts";
-import { projectOperatorOverview } from "./overview.ts";
+import { operatorTurnErrorResult, projectOperatorOverview } from "./overview.ts";
 import { inspectQuarantine, reconcileWorkspace } from "./recovery.ts";
 import { startOperatorUi } from "./ui.ts";
 
@@ -166,6 +166,7 @@ async function runDaemon(config: OperatorConfig): Promise<void> {
   const operator = {
     coordinatorId: config.coordinator_id,
     status: () => daemonOperatorStatus(daemon, appliedConfigFingerprint),
+    turnError: (params: Record<string, unknown>) => operatorTurnErrorResult(daemon.db, params),
     stop: (): OperatorStopPlan => {
       const activeTurns = listNonterminalTurns(daemon.db);
       const pendingIntents = listPendingIntents(daemon.db);

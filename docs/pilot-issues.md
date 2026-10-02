@@ -97,6 +97,41 @@ Status: fixed for updated bridges. An old bridge must be reloaded once to load
 the code. The live daemon and project configuration do not need another restart
 for this bridge-only change.
 
+## 2026-10-02: Cursor review deadline and private path budget
+
+A Cursor Grok-4.7/high review on a deeply nested private state directory was
+refused before inference because its projected SQLite path exceeded 260
+characters. The coordinator shortened only the private review state directory.
+That explicit retry started execution and read source, but reached its
+seven-minute deadline without a report. Neither attempt establishes review
+acceptance. Private evidence: dogfood directories
+`2026-10-02T19-42-09-111Z-2e7851dd` and
+`2026-10-02T19-45-54-343Z-e8a24737`.
+The live Cursor worker smoke separately succeeded on the saved Grok high route.
+
+## 2026-10-02: ZCode review reached its deadline without a report
+
+A GLM-5.3/high review through the accepted broker ended `TIMED_OUT` with
+execution started, termination reason `deadline`, and no report or native
+conversation reference. No quota error was recorded, so quota exhaustion is
+not established. The coordinator did not accept it as a completed review.
+Private evidence: self-development dogfood directory
+`2026-10-02T19-33-15-498Z-c497f148`. Diagnose the missing native output in a
+separate bounded provider investigation; do not assume that `STARTING` means
+no paid execution began.
+
+## 2026-10-02: Antigravity quota reported as protocol failure
+
+An authorized Gemini 3.8 Flash/high review ended with an explicit native
+individual-quota exhaustion message. The broker retained that message, marked
+execution started, and returned `FAILED / PROVIDER_PROTOCOL_ERROR` with no
+review report. It was not accepted as a successful review or automatically
+replayed. The operator error-details panel exposes the retained cause even
+when the adapter's code is generic. Classifying this case as
+`QUOTA_EXHAUSTED` is a follow-up; the UI portion does not change the adapter.
+Private evidence: self-development dogfood directory
+`2026-10-02T19-28-53-288Z-5ffff203`.
+
 ## 2026-10-01: Antigravity coding turn server failures
 
 Two author turns using requested `gemini-3.8-flash-high` through accepted

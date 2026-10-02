@@ -25,7 +25,7 @@
         <p class="eyebrow" id="change-label">Saved configuration</p>
         <strong id="revision-label">Loading configuration…</strong>
       </div>
-      <p class="muted">Save writes the file. The shared daemon must be stopped while idle and started again before new sessions use the settings; reconnecting a bridge or this page is not enough.</p>
+      <p class="muted">Save writes the file. Restart daemon applies that saved file on the same accepted runtime while the broker is idle. New sessions use the saved settings. Existing sessions keep their bindings. Reconnecting a bridge or this page is not enough.</p>
       <p id="settings-state" class="settings-state" role="status" aria-live="polite">Application state unknown</p>
     </section>
 
@@ -35,7 +35,10 @@
           <p class="eyebrow">LIVE BROKER</p>
           <h2 id="live-heading">Runtime overview</h2>
         </div>
-        <button id="refresh-status" class="button secondary" type="button">Refresh status</button>
+        <div class="top-actions">
+          <button id="restart-daemon" class="button secondary" type="button" disabled>Restart daemon</button>
+          <button id="refresh-status" class="button secondary" type="button">Refresh status</button>
+        </div>
       </div>
       <p id="live-message" class="status" role="status" aria-live="polite">Loading live status…</p>
       <div id="live-runtime" class="live-runtime"></div>
@@ -101,7 +104,7 @@
         </div>
         <button id="new-project" class="button secondary">New project wizard</button>
       </div>
-      <p class="notice">Add another repository with the project wizard, save, then stop the shared daemon only when there are no active turns or pending intents and start it again. You can reuse your agent profiles. Existing sessions keep their original project folder.</p>
+      <p class="notice">Add another repository with the project wizard, save, then use Restart daemon only when there are no active turns, unknown turns, or pending intents. The same accepted runtime starts again. You can reuse your agent profiles. Existing sessions keep their original project folder and bindings.</p>
       <div id="projects" class="project-list"></div>
       <div id="project-wizard" class="wizard hidden"></div>
     </section>

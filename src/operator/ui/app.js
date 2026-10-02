@@ -5,6 +5,9 @@
   const token = bootstrap.token;
   let state = null;
   let revision = "";
+  let livePayload = null;
+  let configOperation = null;
+  const errorDetails = new Map();
   const catalogues = new Map();
   let projectFilter = "";
   let dirty = false;
@@ -203,6 +206,91 @@
       node.className = "settings-state";
     }
   };
+  function updateRestartButton() {
+    const button = $("restart-daemon");
+    const idle = livePayload?.status === "ready" && livePayload.readiness === "READY"
+      && livePayload.runtime_observation === "observed-running"
+      && /^[0-9a-f]{40}$/i.test(livePayload.runtime_commit || "")
+      && livePayload.active_turn_count === 0
+      && Array.isArray(livePayload.active_turns) && livePayload.active_turns.length === 0
+      && Array.isArray(livePayload.pending_intents) && livePayload.pending_intents.length === 0;
+    button.disabled = dirty || Boolean(configOperation) || !idle;
+    button.title = dirty ? "Save your changes first."
+      : configOperation ? "Wait for the current operation."
+      : !idle ? "Refresh status. Restart requires an observed, idle daemon with an accepted runtime."
+      : "Apply the saved settings using the same accepted runtime.";
+  }
+
+  async function restart() {
+    status("Restarting the idle daemon with saved settings…");
+    try {
+      const result = await api("/api/restart", { method: "POST", body: JSON.stringify({ revision }) });
+      await refreshLiveStatus();
+      status(result.message, "success");
+    } catch (error) {
+      renderLiveStatus({ status: "unavailable", readiness: "UNAVAILABLE" });
+      status(`Restart failed: ${error.message}. Refresh status before trying again.`, "error");
+    }
+  }
+
+  function renderErrorDetail(container, detail) {
+    container.replaceChildren();
+    container.append(make("strong", "Recorded failure"),
+      make("p", detail.recorded_failure_message || "The original failure message is unavailable in retained history."));
+    const fields = make("dl");
+    const add = (label, value) => fields.append(make("dt", label), make("dd", value == null ? "Unknown / unavailable" : String(value)));
+    add("Turn", detail.turn_id);
+    add("Session", detail.session_id);
+    add("Project", detail.project_id);
+    add("Provider / model / effort", `${detail.provider} / ${detail.model} / ${detail.effort || "No override"}`);
+    add("Error / state", `${detail.error_code || "unknown"} / ${detail.state}`);
+    add("Execution began", detail.execution_started === false ? "No — inference did not begin."
+      : detail.execution_started === true ? "Yes" : "Unknown — do not immediately replay this work.");
+    add("Native outcome", detail.native_outcome);
+    add("Termination reason", detail.termination_reason);
+    add("Finalization error", detail.finalization_error);
+    add("Session / context / close", `${detail.session_state} / ${detail.context_status} / ${detail.close_state}`);
+    add("Workspace", detail.workspace_id);
+    add("Workspace quarantined (current)", detail.workspace_quarantined == null ? null : detail.workspace_quarantined ? "Yes" : "No");
+    add("Quarantine reason", detail.quarantine_reason);
+    for (const [name, time] of Object.entries(detail.timestamps || {})) add(name.replaceAll("_", " "), time == null ? null : liveTimestamp(time));
+    for (const [name, id] of Object.entries(detail.snapshots || {})) if (id) add(name.replaceAll("_", " "), id);
+    container.append(fields);
+    if (detail.guidance) container.append(make("strong", "Suggested next step"),
+      make("p", detail.guidance.explanation), make("p", detail.guidance.next_step));
+    container.append(make("p", "Details are read-only. This panel never resumes work or clears quarantine."));
+  }
+
+  function errorDisclosure(turnId) {
+    const disclosure = make("details");
+    disclosure.className = "turn-error-detail";
+    disclosure.append(make("summary", "Show error details"));
+    const content = make("div");
+    disclosure.append(content);
+    let loading = false;
+    const load = async () => {
+      if (loading) return;
+      loading = true;
+      content.replaceChildren(make("p", "Loading error details…"));
+      try {
+        const detail = await api(`/api/turn-errors/${encodeURIComponent(turnId)}`);
+        errorDetails.set(turnId, detail);
+        renderErrorDetail(content, detail);
+      } catch (error) {
+        const retry = make("button", "Retry details");
+        retry.type = "button";
+        retry.className = "button secondary";
+        retry.addEventListener("click", () => { void withButtonBusy(retry, load); });
+        content.replaceChildren(make("p", `Details unavailable: ${error.message}`), retry);
+      } finally { loading = false; }
+    };
+    disclosure.addEventListener("toggle", () => {
+      if (!disclosure.open) return;
+      if (errorDetails.has(turnId)) renderErrorDetail(content, errorDetails.get(turnId));
+      else void load();
+    });
+    return disclosure;
+  }
   const renderLiveRows = (container, rows, errorRows = false) => {
     container.replaceChildren();
     if (!Array.isArray(rows)) {
@@ -223,10 +311,12 @@
         make("span", `Session ${entry.session_id || "unknown"} · project ${entry.project_id || "unknown"}`),
         make("span", `${entry.provider || "unknown provider"} · ${entry.model || "unknown model"} · effort ${entry.effort || "No override"} · ${liveTimestamp(entry.timestamp)}`),
       );
+      if (errorRows && entry.turn_id) row.append(errorDisclosure(entry.turn_id));
       container.append(row);
     });
   };
   const renderLiveStatus = (payload) => {
+    livePayload = payload;
     renderSettingsState(payload);
     const live = payload && payload.status === "ready" && payload.readiness === "READY";
     const observation = payload && payload.runtime_observation || "unknown";
@@ -256,11 +346,13 @@
     $("error-count").textContent = liveCount(payload || {}, "error_turn_count", "error_turns", "error_turns_truncated");
     renderLiveRows($("active-jobs"), live ? payload.active_turns : null);
     renderLiveRows($("turn-errors"), live ? payload.error_turns : null, true);
+    updateRestartButton();
   };
   async function refreshLiveStatus() {
     const button = $("refresh-status");
     await withButtonBusy(button, async () => {
       liveMessage("Refreshing live status…");
+      errorDetails.clear();
       try {
         renderLiveStatus(await readLiveStatus());
       } catch (error) {
@@ -289,6 +381,7 @@
   function markDirty() {
     dirty = true;
     $("change-label").textContent = "Unsaved changes";
+    updateRestartButton();
   }
 
   function syncAdvanced() {
@@ -1023,18 +1116,18 @@
     }
   }
 
-  let configOperation = null;
   async function runConfigOperation(button, callback) {
     if (configOperation) return;
     configOperation = button;
-    const peer = button === $("save") ? $("reload") : $("save");
-    const peerDisabled = peer.disabled;
-    peer.disabled = true;
+    const peers = [$("save"), $("reload"), $("restart-daemon")].filter(peer => peer !== button);
+    const disabled = peers.map(peer => peer.disabled);
+    peers.forEach(peer => { peer.disabled = true; });
     try {
       await withButtonBusy(button, callback);
     } finally {
-      peer.disabled = peerDisabled;
+      peers.forEach((peer, index) => { peer.disabled = disabled[index]; });
       configOperation = null;
+      updateRestartButton();
     }
   }
 
@@ -1042,6 +1135,7 @@
     if (!dirty || window.confirm("Discard unsaved changes and reload?")) runConfigOperation($("reload"), load);
   });
   $("save").addEventListener("click", () => runConfigOperation($("save"), save));
+  $("restart-daemon").addEventListener("click", () => runConfigOperation($("restart-daemon"), restart));
   $("refresh-status").addEventListener("click", () => { void refreshLiveStatus(); });
   $("add-route").addEventListener("click", () => {
     const project = find(state.projects, "project_id", projectFilter) || state.projects[0];

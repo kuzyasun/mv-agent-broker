@@ -301,3 +301,11 @@ Storage admission and complete native profiles remain open; the event-wait and
 quarantine-operation checkpoints are accepted. Practical operator follow-ups
 are live UI status/errors, saved-versus-applied new-session settings, and
 new-project startup.
+
+The operator UI now supports an idle-only restart of the existing accepted
+runtime and lazy retained turn-error details. The restart must work from an
+exported runtime without a Git checkout. Its HTTP control shares the save queue
+and requires the saved revision. Verification uses frozen mock runtimes, not
+paid jobs for refusal cases. Error details show observed execution/quarantine
+separately from recovery suggestions. Record incomplete native reviews honestly;
+an error panel never replaces coordinator acceptance.

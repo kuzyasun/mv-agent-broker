@@ -355,8 +355,31 @@ that the daemon loaded the file.
 For a ready project configuration and coordinator example, see
 [docs/coordinator-projects/dmp-protocol.md](coordinator-projects/dmp-protocol.md).
 The new-project wizard only stages IDs and bindings locally. Save them, then
-stop the shared daemon only when there are no active turns or pending intents
-and start it again before discovering the new project.
+use **Restart daemon** while the shared daemon is idle before discovering the
+new project.
+
+## Restarting and inspecting failures in the UI
+
+Save the configuration, then click **Restart daemon** in Runtime overview.
+The button requires a saved draft and a fresh observed idle status; use
+**Refresh status** after another coordinator finishes work. The daemon also
+checks activity at stop time and refuses active, unknown, or pending work.
+The restart reuses the current accepted runtime, including when the UI runs
+from a frozen copy without Git. It applies saved settings to new sessions;
+existing sessions retain their bound models. This button does not upgrade code.
+Failures remain visible and require status refresh before another attempt.
+
+Expand **Show error details** under Recent turn errors to read the retained
+failure message, execution flag, session/context state, current quarantine,
+timestamps, and snapshot IDs. **Suggested next step** is guidance based on
+the code, separate from recorded facts. Missing retained history stays
+unavailable. **Retry details** repeats only the metadata request.
+No detail control runs inference, resumes a turn, or clears quarantine.
+Unknown execution or quarantine requires coordinator/operator recovery first.
+
+Details use authenticated private operator RPC and allowlisted metadata.
+Error text is bounded and common credential patterns are masked; full prompts,
+provider logs, native conversation references, and artifacts are not returned.
 
 ## Selecting a route from a coordinator
 

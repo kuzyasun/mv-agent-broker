@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DaemonRpcError } from "../bridge/rpcClient.ts";
 import { validateOperatorConfig, type OperatorConfig } from "./config.ts";
-import { readRuntimeRecord, statusOperator } from "./operations.ts";
+import { readRuntimeRecord, restartOperator, statusOperator, turnErrorOperator } from "./operations.ts";
 import { parseAntigravityModelCatalog } from "../providers/antigravity/antigravityAdapter.ts";
 import { parseCursorModelCatalog, resolveCursorModel } from "../providers/cursor/cursorAdapter.ts";
 import { boundedSanitizedDetail, resolveBinaryPath, runMetadataProbe } from "../providers/common/readiness.ts";
@@ -397,6 +397,48 @@ function fileAsset(name: string): { body: string; type: string } | null {
   return { body: readFileSync(expected, "utf8"), type };
 }
 
+class OperatorUiHttpError extends Error {
+  constructor(readonly statusCode: number, readonly body: Record<string, unknown>) {
+    super(typeof body.error === "string" ? body.error : "operator UI request failed");
+  }
+}
+
+function parseRestartBody(body: unknown): string {
+  if (!isRecord(body) || typeof body.revision !== "string" || body.revision.length === 0) {
+    throw new OperatorUiHttpError(400, { error: "request must contain revision" });
+  }
+  if ("config" in body) {
+    throw new OperatorUiHttpError(400, { error: "restart accepts the saved revision only" });
+  }
+  return body.revision;
+}
+
+function parseTurnId(pathName: string): string {
+  const prefix = "/api/turn-errors/";
+  if (!pathName.startsWith(prefix) || pathName.indexOf("/", prefix.length) !== -1) {
+    throw new OperatorUiHttpError(400, { error: "invalid turn id" });
+  }
+  let turnId = "";
+  try {
+    turnId = decodeURIComponent(pathName.slice(prefix.length));
+  } catch {
+    throw new OperatorUiHttpError(400, { error: "invalid turn id" });
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,200}$/.test(turnId)) {
+    throw new OperatorUiHttpError(400, { error: "invalid turn id" });
+  }
+  return turnId;
+}
+
+function operatorHttpError(error: unknown): { status: number; body: Record<string, unknown> } {
+  if (error instanceof OperatorUiHttpError) return { status: error.statusCode, body: error.body };
+  if (error instanceof DaemonRpcError && error.code === "UNAUTHORIZED") return { status: 403, body: { error: "forbidden" } };
+  if (error instanceof DaemonRpcError && error.code === "INVALID_REQUEST") {
+    return { status: 404, body: { error: "Turn error detail is unavailable." } };
+  }
+  return { status: 409, body: { error: safeError(error) } };
+}
+
 function parseRevisionBody(body: unknown): { revision: string; config: Record<string, unknown> } {
   if (!isRecord(body) || typeof body.revision !== "string" || !isRecord(body.config)) {
     throw new Error("request must contain config and revision");
@@ -431,7 +473,13 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
   const validated = validateRawConfig(configPath, startup.value);
   const token = randomBytes(32).toString("hex");
   const server = createServer();
-  let saveChain: Promise<unknown> = Promise.resolve();
+  let controlChain: Promise<void> = Promise.resolve();
+  let restartFlight: { revision: string; promise: Promise<Record<string, unknown>> } | null = null;
+  const enqueue = <T>(work: () => Promise<T>): Promise<T> => {
+    const run = controlChain.then(work, work);
+    controlChain = run.then(() => undefined, () => undefined);
+    return run;
+  };
   let actualPort = 0;
   const scriptPath = options.scriptPath ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "main.ts");
   const readCatalog = options.readCatalog ?? defaultCatalogReader;
@@ -510,13 +558,67 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
               revision: sha256(next.bytes),
               backup,
               snippets,
-              message: "Configuration saved. Check the application state above. If settings need a restart, stop the shared daemon while idle and start it again. Existing sessions keep their bindings.",
+              message: "Configuration saved. Restart the idle daemon to apply this saved file on the same accepted runtime. New sessions use the saved settings. Existing sessions keep their bindings.",
             });
           };
-          saveChain = saveChain.then(runSave, runSave);
-          await saveChain;
+          await enqueue(runSave);
         } catch (error) {
           sendJson(response, error instanceof Error && /exceeds 1 MiB/.test(error.message) ? 413 : 400, { error: safeError(error) });
+        }
+        return;
+      }
+      if (request.method === "POST" && pathName === "/api/restart") {
+        try {
+          const revision = parseRestartBody(parseJsonBody(await readBody(request)));
+          const beginRestart = (): Promise<Record<string, unknown>> => {
+            if (restartFlight?.revision === revision) return restartFlight.promise;
+            const promise = enqueue(async () => {
+              const current = readRawConfig(configPath);
+              const currentRevision = sha256(current.bytes);
+              if (currentRevision !== revision) {
+                throw new OperatorUiHttpError(409, { error: "stale config revision", revision: currentRevision });
+              }
+              const saved = validateRawConfig(configPath, current.value);
+              const restarted = await restartOperator(saved, configPath);
+              return {
+                restarted: true,
+                revision: currentRevision,
+                message: "Daemon restarted on the same accepted runtime. New sessions use the saved settings. Existing sessions keep their bindings.",
+                ...restarted,
+              };
+            });
+            const flight = { revision, promise };
+            restartFlight = flight;
+            const clearFlight = () => {
+              if (restartFlight === flight) restartFlight = null;
+            };
+            void promise.then(clearFlight, clearFlight);
+            return promise;
+          };
+          sendJson(response, 200, await beginRestart());
+        } catch (error) {
+          if (
+            error instanceof OperatorUiHttpError ||
+            error instanceof DaemonRpcError ||
+            (error instanceof Error && /^(?:NO_ACCEPTED_RUNTIME|RUNTIME_IDENTITY_MISMATCH|UNKNOWN_ACTIVITY|DAEMON_UNAVAILABLE):/.test(error.message))
+          ) {
+            const mapped = operatorHttpError(error);
+            sendJson(response, mapped.status, mapped.body);
+          } else {
+            sendJson(response, error instanceof Error && /exceeds 1 MiB/.test(error.message) ? 413 : 400, { error: safeError(error) });
+          }
+        }
+        return;
+      }
+      if (request.method === "GET" && pathName.startsWith("/api/turn-errors/")) {
+        try {
+          const turnId = parseTurnId(pathName);
+          const current = readRawConfig(configPath);
+          const currentConfig = validateRawConfig(configPath, current.value);
+          sendJson(response, 200, await turnErrorOperator(currentConfig, turnId));
+        } catch (error) {
+          const mapped = operatorHttpError(error);
+          sendJson(response, mapped.status, mapped.body);
         }
         return;
       }

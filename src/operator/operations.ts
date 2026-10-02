@@ -231,14 +231,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function requestDaemon(config: OperatorConfig, method: string): Promise<unknown> {
+async function requestDaemon(config: OperatorConfig, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
   const client = new DaemonRpcClient(
     socketPathFor(config.state_dir),
     () => readBridgeToken(config.state_dir),
   );
   try {
     await client.connect(config.coordinator_id);
-    return await client.request(method);
+    return await client.request(method, params);
   } finally {
     client.close();
   }
@@ -440,6 +440,105 @@ async function waitForStopped(config: OperatorConfig): Promise<void> {
   throw new Error(`Daemon did not become unavailable within ${STOP_TIMEOUT_MS}ms.`);
 }
 
+function sameRuntimePath(value: unknown, runtimePath: string): boolean {
+  return typeof value === "string" && path.resolve(value) === path.resolve(runtimePath);
+}
+
+export async function restartOperator(config: OperatorConfig, configPath: string): Promise<Record<string, unknown>> {
+  const record = readRuntimeRecord(config.state_dir);
+  if (
+    !record ||
+    !/^[0-9a-f]{40}$/i.test(record.runtime_commit) ||
+    typeof record.runtime_path !== "string" ||
+    typeof record.manifest_path !== "string" ||
+    typeof record.config_path !== "string" ||
+    !Number.isInteger(record.daemon_pid) ||
+    record.daemon_pid <= 0
+  ) {
+    throw new Error("NO_ACCEPTED_RUNTIME: no accepted runtime record is available; restart was not started.");
+  }
+  const runtimePath = path.resolve(record.runtime_path);
+  const manifestPath = path.resolve(record.manifest_path);
+  const savedConfigPath = path.resolve(configPath);
+  if (manifestPath !== path.join(runtimePath, "runtime-manifest.json") || path.resolve(record.config_path) !== savedConfigPath) {
+    throw new Error("NO_ACCEPTED_RUNTIME: the accepted runtime record does not match its manifest and saved config; restart was not started.");
+  }
+  let manifestCommit = "";
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { commit?: unknown };
+    if (typeof manifest.commit === "string") manifestCommit = manifest.commit;
+  } catch {
+    throw new Error("NO_ACCEPTED_RUNTIME: the accepted runtime manifest cannot be read; restart was not started.");
+  }
+  if (manifestCommit !== record.runtime_commit || !existsSync(path.join(runtimePath, "src", "operator", "main.ts"))) {
+    throw new Error("NO_ACCEPTED_RUNTIME: the accepted runtime manifest does not match the recorded commit; restart was not started.");
+  }
+
+  let live: Record<string, unknown>;
+  try {
+    const value = await requestDaemon(config, "operator/status");
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("DAEMON_UNAVAILABLE: daemon status was invalid; restart was not started.");
+    }
+    live = value as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof DaemonRpcError && error.code === "UNAUTHORIZED") throw error;
+    if (error instanceof Error && /^(?:DAEMON_UNAVAILABLE|NO_ACCEPTED_RUNTIME|RUNTIME_IDENTITY_MISMATCH|UNKNOWN_ACTIVITY):/.test(error.message)) throw error;
+    throw new Error("DAEMON_UNAVAILABLE: authenticated daemon status is unavailable; restart was not started.");
+  }
+  if (live.readiness !== "READY") {
+    throw new Error(`DAEMON_UNAVAILABLE: daemon readiness is ${String(live.readiness ?? "unknown")}; restart was not started.`);
+  }
+  if (live.runtime_commit !== record.runtime_commit || !sameRuntimePath(live.runtime_path, runtimePath) || live.daemon_pid !== record.daemon_pid) {
+    throw new Error("RUNTIME_IDENTITY_MISMATCH: live daemon identity does not match the accepted runtime record; restart was not started.");
+  }
+  if (typeof live.active_turn_count !== "number" || !Array.isArray(live.pending_intents)) {
+    throw new Error("UNKNOWN_ACTIVITY: live activity is not observed; restart was not started.");
+  }
+
+  await stopOperator(config);
+  const launched = launchDaemon(runtimePath, savedConfigPath, config.state_dir);
+  let status: Record<string, unknown>;
+  try {
+    status = await waitForReady(config);
+  } catch (error) {
+    if (error instanceof DaemonRpcError && error.code === "UNAUTHORIZED") throw error;
+    throw new Error(`DAEMON_UNAVAILABLE: restarted daemon did not become READY; restart was not retried. ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const expectedFingerprint = operatorConfigFingerprint(config);
+  if (
+    status.daemon_pid !== launched.pid ||
+    status.runtime_commit !== record.runtime_commit ||
+    !sameRuntimePath(status.runtime_path, runtimePath) ||
+    status.applied_config_fingerprint !== expectedFingerprint
+  ) {
+    throw new Error("RUNTIME_IDENTITY_MISMATCH: restarted daemon identity does not match the accepted runtime and saved configuration; restart was not retried.");
+  }
+  const updated: RuntimeRecord = {
+    ...record,
+    runtime_commit: record.runtime_commit,
+    runtime_path: runtimePath,
+    manifest_path: manifestPath,
+    config_path: savedConfigPath,
+    daemon_pid: launched.pid,
+    process_identity: launched.identity,
+    started_at: Date.now(),
+  };
+  saveRuntimeRecord(config.state_dir, updated);
+  return {
+    status: "ready",
+    readiness: "READY",
+    settings_state: "applied",
+    saved_config_fingerprint: expectedFingerprint,
+    applied_config_fingerprint: expectedFingerprint,
+    runtime_commit: record.runtime_commit,
+    runtime_path: runtimePath,
+    daemon_pid: launched.pid,
+    state_dir: config.state_dir,
+    runtime_observation: "observed-running",
+  };
+}
+
 export async function stopOperator(config: OperatorConfig): Promise<Record<string, unknown>> {
   const response = await requestDaemon(config, "operator/stop") as Record<string, unknown>;
   if (response.accepted !== true) throw new Error("Daemon did not acknowledge graceful stop.");
@@ -460,4 +559,12 @@ export async function stopOperator(config: OperatorConfig): Promise<Record<strin
     error_turns_truncated: null,
     pending_intents: null,
   };
+}
+
+export async function turnErrorOperator(config: OperatorConfig, turnId: string): Promise<Record<string, unknown>> {
+  const value = await requestDaemon(config, "operator/turn-error", { turn_id: turnId });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Turn error detail is unavailable.");
+  }
+  return value as Record<string, unknown>;
 }

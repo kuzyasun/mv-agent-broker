@@ -65,7 +65,13 @@ h2 { margin: .15rem 0 0; font-size: 1.35rem; letter-spacing: -.025em; }
 .live-list { display: grid; gap: .55rem; }
 .live-row { display: grid; gap: .2rem; padding: .65rem .7rem; border-left: 3px solid #9eb8ed; background: #f7faff; font-size: .78rem; line-height: 1.35; }
 .live-row strong { overflow-wrap: anywhere; }
-.live-row span { color: var(--muted); overflow-wrap: anywhere; }
+.live-row span, .turn-error-detail p { color: var(--muted); overflow-wrap: anywhere; }
+.turn-error-detail { margin-top: .4rem; }
+.turn-error-detail summary { cursor: pointer; color: #2457c5; font-weight: 600; }
+.turn-error-detail dl { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: .3rem .7rem; }
+.turn-error-detail dt { font-weight: 600; }
+.turn-error-detail dd { margin: 0; overflow-wrap: anywhere; }
+.detail-toggle { justify-self: start; margin-top: .35rem; padding: .4rem .7rem; }
 .route-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 1rem; }
 .route-card, .project-card { border: 1px solid var(--line); border-radius: 12px; padding: 1rem; background: #fcfdff; }
 .route-card header, .project-card header { display: flex; justify-content: space-between; gap: .6rem; align-items: center; margin-bottom: .8rem; }
