@@ -135,11 +135,11 @@ public MCP; [integrated acceptance](native-smoke/2026-10-01-provider-preflight/r
 includes independent Cursor review and coordinator repairs. This establishes
 that development scenario, not a full native worker security profile.
 
-## antigravity (adapter 0.2.0; native smoke on 0.1.0, `src/providers/antigravity/`)
+## antigravity (adapter 0.2.3; native smoke on 0.1.0, `src/providers/antigravity/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
-| headless turn (`agy --dangerously-skip-permissions --output-format stream-json --print-timeout 900s -p <prompt>`) | native | smoke_tested | Windows, agy 1.2.1, gemini-3.8-flash-low short resume smoke; larger requested Gemini 3.8 Flash/high MCP task exercised temporary prompt-file fallback and produced source changes ([checkpoint](native-smoke/2026-10-01-dogfood/report.md)); general large-input/full-role limits unverified |
+| headless turn (`agy --dangerously-skip-permissions --output-format stream-json --print-timeout 0 -p <prompt>`) | native | smoke_tested | Windows, agy 1.2.1, gemini-3.8-flash-low short resume smoke; larger requested Gemini 3.8 Flash/high MCP task exercised temporary prompt-file fallback and produced source changes ([checkpoint](native-smoke/2026-10-01-dogfood/report.md)); current deadline-based waits are tested offline, earlier smoke used 900s; general large-input/full-role limits unverified |
 | resume (`--conversation <id>`) | native | smoke_tested | same observed init/result ID in both processes; second prompt omits random marker, response reproduces it |
 | conversation-id capture | native | smoke_tested | init.conversation_id observed; alternate nested-field capture remains parser-level only |
 | model selection (`--model <id>`) | native | smoke_tested | CLI init.model confirms gemini-3.8-flash-low on both turns; other models/effort unverified |
@@ -147,6 +147,12 @@ that development scenario, not a full native worker security profile.
 | native child delegation (`invoke_subagent`) | native | smoke_tested | Two distinct child conversations, parent tool-payload links and independently checked fixture files through frozen broker 8db50fb; child model/usage/cancellation remain unknown ([evidence](native-subagents.md)) |
 | cancellation (taskkill/SIGKILL tree) | native | documented | common headless infra |
 | structured final output | unsupported | documented | text_only |
+
+Quota-error classification is **limited / documented**: an explicit `FAILED`
+`result.error` beginning `Individual quota reached.` becomes `QUOTA_EXHAUSTED`.
+The original native incident is retained; the new mapping is tested offline,
+without a new live quota replay or inferred reset telemetry. Other quota/error
+formats remain unclassified. [Checkpoint](native-smoke/2026-10-03-antigravity-quota.md).
 
 ## Platforms
 

@@ -127,8 +127,12 @@ individual-quota exhaustion message. The broker retained that message, marked
 execution started, and returned `FAILED / PROVIDER_PROTOCOL_ERROR` with no
 review report. It was not accepted as a successful review or automatically
 replayed. The operator error-details panel exposes the retained cause even
-when the adapter's code is generic. Classifying this case as
-`QUOTA_EXHAUSTED` is a follow-up; the UI portion does not change the adapter.
+when the adapter's code is generic. The 2026-10-03 adapter follow-up maps an
+explicit `FAILED.result.error` starting `Individual quota reached.` to
+`QUOTA_EXHAUSTED`, with fake-native regression coverage. It does not relabel
+the historical turn or claim a new live quota failure; response-only/stderr
+messages remain generic. See the
+[checkpoint](native-smoke/2026-10-03-antigravity-quota.md).
 Private evidence: self-development dogfood directory
 `2026-10-02T19-28-53-288Z-5ffff203`.
 

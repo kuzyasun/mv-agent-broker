@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import os from "node:os";
 import path from "node:path";
 import { AntigravityAdapter } from "../../src/providers/antigravity/antigravityAdapter.ts";
+import { BrokerError } from "../../src/shared/errors.ts";
 import type { AdapterEvent, TurnExecutionRequest } from "../../src/runtime/adapter.ts";
 
 const roots: string[] = [];
@@ -57,6 +58,14 @@ if (firstLine === 'hang') {
   process.exitCode = 7;
 } else if (firstLine === 'stream-error') {
   console.log(JSON.stringify({ event: 'result', result: { status: 'FAILED', response: null, error: 'agy failure' } }));
+} else if (firstLine === 'quota') {
+  console.log(JSON.stringify({ event: 'result', result: { status: 'FAILED', response: null, error: 'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 54m59s.' } }));
+} else if (firstLine === 'quota-long') {
+  console.log(JSON.stringify({ event: 'result', result: { status: 'FAILED', response: null, error: 'Individual quota reached. ' + 'D'.repeat(600) } }));
+} else if (firstLine === 'quota-response') {
+  console.log(JSON.stringify({ event: 'result', result: { status: 'FAILED', response: 'Individual quota reached. Please upgrade your subscription to increase your limits.', error: null } }));
+} else if (firstLine === 'success-quota-prose') {
+  console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'Individual quota reached. Please upgrade your subscription to increase your limits.', error: null } }));
 } else {
   console.log(JSON.stringify({ event: 'step_update', step_update: { text_delta: 'progress update' } }));
   console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: JSON.stringify(inspection), error: null } }));
@@ -350,6 +359,77 @@ describe("Antigravity adapter", () => {
         expect(inspection.appData).toBe(process.env.APPDATA);
         expect(inspection.localAppData).toBe(process.env.LOCALAPPDATA);
       }
+    });
+  });
+
+  describe("quota classification from explicit FAILED error", () => {
+    it("maps the observed individual-quota FAILED error to QUOTA_EXHAUSTED with executionStarted true", async () => {
+      const f = fixture();
+      await expect(
+        f.adapter.executeTurn(request({ task_envelope: "quota" }), gate(), () => {}),
+      ).rejects.toMatchObject({
+        code: "QUOTA_EXHAUSTED",
+        executionStarted: true,
+        message:
+          "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 54m59s.",
+      });
+    });
+
+    it("retains vendor detail bounded via sanitized truncation", async () => {
+      const f = fixture();
+      const err = await f.adapter
+        .executeTurn(request({ task_envelope: "quota-long" }), gate(), () => {})
+        .catch((e: unknown) => e as Error);
+      expect(err).toBeInstanceOf(BrokerError);
+      const brokerErr = err as BrokerError;
+      expect(brokerErr.code).toBe("QUOTA_EXHAUSTED");
+      expect(brokerErr.executionStarted).toBe(true);
+      expect(err.message).toHaveLength(513);
+      expect(err.message).toMatch(/^Individual quota reached\. D+…$/);
+    });
+
+    it("does not classify SUCCESS response containing quota prose as quota", async () => {
+      const f = fixture();
+      const result = await f.adapter.executeTurn(
+        request({ task_envelope: "success-quota-prose" }),
+        gate(),
+        () => {},
+      );
+      expect(result.native_outcome).toBe("completed");
+    });
+
+    it("does not classify FAILED response-only quota text as quota", async () => {
+      const f = fixture();
+      await expect(
+        f.adapter.executeTurn(request({ task_envelope: "quota-response" }), gate(), () => {}),
+      ).rejects.toMatchObject({
+        code: "PROVIDER_PROTOCOL_ERROR",
+        executionStarted: true,
+        message:
+          "Individual quota reached. Please upgrade your subscription to increase your limits.",
+      });
+    });
+
+    it("keeps ordinary FAILED errors as PROVIDER_PROTOCOL_ERROR", async () => {
+      const f = fixture();
+      await expect(
+        f.adapter.executeTurn(request({ task_envelope: "stream-error" }), gate(), () => {}),
+      ).rejects.toMatchObject({
+        code: "PROVIDER_PROTOCOL_ERROR",
+        executionStarted: true,
+        message: "agy failure",
+      });
+    });
+
+    it("keeps generic nonzero-exit stderr as PROVIDER_PROTOCOL_ERROR", async () => {
+      const f = fixture();
+      await expect(
+        f.adapter.executeTurn(request({ task_envelope: "nonzero" }), gate(), () => {}),
+      ).rejects.toMatchObject({
+        code: "PROVIDER_PROTOCOL_ERROR",
+        executionStarted: true,
+        message: expect.stringContaining("native agy failure"),
+      });
     });
   });
 });

@@ -40,10 +40,12 @@ provider-owned; account profile
 metadata does not switch a subscription plan or create a new vendor login.
 
 The accepted runtime and quarantine-operation checkpoints are complete. The
-live operator UI status/error overview is now implemented with authenticated
-manual refresh and honest unavailable states. The next practical priorities
-are clear saved-versus-applied settings for new sessions and a usable
-new-project startup path.
+live operator UI includes saved-versus-applied settings, project registration,
+editable routes, idle restart, expandable retained errors and observed activity
+with a configurable one-hour turn deadline. Beehive and DMP are registered
+pilot projects. The next practical priority is resolving observed pilot
+failures and making their causes clear to the coordinator; the Antigravity
+quota classification checkpoint is recorded below.
 Total storage budgeting, full native certification, and rare recovery cases
 remain deferred.
 
@@ -57,9 +59,9 @@ policy; UNKNOWN execution never authorizes a replacement launch.
 
 Retain the operator's existing route choices: ZCode Individual Flash/max workers,
 selected GLM/high reviews, Antigravity Gemini 3.8 medium/high, and explicit
-operator-selected Cursor model/effort. The current economical Cursor worker
-uses Luna/high; the stronger large-task preference remains editable by the
-operator. Antigravity long author runs returned server 500 in this package;
+operator-selected Cursor model/effort. Read current choices from the applied
+routes rather than historical example defaults. Large-task preferences remain
+editable by the operator. Antigravity long author runs returned server 500;
 one separate bounded Gemini medium review completed successfully.
 ZCode's five-hour quota was reported exhausted; the allowed list does not imply
 current availability. Claude stays excluded from this workflow. Do not silently
@@ -181,11 +183,11 @@ Production adapters do not rely on reading Desktop chat caches for reports.
 | Package | Remaining acceptance |
 |---|---|
 | Effective policy and inputs | Core narrowing and immutable binding completed; native mandatory enforcement, read/search-only reviewer and required-input enforcement remain open |
-| Runtime supervision | Durable launch/process ownership, managed descendant quiescence, crash/disconnect/restart cases and explicit UNKNOWN reconciliation |
+| Runtime supervision | Local Windows ownership, descendant quiescence and guarded operator recovery are implemented; hosted execution domains and wider crash/platform certification remain open |
 | Preflight and binding | Observed native readiness and lifetime account/config binding completed; actual vendor account identity and mandatory native confinement remain unverified |
 | Workspaces/resources | Bounded output/report artifacts and broker-created Git worktrees implemented; total storage admission including staging remains |
 | Complete native feedback loop | Caller-independent four-turn harness implemented and verified offline; combined native R1/S1/R2/S2 continuity and cancellation during native tools remain open |
-| Operator setup | Saved-versus-applied settings for new sessions and practical new-project startup; live UI status/errors are implemented |
+| Pilot operations | Setup, applied-settings visibility, project registration, idle restart and error details are implemented; fix newly observed multi-project/provider failures as they arise |
 | Acceptance closure | A01–A53 evidence by actual platform/provider/role/profile; retain unknown/failed statuses where no native proof exists |
 
 The daemon deadline timer and graceful-drain package is the first completed
@@ -298,9 +300,9 @@ review ran through accepted stable broker a176221; the coordinator fixed confirm
 findings and verified the final source. Integrated typecheck and full suite passed
 766 tests with one skip across 45 files; 39 worktree tests passed.
 Storage admission and complete native profiles remain open; the event-wait and
-quarantine-operation checkpoints are accepted. Practical operator follow-ups
-are live UI status/errors, saved-versus-applied new-session settings, and
-new-project startup.
+quarantine-operation checkpoints are accepted. The subsequent operator portions
+implemented live UI status/errors, saved-versus-applied new-session settings
+and project registration.
 
 The operator UI now supports an idle-only restart of the existing accepted
 runtime and lazy retained turn-error details. The restart must work from an
@@ -309,3 +311,10 @@ and requires the saved revision. Verification uses frozen mock runtimes, not
 paid jobs for refusal cases. Error details show observed execution/quarantine
 separately from recovery suggestions. Record incomplete native reviews honestly;
 an error panel never replaces coordinator acceptance.
+
+The [hour-deadline checkpoint](native-smoke/2026-10-02-hour-deadline.md)
+records configurable deadlines, observed activity and preserved error details
+during background refresh failures. The
+[Antigravity quota checkpoint](native-smoke/2026-10-03-antigravity-quota.md)
+records the narrow explicit-error classification and its offline regressions;
+other vendor failure formats and live quota telemetry remain unverified.

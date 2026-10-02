@@ -59,6 +59,15 @@ const VALID_ANTIGRAVITY_EFFORTS = new Set(["low", "medium", "high", "max"]);
 const MAX_RETAINED_EVENTS = 10_000;
 
 /**
+ * Observed vendor diagnostic "Individual quota reached. Please upgrade your
+ * subscription … Resets in 54m59s." — matched conservatively at the START of a
+ * nonempty explicit FAILED result.error only (optional whitespace/case).
+ * Responses, stderr prose, other statuses, and arbitrary errors containing
+ * quoted quota words are never quota-classified.
+ */
+const ANTIGRAVITY_INDIVIDUAL_QUOTA_PREFIX = /^\s*individual quota reached\./i;
+
+/**
  * Observed `agy models` catalog ids (verified output scheme: "id\tName",
  * effort-suffixed Gemini ids like gemini-3.8-flash-high).
  */
@@ -355,6 +364,11 @@ export class AntigravityAdapter implements ProviderAdapter {
         }
 
         if (summary.status === "FAILED") {
+          if (summary.error !== null && ANTIGRAVITY_INDIVIDUAL_QUOTA_PREFIX.test(summary.error)) {
+            throw new BrokerError("QUOTA_EXHAUSTED", boundedSanitizedDetail(summary.error), {
+              executionStarted: true,
+            });
+          }
           const msg = summary.error || summary.response || "antigravity execution failed";
           throw new BrokerError("PROVIDER_PROTOCOL_ERROR", boundedSanitizedDetail(msg), {
             executionStarted: true,

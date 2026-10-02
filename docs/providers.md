@@ -242,7 +242,7 @@ Set `AB_ANTIGRAVITY_BIN` to `agy.exe`; the tested path is
 `%LOCALAPPDATA%\agy\bin\agy.exe`. Authentication is owned by agy.
 
 The adapter uses `--dangerously-skip-permissions --output-format stream-json
---print-timeout 900s -p <prompt>`, explicit `--model` and exact
+--print-timeout 0 -p <prompt>`, explicit `--model` and exact
 `--conversation <native_ID>` for resume. Adapter 0.2.0 passes non-null
 `requested_effort` through `--effort` (`low`, `medium`, `high`, `max`);
 invalid selection fails before dispatch. The flag mapping has fake-process
@@ -253,9 +253,20 @@ For prompts over 2,000 characters it writes a temporary prompt file and asks
 agy to open it. A longer Gemini 3.8 Flash/high self-development task exercised
 that path and produced source changes through MCP ([checkpoint](native-smoke/2026-10-01-dogfood/report.md)). Arbitrary large-input and full role profiles
 remain unverified. Short prompts worked over ordinary pipes on Windows; a PTY was
-not needed for the exercised scenario. Startup timeout is 120 seconds and
-inactivity timeout 900 seconds. Permission bypass does not enforce reviewer
-read-only behavior.
+not needed for the exercised scenario. Output waits follow the remaining turn
+deadline, with a 65-second margin for daemon deadline supervision; the default
+turn deadline is one hour and is configurable. Permission bypass does not
+enforce reviewer read-only behavior.
+
+An explicit `FAILED` result whose `error` starts with the observed diagnostic
+`Individual quota reached.` maps to `QUOTA_EXHAUSTED`. The bounded, sanitized
+diagnostic remains available, including any vendor-provided reset wording;
+the broker does not turn that wording into a reset timer or subscription state.
+Successful responses, response-only failures, stderr prose and other errors
+are not quota evidence. No automatic retry or provider/account fallback occurs.
+This classification is tested with fake native processes; a new live quota
+failure has not been exercised. See the
+[quota checkpoint](native-smoke/2026-10-03-antigravity-quota.md).
 
 The parser handles step updates/results and captures observed conversation
 IDs without inventing them. A missing ID stays empty; resume is only possible
