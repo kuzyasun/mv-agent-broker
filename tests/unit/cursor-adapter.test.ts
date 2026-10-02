@@ -115,10 +115,10 @@ describe("Cursor adapter", () => {
     const f = fixture();
     const timer = vi.spyOn(globalThis, "setTimeout");
     try {
-      const result = await f.adapter.executeTurn(request({ deadline_at: Date.now() + 3_600_000 }), gate(), () => {});
+      const result = await f.adapter.executeTurn(request({ deadline_at: 3_601_000, clock: { now: () => 1_000 } }), gate(), () => {});
       expect(result.native_outcome).toBe("completed");
       const durations = timer.mock.calls.map(call => Number(call[1]));
-      expect(durations.filter(ms => ms > 3_500_000).length).toBeGreaterThanOrEqual(2);
+      expect(durations.filter(ms => ms > 3_660_000).length).toBeGreaterThanOrEqual(2);
       expect(durations).not.toContain(120_000);
     } finally { timer.mockRestore(); }
   });

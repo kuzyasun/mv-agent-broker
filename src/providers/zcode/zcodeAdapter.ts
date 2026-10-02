@@ -157,7 +157,8 @@ export class ZcodeAdapter implements ProviderAdapter {
       // stdout after two minutes is not startup failure for a coding turn.
       // The daemon's hard deadline owns cancellation; this timer is a fallback
       // for adapter callers without a live deadline supervisor.
-      const outputWaitMs = Math.max(1000, req.deadline_at - req.clock.now());
+      // Leave room for the daemon's maximum 60s deadline scan interval.
+      const outputWaitMs = Math.max(1000, req.deadline_at - req.clock.now()) + 65_000;
       const result = await runHeadlessCli({
         binary: this.opts.nodeBinary ?? process.execPath, args,
         promptStdin: "", promptArgv: req.task_envelope,

@@ -78,6 +78,10 @@ deadline cancellation and waits for execution cleanup before releasing the job.
 Recent turn errors also includes failed, timed-out, and unknown turns when no
 provider error code was recorded. Expand a timed-out turn to inspect its cause
 and partial-work guidance before submitting more paid work.
+On a failed background refresh, open error details stay mounted and are labeled
+as last observed data. Cursor, Antigravity and ZCode output timers have a 65-second
+reserve beyond the deadline so the daemon's maximum 60-second scan interval can
+cancel first. This reserve does not extend the accepted turn deadline.
 
 ## Local settings UI
 

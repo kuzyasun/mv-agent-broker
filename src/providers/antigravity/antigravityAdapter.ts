@@ -270,10 +270,10 @@ export class AntigravityAdapter implements ProviderAdapter {
         cwd: req.workspace_path ?? process.cwd(),
         envAllowlist: ANTIGRAVITY_ENV_ALLOWLIST,
         inheritEnv: process.env,
-        // The first output may arrive after a long reasoning phase.
-        firstLineTimeoutMs: Math.max(1_000, req.deadline_at - req.clock.now()),
+        // Allow the daemon's deadline scan (up to 60s) to interrupt first.
+        firstLineTimeoutMs: Math.max(1_000, req.deadline_at - req.clock.now()) + 65_000,
         // --print-timeout 0 waits the full turn; do not invent a 900s inactivity cut.
-        inactivityTimeoutMs: Math.max(60_000, req.deadline_at > 0 ? req.deadline_at - req.clock.now() : 24 * 60 * 60_000),
+        inactivityTimeoutMs: Math.max(1_000, req.deadline_at - req.clock.now()) + 65_000,
         signal: ac.signal,
       };
 

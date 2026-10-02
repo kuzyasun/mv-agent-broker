@@ -549,9 +549,10 @@ export class CursorAdapter implements ProviderAdapter {
         cwd: req.workspace_path ?? process.cwd(),
         envAllowlist,
         inheritEnv,
-        // Quiet reasoning is not proof of a hang. The daemon owns the deadline.
-        firstLineTimeoutMs: Math.max(1_000, req.deadline_at - req.clock.now()),
-        inactivityTimeoutMs: Math.max(1_000, req.deadline_at - req.clock.now()),
+        // Let the daemon's deadline scan (up to 60s) interrupt first, so quiet
+        // reasoning ends as TIMED_OUT rather than a provider protocol failure.
+        firstLineTimeoutMs: Math.max(1_000, req.deadline_at - req.clock.now()) + 65_000,
+        inactivityTimeoutMs: Math.max(1_000, req.deadline_at - req.clock.now()) + 65_000,
         signal: ac.signal,
       };
 

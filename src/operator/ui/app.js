@@ -364,7 +364,9 @@
     $("error-count").textContent = liveCount(payload || {}, "error_turn_count", "error_turns", "error_turns_truncated");
     renderLiveRows($("active-jobs"), live ? payload.active_turns : null);
     const nextErrorKey = JSON.stringify(live ? payload.error_turns : null);
-    if (!background || nextErrorKey !== errorRowsKey) {
+    if (background && !live && errorRowsKey !== undefined && errorRowsKey !== "null") {
+      $("error-count").textContent = "Live errors unavailable; showing last observed details.";
+    } else if (!background || nextErrorKey !== errorRowsKey) {
       renderLiveRows($("turn-errors"), live ? payload.error_turns : null, true);
       errorRowsKey = nextErrorKey;
     }
