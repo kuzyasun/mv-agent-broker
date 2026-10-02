@@ -271,6 +271,12 @@ function projectStatusRows(value: unknown, limit: number, includeErrorCode: bool
       state: item.state,
       timestamp: item.timestamp,
       ...(includeErrorCode ? { error_code: item.error_code } : {}),
+      ...(!includeErrorCode ? {
+        accepted_at: typeof item.accepted_at === "number" ? item.accepted_at : null,
+        deadline_at: typeof item.deadline_at === "number" ? item.deadline_at : null,
+        execution_started: typeof item.execution_started === "boolean" ? item.execution_started : null,
+        last_activity_at: typeof item.last_activity_at === "number" ? item.last_activity_at : null,
+      } : {}),
     });
   }
   return projected;

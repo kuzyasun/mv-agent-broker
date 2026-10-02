@@ -18,6 +18,11 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    acceptance checks, and a deadline. Prefer separate worktrees for independent
    writes. Pass `route_id` with project, instructions, workspace and a unique
    idempotency key; omit raw provider/model/account/role/policy binding fields.
+   Omit `deadline_ms` to use the operator's configured default (one hour unless
+   changed), or supply an explicit duration for this task. Do not hardcode the
+   old 15-minute default. Quiet output alone is not evidence of a hung agent;
+   ZCode may buffer output until completion. Use event deltas and the UI's last
+   observed activity/deadline before deciding whether cancellation is needed.
 3. Use the single-agent route for small work. A large-task route may request native
    subagents for independent pieces; the configured model/effort and any child
    count are operator-selected preferences, not proof of enforcement. Native

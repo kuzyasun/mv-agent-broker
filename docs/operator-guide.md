@@ -42,12 +42,13 @@ The snippet uses absolute node, script, and config paths:
 npm run broker -- validate --config docs/examples/operator.mock.json
 ```
 
-The optional `limits` block controls unfinished broker turns:
+The optional `limits` block controls concurrency and the default turn deadline:
 
 ```json
 "limits": {
   "globalUnfinishedTurns": 6,
-  "quotaScopeUnfinishedTurns": 2
+  "quotaScopeUnfinishedTurns": 2,
+  "hardTurnDeadlineMs": 3600000
 }
 ```
 
@@ -57,6 +58,23 @@ turn per logical session remains; native child preference is independent. The
 defaults are `3` globally and `1` per quota scope. Values must be positive
 finite safe integers. Save the file and restart the owning daemon while idle
 before new sessions use changed limits.
+
+The default turn deadline is **60 minutes**, measured from acceptance, including
+startup and execution. Set **Default turn deadline (minutes)** in the UI, then
+save and restart the idle daemon. `limits.hardTurnDeadlineMs` is stored in
+milliseconds and accepts 1000–86400000 (up to 24 hours). The coordinator can
+override the default for a particular `agent_session_send` with `deadline_ms`;
+the configured default is not a ceiling on that explicit override. Standalone
+daemon launches also accept `AB_TURN_DEADLINE_MS`.
+
+Active jobs show elapsed time, the deadline, whether execution began, and the
+last retained provider event. While the page is visible, status refreshes every
+15 seconds without replacing form drafts or unchanged error disclosures. After
+10 minutes without observed output, the UI displays a caution, not an automatic
+cancellation. ZCode can buffer all output until completion; reasoning events
+are not retained. Silence therefore cannot prove a hang. Cursor, Antigravity
+and ZCode can wait for output until the turn deadline; the daemon still owns
+deadline cancellation and waits for execution cleanup before releasing the job.
 
 ## Local settings UI
 
@@ -75,8 +93,8 @@ operator validator, rejects stale revisions, writes an exact same-directory
 backup, and atomically replaces the config. In shared-daemon mode, stop the
 daemon only while idle and start it again to apply settings to new sessions;
 reconnecting the bridge or settings page alone does not reload the daemon. The
-UI never starts a daemon, edits the registry, runs inference, exports
-credentials, or terminates existing paid jobs.
+UI can restart the same accepted daemon runtime while idle. It never runs
+inference, exports credentials, or terminates existing paid jobs.
 
 The Profiles section edits routes with explicit project, configured account,
 role, policy, model, effort, and advisory native-subagent settings. Route IDs

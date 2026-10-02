@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { openRegistryDb, type RegistryDb } from "../../src/storage/db.ts";
-import { insertProject, insertSession, insertTurn } from "../../src/storage/repo.ts";
+import { appendEvent, insertProject, insertSession, insertTurn } from "../../src/storage/repo.ts";
 import type { SessionRecord, TurnRecord } from "../../src/shared/api-types.ts";
 import { projectOperatorOverview } from "../../src/operator/overview.ts";
 
@@ -122,6 +122,7 @@ describe("operator overview projection", () => {
       error_turns_truncated: true,
     });
     expect(overview.active_turns).toHaveLength(30);
+    expect(overview.active_turns[0]).toMatchObject({ last_activity_at: null, deadline_at: null, execution_started: true });
     expect(overview.error_turns).toHaveLength(10);
     expect(overview.active_turns[0]).toEqual({
       turn_id: "active-turn-31",
@@ -132,6 +133,10 @@ describe("operator overview projection", () => {
       effort: null,
       state: "RUNNING",
       timestamp: 10_031,
+      accepted_at: 10_030,
+      deadline_at: null,
+      execution_started: true,
+      last_activity_at: null,
     });
     expect(overview.error_turns[0]).toMatchObject({
       turn_id: "error-turn-11",
@@ -148,5 +153,21 @@ describe("operator overview projection", () => {
     expect(JSON.stringify(overview)).not.toContain("private-finalization-error");
     expect(JSON.stringify(overview)).not.toContain("private-native-ref");
     expect(JSON.stringify(overview)).not.toContain("private-artifact");
+  });
+
+  it("tracks retained provider activity separately from lifecycle and ownership updates", () => {
+    db = openRegistryDb(":memory:");
+    insertProject(db, { project_id: "project-main", display_name: "Main", configuration_revision: 1, session_cap: 5, created_at: 1 });
+    insertSession(db, session("active", 1));
+    insertTurn(db, { ...turn("running", "active", 1, "STARTING"), execution_started: true, deadline_at: 3_600_000 });
+    appendEvent(db, { turn_id: "running", session_id: "active", type: "adapter:owned_launch", created_at: 20_000, payload: {} });
+    expect(projectOperatorOverview(db).active_turns[0]).toMatchObject({ last_activity_at: null, execution_started: true });
+    appendEvent(db, { turn_id: "running", session_id: "active", type: "adapter:progress", created_at: 30_000, payload: { label: "private-payload" } });
+    appendEvent(db, { turn_id: "running", session_id: "active", type: "adapter:owned_quiescence", created_at: 40_000, payload: {} });
+    const overview = projectOperatorOverview(db);
+    expect(overview.active_turns[0]).toMatchObject({ last_activity_at: 30_000, deadline_at: 3_600_000, timestamp: 10_001 });
+    expect(JSON.stringify(overview)).not.toContain("private-payload");
+    db.raw.prepare("UPDATE turns SET execution_started = NULL, state = 'UNKNOWN' WHERE turn_id = 'running'").run();
+    expect(projectOperatorOverview(db).active_turns[0]).toMatchObject({ execution_started: null, state: "UNKNOWN" });
   });
 });

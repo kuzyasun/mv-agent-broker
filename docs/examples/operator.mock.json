@@ -4,7 +4,8 @@
   "coordinator_id": "coord-main",
   "limits": {
     "globalUnfinishedTurns": 6,
-    "quotaScopeUnfinishedTurns": 2
+    "quotaScopeUnfinishedTurns": 2,
+    "hardTurnDeadlineMs": 3600000
   },
   "projects": [
     { "project_id": "demo", "display_name": "Clean-state mock demo" }

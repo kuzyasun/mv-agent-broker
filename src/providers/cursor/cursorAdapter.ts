@@ -549,8 +549,9 @@ export class CursorAdapter implements ProviderAdapter {
         cwd: req.workspace_path ?? process.cwd(),
         envAllowlist,
         inheritEnv,
-        firstLineTimeoutMs: 120_000,
-        inactivityTimeoutMs: 120_000,
+        // Quiet reasoning is not proof of a hang. The daemon owns the deadline.
+        firstLineTimeoutMs: Math.max(1_000, req.deadline_at - req.clock.now()),
+        inactivityTimeoutMs: Math.max(1_000, req.deadline_at - req.clock.now()),
         signal: ac.signal,
       };
 

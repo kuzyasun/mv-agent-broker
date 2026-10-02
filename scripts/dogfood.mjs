@@ -94,7 +94,7 @@ if (process.argv[2] === '--serve') {
         : `Implement the assigned bounded package in the repository. Allowed edits ONLY: ${task.write_scope.join(', ')}. Preserve existing changes. Do not stage/commit/push, delegate, access credentials or call MCP. Read nearby source first. Run requested offline checks, fix failures, and self-review actual diff. Final report MUST fit 3000 characters: changed files, behavior, exact check results and limitations.`,
       workspace: { mode: reviewer ? 'review_slot' : 'current', workspace_id: reviewer ? 'review' : 'repo' }, policy_profile_id: reviewer ? 'reviewer' : 'worker' });
     sessions.push(session.session_id);
-    const deadlineMs = route.deadline_ms ?? 900000;
+    const deadlineMs = route.deadline_ms ?? 3600000;
     const accepted = await tool('agent_session_send', { session_id: session.session_id, idempotency_key: randomUUID(), task: { goal: route.goal, checks: route.checks ?? [], artifact_refs: [] }, ...(reviewer ? { review_binding: binding } : { workspace_precondition: { expected_snapshot_id: session.initial_snapshot_id } }), deadline_ms: deadlineMs });
     const record = { role, session, accepted, route: { provider: route.provider, model: route.model, effort: route.effort }, status: null };
     evidence.turns.push(record); save();

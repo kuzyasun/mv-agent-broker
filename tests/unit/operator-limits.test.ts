@@ -30,11 +30,27 @@ describe("operator concurrency limits", () => {
     }).limits).toEqual({
       globalUnfinishedTurns: 6,
       quotaScopeUnfinishedTurns: 2,
+      hardTurnDeadlineMs: 3_600_000,
     });
     expect(daemonEnvFromProcess({}).limits).toBeUndefined();
+    expect(daemonEnvFromProcess({ AB_TURN_DEADLINE_MS: "7200000" }).limits?.hardTurnDeadlineMs).toBe(7_200_000);
     for (const value of ["0", "-1", "1.5", "NaN", "Infinity"]) {
       expect(() => daemonEnvFromProcess({ AB_GLOBAL_UNFINISHED_TURNS: value })).toThrow();
     }
+  });
+
+  it.each([undefined, 7_200_000])("uses the default or configured deadline while allowing a per-turn override: %s", async configured => {
+    const h = createHarness({ limits: configured === undefined ? {} : { hardTurnDeadlineMs: configured } });
+    try {
+      const session = await h.spawnWorkerSession();
+      const accepted = h.sendTask(session.session_id, "deadline-default");
+      expect(h.core.turnStatus(h.seed.coordinatorId, accepted.turn_id).deadline_at)
+        .toBe(h.clock.now() + (configured ?? 3_600_000));
+      const other = await h.spawnWorkerSession({ account_profile_id: h.seed.accountMock3OtherQuota,
+        workspace: { mode: "current", workspace_id: h.seed.workspaceOther } });
+      const overridden = h.sendTask(other.session_id, "deadline-override", "Short task", { deadline_ms: 1_800_000 });
+      expect(h.core.turnStatus(h.seed.coordinatorId, overridden.turn_id).deadline_at).toBe(h.clock.now() + 1_800_000);
+    } finally { h.cleanup(); }
   });
 
   it("admits two independent same-quota turns and refuses a third", async () => {

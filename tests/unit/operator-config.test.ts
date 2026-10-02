@@ -103,6 +103,7 @@ describe("operator configuration", () => {
     expect(loaded.limits).toEqual({
       globalUnfinishedTurns: 3,
       quotaScopeUnfinishedTurns: 1,
+      hardTurnDeadlineMs: 3_600_000,
     });
 
     for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
@@ -119,6 +120,16 @@ describe("operator configuration", () => {
       ...validConfig(),
       limits: { globalUnfinishedTurns: 6, unexpected: 2 },
     })).toThrow(/unknown limits key/);
+  });
+
+  it("validates the configurable turn deadline and includes it in applied settings", () => {
+    const config = validConfig();
+    const configured = loadOperatorConfig(JSON.stringify({ ...config, limits: { hardTurnDeadlineMs: 7_200_000 } }));
+    expect(configured.limits?.hardTurnDeadlineMs).toBe(7_200_000);
+    expect(operatorConfigFingerprint(configured)).not.toBe(operatorConfigFingerprint(loadOperatorConfig(JSON.stringify(config))));
+    for (const deadline of [0, 999, 86_400_001, 1_000.5, NaN, Infinity]) {
+      expect(() => validateOperatorConfig({ ...config, limits: { hardTurnDeadlineMs: deadline } })).toThrow();
+    }
   });
 
   it("fingerprints normalized semantic settings, not formatting or generated timestamps", () => {

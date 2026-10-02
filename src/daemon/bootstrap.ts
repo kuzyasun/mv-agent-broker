@@ -215,11 +215,13 @@ export function daemonEnvFromProcess(procEnv: NodeJS.ProcessEnv): DaemonEnv {
   }
   const rawGlobal = procEnv.AB_GLOBAL_UNFINISHED_TURNS;
   const rawQuotaScope = procEnv.AB_QUOTA_SCOPE_UNFINISHED_TURNS;
-  const limits = rawGlobal === undefined && rawQuotaScope === undefined
+  const rawDeadline = procEnv.AB_TURN_DEADLINE_MS;
+  const limits = rawGlobal === undefined && rawQuotaScope === undefined && rawDeadline === undefined
     ? undefined
     : validateOperatorLimits({
       ...(rawGlobal === undefined ? {} : { globalUnfinishedTurns: Number(rawGlobal) }),
       ...(rawQuotaScope === undefined ? {} : { quotaScopeUnfinishedTurns: Number(rawQuotaScope) }),
+      ...(rawDeadline === undefined ? {} : { hardTurnDeadlineMs: Number(rawDeadline) }),
     });
   return {
     stateDir: procEnv.AB_STATE_DIR ?? "./.agent-broker-state",

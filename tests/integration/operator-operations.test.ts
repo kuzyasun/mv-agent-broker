@@ -33,7 +33,7 @@ describe("operator runtime RPC", () => {
     const configPath = path.join(root, "operator.json");
     writeFileSync(configPath, JSON.stringify({
       version: 1, state_dir: "./state", coordinator_id: "operator",
-      limits: { globalUnfinishedTurns: 6, quotaScopeUnfinishedTurns: 2 },
+      limits: { globalUnfinishedTurns: 6, quotaScopeUnfinishedTurns: 2, hardTurnDeadlineMs: 7_200_000 },
       projects: [], coordinators: [{ coordinator_id: "operator", display_name: "Operator", allowed_project_ids: [] }],
       accounts: [], workspaces: [], policy_profiles: [], coverage_profiles: [], routes: [],
     }));
@@ -73,7 +73,7 @@ describe("operator runtime RPC", () => {
           globalUnfinishedTurns: 6,
           quotaScopeUnfinishedTurns: 2,
           openSessionsPerProject: 20,
-          hardTurnDeadlineMs: 900_000,
+          hardTurnDeadlineMs: 7_200_000,
         });
       } finally { client.close(); }
       expect(() => cli("start")).toThrow(/DAEMON_ALREADY_RUNNING/);

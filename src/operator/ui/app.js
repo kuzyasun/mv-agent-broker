@@ -12,7 +12,7 @@
   let projectFilter = "";
   let dirty = false;
   const advancedDirty = new Set();
-  const defaultLimits = { globalUnfinishedTurns: 3, quotaScopeUnfinishedTurns: 1 };
+  const defaultLimits = { globalUnfinishedTurns: 3, quotaScopeUnfinishedTurns: 1, hardTurnDeadlineMs: 3_600_000 };
   const $ = (id) => document.getElementById(id);
   const make = (tag, text) => {
     const node = document.createElement(tag);
@@ -312,10 +312,28 @@
         make("span", `${entry.provider || "unknown provider"} · ${entry.model || "unknown model"} · effort ${entry.effort || "No override"} · ${liveTimestamp(entry.timestamp)}`),
       );
       if (errorRows && entry.turn_id) row.append(errorDisclosure(entry.turn_id));
+      if (!errorRows) {
+        const now = Date.now();
+        const minutes = (ms) => `${Math.max(0, Math.floor(ms / 60_000))} min`;
+        const lastActivity = entry.last_activity_at;
+        const quietSince = lastActivity ?? entry.accepted_at;
+        row.append(make("span", `Execution began: ${entry.execution_started === true ? "Yes" : entry.execution_started === false ? "No" : "Unknown"}`));
+        if (entry.accepted_at != null) row.append(make("span", `Elapsed: ${minutes(now - entry.accepted_at)}`));
+        row.append(make("span", entry.deadline_at == null ? "Deadline: unavailable"
+          : `Deadline: ${liveTimestamp(entry.deadline_at)} · ${entry.deadline_at > now ? `${minutes(entry.deadline_at - now)} remaining` : "reached; waiting for execution cleanup"}`));
+        row.append(make("span", lastActivity == null ? "Last observed provider activity: no retained output yet"
+          : `Last observed provider activity: ${liveTimestamp(lastActivity)} · ${minutes(now - lastActivity)} ago`));
+        if (quietSince != null && now - quietSince >= 10 * 60_000) {
+          const warning = make("p", "No observed provider output for 10+ minutes. The agent may be reasoning or buffering output (especially ZCode). Check progress before cancelling; silence does not prove a hang.");
+          warning.className = "small-note";
+          row.append(warning);
+        }
+      }
       container.append(row);
     });
   };
-  const renderLiveStatus = (payload) => {
+  let errorRowsKey;
+  const renderLiveStatus = (payload, background = false) => {
     livePayload = payload;
     renderSettingsState(payload);
     const live = payload && payload.status === "ready" && payload.readiness === "READY";
@@ -336,7 +354,7 @@
       liveRuntimeItem("Daemon process", runtimePid),
     );
     if (live) {
-      liveMessage("Daemon READY. Runtime process metadata is observed from the private status RPC.", "success");
+      liveMessage("Daemon READY. Status refreshes every 15 seconds while this page is visible. Activity reflects retained provider events, not a guaranteed heartbeat.", "success");
     } else if (payload?.status === "stopped") {
       liveMessage("Daemon stopped. Active jobs and turn errors are unavailable.", "error");
     } else {
@@ -345,7 +363,11 @@
     $("active-count").textContent = liveCount(payload || {}, "active_turn_count", "active_turns", "active_turns_truncated");
     $("error-count").textContent = liveCount(payload || {}, "error_turn_count", "error_turns", "error_turns_truncated");
     renderLiveRows($("active-jobs"), live ? payload.active_turns : null);
-    renderLiveRows($("turn-errors"), live ? payload.error_turns : null, true);
+    const nextErrorKey = JSON.stringify(live ? payload.error_turns : null);
+    if (!background || nextErrorKey !== errorRowsKey) {
+      renderLiveRows($("turn-errors"), live ? payload.error_turns : null, true);
+      errorRowsKey = nextErrorKey;
+    }
     updateRestartButton();
   };
   async function refreshLiveStatus() {
@@ -361,6 +383,14 @@
       }
     });
   }
+  let backgroundRefreshRunning = false;
+  setInterval(async () => {
+    if (document.hidden || configOperation || backgroundRefreshRunning || $("refresh-status").disabled) return;
+    backgroundRefreshRunning = true;
+    try { renderLiveStatus(await readLiveStatus(), true); }
+    catch { renderLiveStatus({ status: "unavailable", readiness: "UNAVAILABLE" }, true); }
+    finally { backgroundRefreshRunning = false; }
+  }, 15_000);
   const uniqueId = (prefix) => `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
   const find = (items, key, value) => (items || []).find((item) => item[key] === value);
   const selectedProject = (route) => find(state.projects, "project_id", route.project_id);
@@ -658,6 +688,7 @@
     const limits = state.limits || {};
     $("global-unfinished-turns").value = String(limits.globalUnfinishedTurns ?? defaultLimits.globalUnfinishedTurns);
     $("quota-scope-unfinished-turns").value = String(limits.quotaScopeUnfinishedTurns ?? defaultLimits.quotaScopeUnfinishedTurns);
+    $("turn-deadline-minutes").value = String((limits.hardTurnDeadlineMs ?? defaultLimits.hardTurnDeadlineMs) / 60_000);
   }
 
   function render() {
@@ -1161,6 +1192,10 @@
   });
   $("quota-scope-unfinished-turns").addEventListener("input", () => {
     state.limits = { ...(state.limits || {}), quotaScopeUnfinishedTurns: Number($("quota-scope-unfinished-turns").value) };
+    markDirty();
+  });
+  $("turn-deadline-minutes").addEventListener("input", () => {
+    state.limits = { ...(state.limits || {}), hardTurnDeadlineMs: Number($("turn-deadline-minutes").value) * 60_000 };
     markDirty();
   });
   for (const id of ["accounts-json", "pins-json", "coverage-json", "state-dir"]) {

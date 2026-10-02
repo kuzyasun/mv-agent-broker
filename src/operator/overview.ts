@@ -21,9 +21,16 @@ export interface OperatorErrorSummary extends OperatorTurnSummary {
   error_code: string;
 }
 
+export interface OperatorActiveSummary extends OperatorTurnSummary {
+  accepted_at: number | null;
+  deadline_at: number | null;
+  execution_started: boolean | null;
+  last_activity_at: number | null;
+}
+
 export interface OperatorOverview {
   active_turn_count: number;
-  active_turns: OperatorTurnSummary[];
+  active_turns: OperatorActiveSummary[];
   active_turns_truncated: boolean;
   error_turn_count: number;
   error_turns: OperatorErrorSummary[];
@@ -67,7 +74,10 @@ function selectFields(extra = "", timestamp = "t.updated_at AS timestamp"): stri
 export function projectOperatorOverview(db: RegistryDb): OperatorOverview {
   const activeTurnCount = count(db, `state IN (${ACTIVE_TURN_STATES})`);
   const activeRows = db.raw
-    .prepare(`${selectFields()} WHERE t.state IN (${ACTIVE_TURN_STATES}) ORDER BY t.updated_at DESC, t.turn_id DESC LIMIT ?`)
+    .prepare(`${selectFields(`, t.accepted_at, t.deadline_at, t.execution_started,
+      (SELECT MAX(e.created_at) FROM events e WHERE e.turn_id = t.turn_id
+        AND e.type LIKE 'adapter:%' AND e.type NOT GLOB 'adapter:owned_*') AS last_activity_at`)}
+      WHERE t.state IN (${ACTIVE_TURN_STATES}) ORDER BY t.updated_at DESC, t.turn_id DESC LIMIT ?`)
     .all(ACTIVE_TURN_LIMIT) as Array<Record<string, unknown>>;
 
   const errorTurnCount = count(db, "error_code IS NOT NULL");
@@ -82,7 +92,13 @@ export function projectOperatorOverview(db: RegistryDb): OperatorOverview {
 
   return {
     active_turn_count: activeTurnCount,
-    active_turns: activeRows.map(summary),
+    active_turns: activeRows.map(row => ({
+      ...summary(row),
+      accepted_at: row.accepted_at === null ? null : Number(row.accepted_at),
+      deadline_at: row.deadline_at === null ? null : Number(row.deadline_at),
+      execution_started: row.execution_started === null ? null : Number(row.execution_started) === 1,
+      last_activity_at: row.last_activity_at === null ? null : Number(row.last_activity_at),
+    })),
     active_turns_truncated: activeTurnCount > activeRows.length,
     error_turn_count: errorTurnCount,
     error_turns: errorRows.map(row => ({

@@ -613,7 +613,7 @@ export function validateRouteConfig(route, role = 'worker', isProduction = false
  * Validates strict production configuration requirements.
  */
 export function validateProductionConfig(taskConfig) {
-  const deadline=taskConfig.deadline_ms ?? 900000;
+  const deadline=taskConfig.deadline_ms ?? 3600000;
   if (!Number.isInteger(deadline) || deadline < 1000 || deadline > 86400000) throw new Error("Invalid deadline_ms bound");
   if (taskConfig.mock) {
     if ((taskConfig.provider ?? 'mock') !== 'mock' || (taskConfig.reviewer_provider ?? taskConfig.provider ?? 'mock') !== 'mock') throw new Error("Mock mode forbids native provider routes");
@@ -802,7 +802,7 @@ export async function runNativeFeedback(taskConfig = {}) {
   task.model = task.model ?? (task.provider === 'mock' ? 'mock-model' : undefined);
   task.reviewer_provider = task.reviewer_provider ?? task.provider;
   task.reviewer_model = task.reviewer_model ?? task.model;
-  task.deadline_ms = task.deadline_ms ?? 900000;
+  task.deadline_ms = task.deadline_ms ?? 3600000;
   task.reviewer_effort ??= task.effort;
 
   // Strict config validation

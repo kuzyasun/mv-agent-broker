@@ -111,6 +111,17 @@ function request(overrides: Partial<TurnExecutionRequest> = {}): TurnExecutionRe
 function gate() { let count = 0; return { acquireDispatchPermission: () => { count++; }, cancellationRequested: () => null, count: () => count }; }
 
 describe("Cursor adapter", () => {
+  it("allows quiet reasoning until the turn deadline instead of a two-minute timeout", async () => {
+    const f = fixture();
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const result = await f.adapter.executeTurn(request({ deadline_at: Date.now() + 3_600_000 }), gate(), () => {});
+      expect(result.native_outcome).toBe("completed");
+      const durations = timer.mock.calls.map(call => Number(call[1]));
+      expect(durations.filter(ms => ms > 3_500_000).length).toBeGreaterThanOrEqual(2);
+      expect(durations).not.toContain(120_000);
+    } finally { timer.mockRestore(); }
+  });
   it("maps an unsuffixed model plus effort to the catalog model ID", () => {
     expect(resolveCursorModel("gpt-5.6-sol", "high")).toBe("gpt-5.6-sol-high");
     expect(resolveCursorModel("gpt-5.6-luna-high", "high")).toBe("gpt-5.6-luna-high");

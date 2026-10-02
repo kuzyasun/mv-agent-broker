@@ -60,7 +60,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">CONCURRENCY</p>
-          <h2 id="concurrency-heading">Unfinished broker turns</h2>
+          <h2 id="concurrency-heading">Concurrency and turn deadline</h2>
         </div>
       </div>
       <p class="muted">These are unfinished broker turns across projects and account scope, not vendor token quotas or native child count. One unfinished turn per logical session remains; native child preference is independent.</p>
@@ -74,6 +74,11 @@
           <span>Quota-scope unfinished turns</span>
           <span class="field-help">Maximum unfinished turns sharing one configured account quota scope.</span>
           <input id="quota-scope-unfinished-turns" type="number" min="1" step="1">
+        </label>
+        <label>
+          <span>Default turn deadline (minutes)</span>
+          <span class="field-help">60 minutes by default. Applies to new turns after Save and Restart daemon. A coordinator can override it per turn with deadline_ms.</span>
+          <input id="turn-deadline-minutes" type="number" min="1" max="1440" step="1">
         </label>
       </div>
     </section>

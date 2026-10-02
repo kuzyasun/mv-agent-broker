@@ -77,7 +77,7 @@ export type NativeSubagents =
   | { mode: "off" | "prefer"; max_agents: number }
   | { mode: "auto" };
 
-export type OperatorLimits = Pick<Limits, "globalUnfinishedTurns" | "quotaScopeUnfinishedTurns">;
+export type OperatorLimits = Pick<Limits, "globalUnfinishedTurns" | "quotaScopeUnfinishedTurns" | "hardTurnDeadlineMs">;
 
 export interface OperatorRoute {
   route_id: string;
@@ -134,10 +134,14 @@ export function validateOperatorLimits(value: unknown): OperatorLimits {
   }
   const raw = (value ?? {}) as Record<string, unknown>;
   for (const key of Object.keys(raw)) {
-    if (key !== "globalUnfinishedTurns" && key !== "quotaScopeUnfinishedTurns") {
+    if (key !== "globalUnfinishedTurns" && key !== "quotaScopeUnfinishedTurns" && key !== "hardTurnDeadlineMs") {
       fail(`unknown limits key '${key}'`);
     }
   }
+  const deadline = raw.hardTurnDeadlineMs === undefined
+    ? DEFAULT_LIMITS.hardTurnDeadlineMs
+    : positiveSafeInteger(raw.hardTurnDeadlineMs, "limits.hardTurnDeadlineMs");
+  if (deadline < 1_000 || deadline > 86_400_000) fail("limits.hardTurnDeadlineMs must be between 1000 and 86400000");
   return {
     globalUnfinishedTurns: raw.globalUnfinishedTurns === undefined
       ? DEFAULT_LIMITS.globalUnfinishedTurns
@@ -145,6 +149,7 @@ export function validateOperatorLimits(value: unknown): OperatorLimits {
     quotaScopeUnfinishedTurns: raw.quotaScopeUnfinishedTurns === undefined
       ? DEFAULT_LIMITS.quotaScopeUnfinishedTurns
       : positiveSafeInteger(raw.quotaScopeUnfinishedTurns, "limits.quotaScopeUnfinishedTurns"),
+    hardTurnDeadlineMs: deadline,
   };
 }
 

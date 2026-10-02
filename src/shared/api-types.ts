@@ -382,5 +382,5 @@ export const DEFAULT_LIMITS: Limits = {
   globalUnfinishedTurns: 3,
   quotaScopeUnfinishedTurns: 1,
   openSessionsPerProject: 20,
-  hardTurnDeadlineMs: 900_000,
+  hardTurnDeadlineMs: 3_600_000,
 };
