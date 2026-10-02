@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openRegistryDb, type RegistryDb } from "../../src/storage/db.ts";
 import { appendEvent, insertProject, insertSession, insertTurn } from "../../src/storage/repo.ts";
 import type { SessionRecord, TurnRecord } from "../../src/shared/api-types.ts";
-import { projectOperatorOverview } from "../../src/operator/overview.ts";
+import { projectOperatorOverview, projectOperatorTurnError } from "../../src/operator/overview.ts";
 
 let db: RegistryDb | undefined;
 
@@ -169,5 +169,15 @@ describe("operator overview projection", () => {
     expect(JSON.stringify(overview)).not.toContain("private-payload");
     db.raw.prepare("UPDATE turns SET execution_started = NULL, state = 'UNKNOWN' WHERE turn_id = 'running'").run();
     expect(projectOperatorOverview(db).active_turns[0]).toMatchObject({ execution_started: null, state: "UNKNOWN" });
+  });
+
+  it("shows deadline failures even when the adapter supplied no error code", () => {
+    db = openRegistryDb(":memory:");
+    insertProject(db, { project_id: "project-main", display_name: "Main", configuration_revision: 1, session_cap: 5, created_at: 1 });
+    insertSession(db, session("timed-out", 1));
+    insertTurn(db, turn("timeout", "timed-out", 1, "TIMED_OUT"));
+    expect(projectOperatorOverview(db)).toMatchObject({ active_turn_count: 0, error_turn_count: 1,
+      error_turns: [{ turn_id: "timeout", state: "TIMED_OUT", error_code: null }] });
+    expect(projectOperatorTurnError(db, "timeout")?.guidance.explanation).toBe("The turn reached its deadline.");
   });
 });

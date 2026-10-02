@@ -260,7 +260,7 @@ function projectStatusRows(value: unknown, limit: number, includeErrorCode: bool
       typeof item.state !== "string" ||
       typeof item.timestamp !== "number"
     ) return null;
-    if (includeErrorCode && typeof item.error_code !== "string") return null;
+    if (includeErrorCode && item.error_code !== null && typeof item.error_code !== "string") return null;
     projected.push({
       turn_id: item.turn_id,
       session_id: item.session_id,

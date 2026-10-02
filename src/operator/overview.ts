@@ -5,6 +5,7 @@ import type { RegistryDb } from "../storage/db.ts";
 const ACTIVE_TURN_STATES = "'ACCEPTED','STARTING','RUNNING','CANCELLING','FINALIZING','UNKNOWN'";
 const ACTIVE_TURN_LIMIT = 30;
 const ERROR_TURN_LIMIT = 10;
+const ERROR_TURN_FILTER = "t.error_code IS NOT NULL OR t.state IN ('FAILED','TIMED_OUT','UNKNOWN')";
 
 export interface OperatorTurnSummary {
   turn_id: string;
@@ -18,7 +19,7 @@ export interface OperatorTurnSummary {
 }
 
 export interface OperatorErrorSummary extends OperatorTurnSummary {
-  error_code: string;
+  error_code: string | null;
 }
 
 export interface OperatorActiveSummary extends OperatorTurnSummary {
@@ -51,7 +52,7 @@ function summary(row: Record<string, unknown>): OperatorTurnSummary {
 }
 
 function count(db: RegistryDb, where: string): number {
-  const row = db.raw.prepare(`SELECT COUNT(*) AS count FROM turns WHERE ${where}`).get() as { count: number };
+  const row = db.raw.prepare(`SELECT COUNT(*) AS count FROM turns t WHERE ${where}`).get() as { count: number };
   return Number(row.count);
 }
 
@@ -80,11 +81,11 @@ export function projectOperatorOverview(db: RegistryDb): OperatorOverview {
       WHERE t.state IN (${ACTIVE_TURN_STATES}) ORDER BY t.updated_at DESC, t.turn_id DESC LIMIT ?`)
     .all(ACTIVE_TURN_LIMIT) as Array<Record<string, unknown>>;
 
-  const errorTurnCount = count(db, "error_code IS NOT NULL");
+  const errorTurnCount = count(db, ERROR_TURN_FILTER);
   const errorRows = db.raw
     .prepare(`
       ${selectFields(", t.error_code", "COALESCE(t.terminal_at, t.updated_at) AS timestamp").trim()}
-      WHERE t.error_code IS NOT NULL
+      WHERE ${ERROR_TURN_FILTER}
       ORDER BY COALESCE(t.terminal_at, t.updated_at) DESC, t.turn_id DESC
       LIMIT ?
     `)
@@ -103,7 +104,7 @@ export function projectOperatorOverview(db: RegistryDb): OperatorOverview {
     error_turn_count: errorTurnCount,
     error_turns: errorRows.map(row => ({
       ...summary(row),
-      error_code: String(row.error_code),
+      error_code: row.error_code === null ? null : String(row.error_code),
     })),
     error_turns_truncated: errorTurnCount > errorRows.length,
   };
@@ -204,6 +205,13 @@ function guidanceFor(input: {
       kind: "guidance",
       explanation: "Execution is unknown or the workspace is quarantined.",
       next_step: "Use coordinator or operator recovery before any new paid work. Do not start an immediate paid replay.",
+    };
+  }
+  if (input.state === "TIMED_OUT") {
+    return {
+      kind: "guidance",
+      explanation: "The turn reached its deadline.",
+      next_step: "Inspect partial work and execution cleanup before a new turn. A longer configured deadline applies to future turns; no automatic replay occurs.",
     };
   }
   switch (input.errorCode) {

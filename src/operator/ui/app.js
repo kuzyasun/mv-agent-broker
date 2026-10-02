@@ -305,7 +305,7 @@
       const row = make("div");
       row.className = "live-row";
       row.setAttribute("role", "listitem");
-      const code = errorRows ? ` · error ${entry.error_code || "unknown"}` : "";
+      const code = errorRows ? ` · error ${entry.error_code || entry.state || "unknown"}` : "";
       row.append(
         make("strong", `${entry.turn_id || "Unknown turn"} · ${entry.state || "Unknown state"}${code}`),
         make("span", `Session ${entry.session_id || "unknown"} · project ${entry.project_id || "unknown"}`),

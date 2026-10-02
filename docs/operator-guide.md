@@ -75,6 +75,9 @@ cancellation. ZCode can buffer all output until completion; reasoning events
 are not retained. Silence therefore cannot prove a hang. Cursor, Antigravity
 and ZCode can wait for output until the turn deadline; the daemon still owns
 deadline cancellation and waits for execution cleanup before releasing the job.
+Recent turn errors also includes failed, timed-out, and unknown turns when no
+provider error code was recorded. Expand a timed-out turn to inspect its cause
+and partial-work guidance before submitting more paid work.
 
 ## Local settings UI
 
