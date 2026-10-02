@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import os from "node:os";
 import path from "node:path";
+import { startDaemon } from "../../src/daemon/bootstrap.ts";
+import { startDaemonRpc } from "../../src/daemon/rpc.ts";
+import { daemonOperatorStatus } from "../../src/operator/main.ts";
+import { startOperatorUi } from "../../src/operator/ui.ts";
+import { insertCoordinator, insertProject, insertSession, insertTurn } from "../../src/storage/repo.ts";
+import type { SessionRecord, TurnRecord } from "../../src/shared/api-types.ts";
 
 const roots: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
@@ -57,10 +63,189 @@ describe("operator UI CLI", () => {
     });
     const page = await fetch(url);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain("Agent Broker Operator");
+    const pageText = await page.text();
+    expect(pageText).toContain("Agent Broker Operator");
+    expect(pageText).toContain("LIVE BROKER");
+    expect(pageText).toContain("Refresh status");
     const exited = new Promise<number | null>(resolve => child.once("exit", code => resolve(code)));
     child.kill("SIGINT");
     await expect(exited).resolves.toBe(process.platform === "win32" ? null : 0);
     lines.close();
+  }, 20_000);
+
+  it("reads authenticated live daemon status without dispatching work", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "operator-ui-live-status-"));
+    roots.push(root);
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "operator.json");
+    const config = {
+      version: 1,
+      state_dir: stateDir,
+      coordinator_id: "operator",
+      projects: [],
+      coordinators: [{ coordinator_id: "operator", display_name: "Operator", allowed_project_ids: [] }],
+      accounts: [],
+      workspaces: [],
+      policy_profiles: [],
+      coverage_profiles: [],
+      routes: [],
+    };
+    writeFileSync(configPath, JSON.stringify(config));
+
+    const daemon = await startDaemon({ stateDir, coordinatorId: "operator" });
+    insertCoordinator(daemon.db, {
+      coordinator_id: "operator",
+      display_name: "Operator",
+      allowed_project_ids: [],
+      revoked: false,
+      config_revision: 1,
+    });
+    insertProject(daemon.db, {
+      project_id: "project-main",
+      display_name: "Main",
+      configuration_revision: 1,
+      session_cap: 20,
+      created_at: 1,
+    });
+    const session: SessionRecord = {
+      session_id: "session-live",
+      project_id: "project-main",
+      owner_coordinator_id: "operator",
+      provider: "mock",
+      adapter_version: null,
+      cli_version: null,
+      account_profile_id: "account-main",
+      auth_mode: "cli-owned",
+      requested_model: "mock-model",
+      requested_effort: "high",
+      effective_model: null,
+      effective_effort: null,
+      role: "worker",
+      instructions_hash: "instructions",
+      policy_profile_id: "policy-main",
+      policy_profile_version: "1",
+      workspace_id: null,
+      workspace_mode: "current",
+      coverage_profile_id: null,
+      coverage_profile_version: null,
+      coverage_contract_hash: null,
+      native_conversation_ref: null,
+      context_status: "not_started",
+      state: "ACTIVE",
+      active_turn_id: "turn-live",
+      block_reason: null,
+      runtime_id: null,
+      close_state: "none",
+      close_intent_id: null,
+      initial_snapshot_id: null,
+      latest_snapshot_id: null,
+      record_version: 1,
+      created_at: 1,
+      updated_at: 2,
+    };
+    const activeTurn: TurnRecord = {
+      turn_id: "turn-live",
+      session_id: session.session_id,
+      project_id: session.project_id,
+      owner_coordinator_id: "operator",
+      idempotency_key: "idempotency-live",
+      request_hash: "request-live",
+      task_goal_hash: "private-goal",
+      state: "RUNNING",
+      state_version: 1,
+      execution_started: true,
+      native_outcome: null,
+      termination_reason: null,
+      finalization_error: null,
+      terminal_candidate: null,
+      retry_of_turn_id: null,
+      deadline_at: null,
+      native_conversation_ref: null,
+      continuation: null,
+      input_manifest_id: null,
+      task_artifact_refs: [],
+      baseline_snapshot_id: null,
+      review_target_snapshot_id: null,
+      final_snapshot_id: null,
+      runtime_id: null,
+      error_code: null,
+      created_at: 3,
+      accepted_at: 3,
+      terminal_at: null,
+      updated_at: 4,
+    };
+    insertSession(daemon.db, session);
+    insertTurn(daemon.db, activeTurn);
+    insertTurn(daemon.db, {
+      ...activeTurn,
+      turn_id: "turn-failed",
+      idempotency_key: "idempotency-failed",
+      state: "FAILED",
+      execution_started: false,
+      error_code: "PROVIDER_AUTH_FAILED",
+      native_conversation_ref: "private-native-ref",
+      finalization_error: "private-provider-error-text",
+      terminal_at: 9,
+      updated_at: 10,
+    });
+
+    const rpc = await startDaemonRpc({
+      core: daemon.core,
+      coordinatorId: "operator",
+      stateDir,
+      operator: {
+        coordinatorId: "operator",
+        status: () => daemonOperatorStatus(daemon),
+        stop: () => ({ response: { accepted: true }, shutdown: async () => undefined }),
+      },
+    });
+    const service = await startOperatorUi({ configPath, port: 0 });
+    const before = readFileSync(configPath);
+    const turnCountBefore = Number(daemon.db.raw.prepare("SELECT COUNT(*) AS count FROM turns").get()?.count);
+    try {
+      const response = await fetch(`${service.url}/api/status`, {
+        headers: { host: new URL(service.url).host, "x-operator-token": service.token },
+      });
+      expect(response.status).toBe(200);
+      const payload = await response.json();
+      expect(payload).toMatchObject({
+        status: "ready",
+        readiness: "READY",
+        runtime_observation: "observed-running",
+        runtime_commit: null,
+        daemon_pid: process.pid,
+        active_turn_count: 1,
+        active_turns: [{
+          turn_id: "turn-live",
+          session_id: "session-live",
+          project_id: "project-main",
+          provider: "mock",
+          model: "mock-model",
+          effort: "high",
+          state: "RUNNING",
+          timestamp: 4,
+        }],
+        error_turn_count: 1,
+        error_turns: [{ turn_id: "turn-failed", model: "mock-model", effort: "high", error_code: "PROVIDER_AUTH_FAILED", timestamp: 9 }],
+      });
+      expect(JSON.stringify(payload)).not.toContain("private-");
+      expect(readFileSync(configPath)).toEqual(before);
+      expect(Number(daemon.db.raw.prepare("SELECT COUNT(*) AS count FROM turns").get()?.count)).toBe(turnCountBefore);
+
+      writeFileSync(configPath, JSON.stringify({
+        ...config,
+        coordinator_id: "wrong-coordinator",
+        coordinators: [...config.coordinators, { coordinator_id: "wrong-coordinator", display_name: "Wrong", allowed_project_ids: [] }],
+      }));
+      const forbidden = await fetch(`${service.url}/api/status`, {
+        headers: { host: new URL(service.url).host, "x-operator-token": service.token },
+      });
+      expect(forbidden.status).toBe(403);
+    } finally {
+      await service.close();
+      await rpc.stop();
+      await daemon.stop();
+      daemon.db.close();
+    }
   }, 20_000);
 });

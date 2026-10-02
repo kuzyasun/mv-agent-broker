@@ -28,6 +28,30 @@
       <p class="muted">Save settings, then restart MCP to use them in new sessions. A backup is created with every save.</p>
     </section>
 
+    <section class="card live-card" aria-labelledby="live-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">LIVE BROKER</p>
+          <h2 id="live-heading">Runtime overview</h2>
+        </div>
+        <button id="refresh-status" class="button secondary" type="button">Refresh status</button>
+      </div>
+      <p id="live-message" class="status" role="status" aria-live="polite">Loading live status…</p>
+      <div id="live-runtime" class="live-runtime"></div>
+      <div class="overview-grid">
+        <section class="overview-panel" aria-labelledby="active-heading">
+          <h3 id="active-heading">Active jobs</h3>
+          <p id="active-count" class="small-note"></p>
+          <div id="active-jobs" class="live-list" role="list"></div>
+        </section>
+        <section class="overview-panel" aria-labelledby="errors-heading">
+          <h3 id="errors-heading">Recent turn errors</h3>
+          <p id="error-count" class="small-note"></p>
+          <div id="turn-errors" class="live-list" role="list"></div>
+        </section>
+      </div>
+    </section>
+
     <section class="card">
       <div class="section-heading">
         <div>

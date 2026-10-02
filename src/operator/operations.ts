@@ -46,10 +46,16 @@ export interface RuntimeRecord {
 export interface OperatorStatus {
   status: "ready" | "stopped" | "unavailable";
   readiness: string;
+  runtime_observation: "observed-running" | "last-known" | "unknown";
   runtime_commit: string | null;
   runtime_path: string | null;
   daemon_pid: number | null;
-  active_turns: unknown[] | null;
+  active_turn_count: number | null;
+  active_turns: Array<Record<string, unknown>> | null;
+  active_turns_truncated: boolean | null;
+  error_turn_count: number | null;
+  error_turns: Array<Record<string, unknown>> | null;
+  error_turns_truncated: boolean | null;
   pending_intents: unknown[] | null;
   state_dir: string;
   [key: string]: unknown;
@@ -235,6 +241,38 @@ async function requestDaemon(config: OperatorConfig, method: string): Promise<un
   }
 }
 
+function projectStatusRows(value: unknown, limit: number, includeErrorCode: boolean): Array<Record<string, unknown>> | null {
+  if (!Array.isArray(value)) return null;
+  const projected: Array<Record<string, unknown>> = [];
+  for (const row of value.slice(0, limit)) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+    const item = row as Record<string, unknown>;
+    if (
+      typeof item.turn_id !== "string" ||
+      typeof item.session_id !== "string" ||
+      typeof item.project_id !== "string" ||
+      typeof item.provider !== "string" ||
+      typeof item.model !== "string" ||
+      (item.effort !== null && typeof item.effort !== "string") ||
+      typeof item.state !== "string" ||
+      typeof item.timestamp !== "number"
+    ) return null;
+    if (includeErrorCode && typeof item.error_code !== "string") return null;
+    projected.push({
+      turn_id: item.turn_id,
+      session_id: item.session_id,
+      project_id: item.project_id,
+      provider: item.provider,
+      model: item.model,
+      effort: item.effort,
+      state: item.state,
+      timestamp: item.timestamp,
+      ...(includeErrorCode ? { error_code: item.error_code } : {}),
+    });
+  }
+  return projected;
+}
+
 async function waitForReady(config: OperatorConfig): Promise<Record<string, unknown>> {
   const deadline = Date.now() + READY_TIMEOUT_MS;
   let lastError: unknown;
@@ -291,7 +329,13 @@ export async function startOperator(config: OperatorConfig, configPath: string, 
     runtime_path: record.runtime_path,
     state_dir: config.state_dir,
     daemon_pid: record.daemon_pid,
+    runtime_observation: "observed-running",
+    active_turn_count: status.active_turn_count ?? null,
     active_turns: status.active_turns ?? [],
+    active_turns_truncated: status.active_turns_truncated ?? false,
+    error_turn_count: status.error_turn_count ?? null,
+    error_turns: status.error_turns ?? [],
+    error_turns_truncated: status.error_turns_truncated ?? false,
     pending_intents: status.pending_intents ?? [],
   };
 }
@@ -301,14 +345,38 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
   try {
     const status = await requestDaemon(config, "operator/status") as Record<string, unknown>;
     const readiness = String(status.readiness ?? status.state ?? "UNAVAILABLE");
+    if (readiness === "READY") {
+      return {
+        status: "ready",
+        readiness,
+        runtime_observation: "observed-running",
+        runtime_commit: typeof status.runtime_commit === "string" ? status.runtime_commit : null,
+        runtime_path: typeof status.runtime_path === "string" ? status.runtime_path : null,
+        daemon_pid: typeof status.daemon_pid === "number" ? status.daemon_pid : null,
+        active_turn_count: typeof status.active_turn_count === "number" ? status.active_turn_count : null,
+        active_turns: typeof status.active_turn_count === "number" ? projectStatusRows(status.active_turns, 30, false) : null,
+        active_turns_truncated: typeof status.active_turns_truncated === "boolean" ? status.active_turns_truncated : null,
+        error_turn_count: typeof status.error_turn_count === "number" ? status.error_turn_count : null,
+        error_turns: typeof status.error_turn_count === "number" ? projectStatusRows(status.error_turns, 10, true) : null,
+        error_turns_truncated: typeof status.error_turns_truncated === "boolean" ? status.error_turns_truncated : null,
+        pending_intents: Array.isArray(status.pending_intents) ? status.pending_intents : null,
+        state_dir: config.state_dir,
+      };
+    }
     return {
-      status: readiness === "READY" ? "ready" : "unavailable",
+      status: "unavailable",
       readiness,
-      runtime_commit: typeof status.runtime_commit === "string" ? status.runtime_commit : null,
-      runtime_path: typeof status.runtime_path === "string" ? status.runtime_path : null,
-      daemon_pid: typeof status.daemon_pid === "number" ? status.daemon_pid : null,
-      active_turns: Array.isArray(status.active_turns) ? status.active_turns : null,
-      pending_intents: Array.isArray(status.pending_intents) ? status.pending_intents : null,
+      runtime_observation: record ? "last-known" : "unknown",
+      runtime_commit: record?.runtime_commit ?? null,
+      runtime_path: record?.runtime_path ?? null,
+      daemon_pid: record?.daemon_pid ?? null,
+      active_turn_count: null,
+      active_turns: null,
+      active_turns_truncated: null,
+      error_turn_count: null,
+      error_turns: null,
+      error_turns_truncated: null,
+      pending_intents: null,
       state_dir: config.state_dir,
     };
   } catch (error) {
@@ -316,10 +384,16 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
     return {
       status: error instanceof DaemonRpcError || existsSync(path.join(config.state_dir, "daemon.lock")) ? "unavailable" : "stopped",
       readiness: "UNAVAILABLE",
+      runtime_observation: record ? "last-known" : "unknown",
       runtime_commit: record?.runtime_commit ?? null,
       runtime_path: record?.runtime_path ?? null,
       daemon_pid: record?.daemon_pid ?? null,
+      active_turn_count: null,
       active_turns: null,
+      active_turns_truncated: null,
+      error_turn_count: null,
+      error_turns: null,
+      error_turns_truncated: null,
       pending_intents: null,
       state_dir: config.state_dir,
     };
@@ -352,9 +426,17 @@ export async function stopOperator(config: OperatorConfig): Promise<Record<strin
   return {
     status: "stopped",
     readiness: "UNAVAILABLE",
+    runtime_observation: "last-known",
     runtime_commit: response.runtime_commit ?? null,
     runtime_path: response.runtime_path ?? null,
     state_dir: config.state_dir,
     daemon_pid: response.daemon_pid ?? null,
+    active_turn_count: null,
+    active_turns: null,
+    active_turns_truncated: null,
+    error_turn_count: null,
+    error_turns: null,
+    error_turns_truncated: null,
+    pending_intents: null,
   };
 }

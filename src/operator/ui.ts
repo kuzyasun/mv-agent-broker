@@ -4,7 +4,9 @@ import { closeSync, chmodSync, existsSync, lstatSync, openSync, readFileSync, re
 import { readdir as readdirAsync, realpath as realpathAsync, stat as statAsync } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DaemonRpcError } from "../bridge/rpcClient.ts";
 import { validateOperatorConfig, type OperatorConfig } from "./config.ts";
+import { statusOperator } from "./operations.ts";
 import { parseAntigravityModelCatalog } from "../providers/antigravity/antigravityAdapter.ts";
 import { parseCursorModelCatalog, resolveCursorModel } from "../providers/cursor/cursorAdapter.ts";
 import { boundedSanitizedDetail, resolveBinaryPath, runMetadataProbe } from "../providers/common/readiness.ts";
@@ -458,6 +460,20 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
           sendJson(response, 200, { config: current.value, revision: sha256(current.bytes) });
         } catch (error) {
           sendJson(response, 409, { error: safeError(error) });
+        }
+        return;
+      }
+      if (request.method === "GET" && pathName === "/api/status") {
+        try {
+          const current = readRawConfig(configPath);
+          const currentConfig = validateRawConfig(configPath, current.value);
+          sendJson(response, 200, await statusOperator(currentConfig));
+        } catch (error) {
+          if (error instanceof DaemonRpcError && error.code === "UNAUTHORIZED") {
+            sendJson(response, 403, { error: "forbidden" });
+          } else {
+            sendJson(response, 409, { error: safeError(error) });
+          }
         }
         return;
       }

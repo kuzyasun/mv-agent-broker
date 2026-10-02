@@ -86,6 +86,37 @@ describe("operator settings UI service", () => {
     })).status).toBe(403);
   });
 
+  it("returns an honest unavailable status without mutating saved configuration", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "operator-ui-status-"));
+    roots.push(root);
+    const configPath = path.join(root, "operator.json");
+    writeFileSync(configPath, JSON.stringify(config()));
+    const original = readFileSync(configPath);
+    const service = await startOperatorUi({ configPath, port: 0 });
+    services.push(service);
+
+    expect((await fetch(`${service.url}/api/status`)).status).toBe(401);
+    expect((await request(service, "GET", "/api/status", undefined, {
+      "x-operator-token": service.token,
+      origin: "http://evil.example",
+    })).status).toBe(403);
+    const localhost = await fetch(`${service.url.replace("127.0.0.1", "localhost")}/api/status`, {
+      headers: { "x-operator-token": service.token, host: new URL(service.url).host },
+    });
+    expect(localhost.status).toBe(403);
+
+    const response = await request(service, "GET", "/api/status", undefined, { "x-operator-token": service.token });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: "stopped",
+      readiness: "UNAVAILABLE",
+      runtime_observation: "unknown",
+      active_turns: null,
+      error_turns: null,
+    });
+    expect(readFileSync(configPath)).toEqual(original);
+  });
+
   it("lists one authenticated folder level without exposing file contents", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "operator-ui-folders-"));
     roots.push(root);

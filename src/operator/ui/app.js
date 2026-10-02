@@ -164,6 +164,95 @@
     if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
     return body;
   };
+  const readLiveStatus = () => api("/api/status");
+  const liveMessage = (message, kind = "") => {
+    const node = $("live-message");
+    node.textContent = message;
+    node.className = `status ${kind}`;
+  };
+  const liveTimestamp = (value) => {
+    const timestamp = Number(value);
+    return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : "Unknown time";
+  };
+  const liveRuntimeItem = (label, value) => {
+    const item = make("div");
+    item.className = "live-runtime-item";
+    item.append(make("strong", label), make("span", value));
+    return item;
+  };
+  const liveCount = (payload, countKey, rowsKey, truncatedKey) => {
+    if (!Array.isArray(payload[rowsKey])) return "Not observed.";
+    const count = payload[countKey];
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 0) return "Count unavailable.";
+    return payload[truncatedKey]
+      ? `Showing ${payload[rowsKey].length} of ${count} newest.`
+      : `${count} total.`;
+  };
+  const renderLiveRows = (container, rows, errorRows = false) => {
+    container.replaceChildren();
+    if (!Array.isArray(rows)) {
+      container.append(make("p", errorRows ? "Turn error data unavailable." : "Active job data unavailable."));
+      return;
+    }
+    if (!rows.length) {
+      container.append(make("p", errorRows ? "No recorded turn errors." : "No active jobs."));
+      return;
+    }
+    rows.slice(0, errorRows ? 10 : 30).forEach((entry) => {
+      const row = make("div");
+      row.className = "live-row";
+      row.setAttribute("role", "listitem");
+      const code = errorRows ? ` · error ${entry.error_code || "unknown"}` : "";
+      row.append(
+        make("strong", `${entry.turn_id || "Unknown turn"} · ${entry.state || "Unknown state"}${code}`),
+        make("span", `Session ${entry.session_id || "unknown"} · project ${entry.project_id || "unknown"}`),
+        make("span", `${entry.provider || "unknown provider"} · ${entry.model || "unknown model"} · effort ${entry.effort || "No override"} · ${liveTimestamp(entry.timestamp)}`),
+      );
+      container.append(row);
+    });
+  };
+  const renderLiveStatus = (payload) => {
+    const live = payload && payload.status === "ready" && payload.readiness === "READY";
+    const observation = payload && payload.runtime_observation || "unknown";
+    const runtimeVersion = typeof payload?.runtime_commit === "string" && payload.runtime_commit
+      ? `${observation === "last-known" ? "Last-known " : ""}${payload.runtime_commit}`
+      : live
+        ? "Unknown (source/no manifest)"
+        : observation === "last-known"
+          ? "Unknown (last-known metadata)"
+          : "Unknown";
+    const runtimePid = typeof payload?.daemon_pid === "number"
+      ? `${observation === "last-known" ? "Last-known " : ""}PID ${payload.daemon_pid}`
+      : "Not observed";
+    $("live-runtime").replaceChildren(
+      liveRuntimeItem("Readiness", payload?.readiness || "UNAVAILABLE"),
+      liveRuntimeItem("Runtime version", runtimeVersion),
+      liveRuntimeItem("Daemon process", runtimePid),
+    );
+    if (live) {
+      liveMessage("Daemon READY. Runtime process metadata is observed from the private status RPC.", "success");
+    } else if (payload?.status === "stopped") {
+      liveMessage("Daemon stopped. Active jobs and turn errors are unavailable.", "error");
+    } else {
+      liveMessage(`Daemon unavailable (${payload?.readiness || "unknown state"}). Active jobs and turn errors are unavailable.`, "error");
+    }
+    $("active-count").textContent = liveCount(payload || {}, "active_turn_count", "active_turns", "active_turns_truncated");
+    $("error-count").textContent = liveCount(payload || {}, "error_turn_count", "error_turns", "error_turns_truncated");
+    renderLiveRows($("active-jobs"), live ? payload.active_turns : null);
+    renderLiveRows($("turn-errors"), live ? payload.error_turns : null, true);
+  };
+  async function refreshLiveStatus() {
+    const button = $("refresh-status");
+    await withButtonBusy(button, async () => {
+      liveMessage("Refreshing live status…");
+      try {
+        renderLiveStatus(await readLiveStatus());
+      } catch (error) {
+        renderLiveStatus({ status: "unavailable", readiness: "UNAVAILABLE" });
+        liveMessage(`Status request failed: ${error.message}`, "error");
+      }
+    });
+  }
   const uniqueId = (prefix) => `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
   const find = (items, key, value) => (items || []).find((item) => item[key] === value);
   const selectedProject = (route) => find(state.projects, "project_id", route.project_id);
@@ -926,6 +1015,7 @@
     if (!dirty || window.confirm("Discard unsaved changes and reload?")) runConfigOperation($("reload"), load);
   });
   $("save").addEventListener("click", () => runConfigOperation($("save"), save));
+  $("refresh-status").addEventListener("click", () => { void refreshLiveStatus(); });
   $("add-route").addEventListener("click", () => {
     const project = find(state.projects, "project_id", projectFilter) || state.projects[0];
     const account = state.accounts[0];
@@ -966,4 +1056,5 @@
     });
   }
   runConfigOperation($("reload"), load);
+  void refreshLiveStatus();
 })();

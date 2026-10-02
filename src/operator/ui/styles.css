@@ -49,6 +49,20 @@ h2 { margin: .15rem 0 0; font-size: 1.35rem; letter-spacing: -.025em; }
 .status:empty { display: none; }
 .status.success { background: #e8f5ef; color: var(--green); }
 .status.error { background: #fcecec; color: var(--red); }
+.live-card { border-color: #c9d8f2; }
+.live-runtime { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .65rem; margin: .7rem 0 1rem; }
+.live-runtime-item { padding: .65rem .75rem; border: 1px solid #d8e3f5; border-radius: 9px; background: #f7faff; }
+.live-runtime-item strong, .live-runtime-item span { display: block; overflow-wrap: anywhere; }
+.live-runtime-item strong { color: #435167; font-size: .73rem; text-transform: uppercase; letter-spacing: .06em; }
+.live-runtime-item span { margin-top: .2rem; font-size: .86rem; }
+.overview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.overview-panel { min-width: 0; padding: .9rem; border: 1px solid var(--line); border-radius: 12px; background: #fcfdff; }
+.overview-panel h3 { margin: 0; font-size: 1rem; }
+.overview-panel > .small-note { margin: .35rem 0 .7rem; }
+.live-list { display: grid; gap: .55rem; }
+.live-row { display: grid; gap: .2rem; padding: .65rem .7rem; border-left: 3px solid #9eb8ed; background: #f7faff; font-size: .78rem; line-height: 1.35; }
+.live-row strong { overflow-wrap: anywhere; }
+.live-row span { color: var(--muted); overflow-wrap: anywhere; }
 .route-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 1rem; }
 .route-card, .project-card { border: 1px solid var(--line); border-radius: 12px; padding: 1rem; background: #fcfdff; }
 .route-card header, .project-card header { display: flex; justify-content: space-between; gap: .6rem; align-items: center; margin-bottom: .8rem; }
@@ -96,5 +110,6 @@ textarea { min-height: 7rem; resize: vertical; }
   .topbar, .intro { display: block; }
   .top-actions { margin-top: 1rem; }
   .field-grid, .advanced-grid, .snippet-grid, .project-card .project-fields { grid-template-columns: 1fr; }
+  .live-runtime, .overview-grid { grid-template-columns: 1fr; }
   .manual-folder { display: grid; align-items: stretch; }
 }

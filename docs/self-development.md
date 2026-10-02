@@ -31,8 +31,10 @@ preserved. Native CLI login remains provider-owned; account profile
 metadata does not switch a subscription plan or create a new vendor login.
 
 The accepted runtime and quarantine-operation checkpoints are complete. The
-next practical priorities are simple live UI status/errors, clear saved-versus-
-applied settings for new sessions, and a usable new-project startup path.
+live operator UI status/error overview is now implemented with authenticated
+manual refresh and honest unavailable states. The next practical priorities
+are clear saved-versus-applied settings for new sessions and a usable
+new-project startup path.
 Total storage budgeting, full native certification, and rare recovery cases
 remain deferred.
 
@@ -174,7 +176,7 @@ Production adapters do not rely on reading Desktop chat caches for reports.
 | Preflight and binding | Observed native readiness and lifetime account/config binding completed; actual vendor account identity and mandatory native confinement remain unverified |
 | Workspaces/resources | Bounded output/report artifacts and broker-created Git worktrees implemented; total storage admission including staging remains |
 | Complete native feedback loop | Caller-independent four-turn harness implemented and verified offline; combined native R1/S1/R2/S2 continuity and cancellation during native tools remain open |
-| Operator setup | Live UI status/errors, saved-versus-applied settings for new sessions, and practical new-project startup |
+| Operator setup | Saved-versus-applied settings for new sessions and practical new-project startup; live UI status/errors are implemented |
 | Acceptance closure | A01–A53 evidence by actual platform/provider/role/profile; retain unknown/failed statuses where no native proof exists |
 
 The daemon deadline timer and graceful-drain package is the first completed

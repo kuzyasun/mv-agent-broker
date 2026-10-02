@@ -9,6 +9,7 @@ import { listNonterminalTurns, listPendingIntents } from "../storage/repo.ts";
 import { BrokerError } from "../shared/errors.ts";
 import { applyOperatorConfig, loadOperatorConfig, type OperatorConfig } from "./config.ts";
 import { readRuntimeRecord, startOperator, statusOperator, stopOperator } from "./operations.ts";
+import { projectOperatorOverview } from "./overview.ts";
 import { inspectQuarantine, reconcileWorkspace } from "./recovery.ts";
 import { startOperatorUi } from "./ui.ts";
 
@@ -127,22 +128,20 @@ async function runStdio(config: OperatorConfig): Promise<void> {
   }
 }
 
-function daemonOperatorStatus(daemon: Awaited<ReturnType<typeof startDaemon>>): Record<string, unknown> {
+export function daemonOperatorStatus(daemon: Awaited<ReturnType<typeof startDaemon>>): Record<string, unknown> {
   const runtimePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const manifestPath = path.join(runtimePath, "runtime-manifest.json");
   const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) as { commit: string } : null;
+  const overview = projectOperatorOverview(daemon.db);
   return {
     readiness: daemon.lifecycle.currentState,
     state: daemon.lifecycle.currentState,
     incarnation: daemon.lifecycle.currentIncarnation,
     daemon_pid: process.pid,
+    runtime_observation: "observed-running",
     runtime_commit: manifest?.commit ?? null,
     runtime_path: manifest ? runtimePath : null,
-    active_turns: listNonterminalTurns(daemon.db).map(turn => ({
-      turn_id: turn.turn_id,
-      state: turn.state,
-      session_id: turn.session_id,
-    })),
+    ...overview,
     pending_intents: listPendingIntents(daemon.db).map(intent => ({
       intent_id: intent.intent_id,
       kind: intent.kind,

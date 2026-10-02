@@ -42,6 +42,10 @@ Known limitations (intentional, fail-closed):
 - Daemon-owned deadline supervision runs during execution and graceful drain.
   Polling defaults to 50ms; `AB_DEADLINE_POLL_MS` accepts integers 5..60000.
   Native descendant quiescence remains a separate acceptance gate.
+- The loopback operator UI now has an authenticated, manual-refresh live broker
+  card with daemon readiness, observed runtime identity, bounded active jobs,
+  and recent turn error codes. Stopped or unavailable daemons report those
+  lists as unavailable; source runs show an unknown runtime version.
 - Operator recovery and triage runbook: see docs/recovery-runbook.md.
 
 No capability is `supported` until the native P0 spike passes
