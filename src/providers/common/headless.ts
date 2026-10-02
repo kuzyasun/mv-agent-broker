@@ -11,6 +11,7 @@
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { BrokerError } from "../../shared/errors.ts";
 import {
@@ -130,6 +131,20 @@ export function resolveWindowsBinary(binary: string): string {
   return binary;
 }
 
+/** A WindowsApps alias can appear in where.exe output without a readable executable. */
+export function resolveWindowsPowerShell(): string {
+  const pwsh = resolveWindowsBinary("pwsh.exe");
+  const root = Object.entries(process.env).find(([key]) => key.toUpperCase() === "SYSTEMROOT")?.[1] ?? "C:\\Windows";
+  for (const candidate of [pwsh, path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")]) {
+    if (!path.isAbsolute(candidate)) continue;
+    try {
+      const canonical = realpathSync(candidate);
+      if (statSync(canonical).isFile()) return canonical;
+    } catch { /* An unavailable app alias is not an executable shell. */ }
+  }
+  throw new BrokerError("PROVIDER_INCOMPATIBLE", "No readable PowerShell executable is available for the provider wrapper", { executionStarted: false });
+}
+
 /** Build the final {command, args} pair, wrapping Windows shims safely. */
 export function prepareCommand(binary: string, args: string[]): { command: string; args: string[]; windowsVerbatim: boolean } {
   if (process.platform !== "win32") return { command: binary, args, windowsVerbatim: false };
@@ -148,9 +163,7 @@ export function prepareCommand(binary: string, args: string[]): { command: strin
     return { command: comspec, args: ["/d", "/s", "/c", cmdline], windowsVerbatim: true };
   }
   if (target.kind === "powershell-shim") {
-    const pwsh = resolveWindowsBinary("pwsh.exe");
-    const root = Object.entries(process.env).find(([key]) => key.toUpperCase() === "SYSTEMROOT")?.[1] ?? "C:\\Windows";
-    const shell = path.isAbsolute(pwsh) ? pwsh : path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const shell = resolveWindowsPowerShell();
     return {
       command: shell,
       args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", resolved, ...args],

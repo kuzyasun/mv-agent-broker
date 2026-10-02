@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, openSync, readSync, realpathSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { BrokerError } from "../../shared/errors.ts";
-import { classifyWindowsTarget, prepareCommand, resolveWindowsBinary } from "./headless.ts";
+import { classifyWindowsTarget, prepareCommand, resolveWindowsBinary, resolveWindowsPowerShell } from "./headless.ts";
 
 /** Which channel produced an observation. "config_catalog" runs no subprocess. */
 export type ReadinessSource = "cli_metadata_probe" | "config_catalog";
@@ -231,9 +231,7 @@ export function fingerprintBinaryTarget(resolvedPath: string): LaunchedBinaryFin
   const identity = (filename:string) => { const resolved=realpathSync(filename);return {canonical_path:resolved,file_bytes_sha256:hashFileBounded(resolved)}; };
   if (wrapperKind === "cmd-shim") shellIdentity = resolveBinaryPath(process.env.ComSpec ?? "cmd.exe");
   if (wrapperKind === "powershell-shim") {
-    const pwsh = resolveWindowsBinary("pwsh.exe");
-    const root = Object.entries(process.env).find(([k]) => k.toUpperCase() === "SYSTEMROOT")?.[1] ?? "C:\\Windows";
-    shellIdentity = resolveBinaryPath(path.isAbsolute(pwsh) ? pwsh : path.join(root,"System32","WindowsPowerShell","v1.0","powershell.exe"));
+    shellIdentity = resolveWindowsPowerShell();
   }
   if ((wrapperKind === "cmd-shim" || wrapperKind === "powershell-shim") && !shellIdentity) throw new BrokerError("PROVIDER_INCOMPATIBLE","Wrapper shell identity unavailable",{executionStarted:false});
   const fd=openSync(canonical,"r");
