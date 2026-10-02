@@ -33,6 +33,54 @@ SELECT pin_id, artifact_id, root_kind, owner_session_id, owner_turn_id FROM arti
   3. *Unresolved:* Leave quarantined while processes or disk states are uncertain.
 - **Guarded session close (§6.4):** After turn reaches a terminal state (`ABANDONED`, `FAILED`, etc.), close the `BLOCKED` session via `agent_session_stop`. Close releases logical session capacity slots; it **never** deletes workspaces, transcripts, or historical records.
 
+## 2a. Observed stale worktree provisioning quarantine
+
+The supported operator workflow is intentionally narrower than UNKNOWN-turn
+recovery:
+
+1. Close the failed provisioning session through the guarded stop operation
+   while the daemon is running.
+   Closing the session is an idle-only lifecycle action and intentionally does
+   **not** clear its workspace quarantine.
+2. Stop the daemon cleanly. An existing `<state_dir>/daemon.lock`, including a
+   stale lock, is a refusal condition; never remove it automatically.
+3. Inspect the bounded evidence while offline:
+
+   ```powershell
+   npm run broker -- quarantine-inspect --config C:\ops\agent-broker.json --workspace-id <workspace-id>
+   ```
+
+4. Reconcile only a fully closed failed broker worktree with no native inference:
+
+   ```powershell
+   npm run broker -- reconcile-workspace --config C:\ops\agent-broker.json --workspace-id <workspace-id> --note "Confirmed failed allocation absent, old Git processes gone, no inference."
+   ```
+
+   The exact supported quarantine reason is
+   `worktree-provisioning: git-add-failed`. The generated allocation path must
+   be absent and absent from `git worktree list`; the journal must match the
+   registered source common directory and generated session allocation under
+   `<state_dir>/worktrees`, be in `adding` with no completion receipt, and have
+   exactly one failed provision intent. A Git launch receipt is allowed only
+   after all recorded processes are observed absent. All
+   sessions bound to the target must be `CLOSED` with completed close intents,
+   with no native context or turns. There must be no UNKNOWN/nonterminal turns,
+   pending intents, or active execution/workspace reservations anywhere in the
+   registry. Unrelated IDLE sessions and their session slots may remain.
+5. Start the daemon again only after reconciliation succeeds.
+
+The command performs a bounded read-only Windows process probe for any
+recorded root/helper/owner PIDs and refuses if the probe is unavailable or a
+PID exists. It makes a private consistent SQLite backup and JSON receipt under
+`<state_dir>/recovery/` before revalidating guards inside `BEGIN IMMEDIATE`.
+On success it changes only `workspaces.quarantined` and
+`workspaces.quarantine_reason`, then appends
+`operator_workspace_quarantine_reconciled`. It never deletes or adopts a path,
+unregisters Git metadata, kills a process, removes a lock, releases unrelated
+reservations, or rewrites session, intent, idempotency, native, or workspace
+history. Other quarantine reasons and any native-dispatched/uncertain operation remain
+unsupported and must stay quarantined.
+
 ## 3. Crash windows table (§14.3)
 
 | Crash Window | Spec Behavior | Current Implementation |
@@ -78,5 +126,13 @@ does not release execution resources or establish process quiescence.
 
 ## 7. Escalation
 
-- **Manual Intervention:** No operator reconciliation MCP tool exists yet in the bridge. Direct SQL modification is a last resort.
-- **Backup Precaution:** Always stop the daemon and take a file-level copy of `registry.sqlite` and the state directory before manual SQL surgery.
+- **Manual Intervention:** The CLI reconciliation workflow above is the only
+  supported operator clearing action, and only for its exact failed
+  worktree case with no native inference. There is no generic force-release or
+  turn-outcome reconciliation command. Direct SQL modification remains a last
+  resort for unsupported cases.
+- **Backup Precaution:** The supported reconciliation creates a private,
+  consistent SQLite backup and JSON receipt before its guarded transaction.
+  For any unsupported manual investigation, stop the daemon and take an
+  offline file-level copy of `registry.sqlite` and relevant state before SQL
+  surgery.

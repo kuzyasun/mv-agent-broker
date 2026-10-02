@@ -263,6 +263,44 @@ running. It never kills a PID, removes a lock, cancels work, or clears a
 quarantine. A new version requires an explicit new accepted commit/runtime;
 there is no hot reload or automatic service installation.
 
+### Stale failed worktree quarantine
+
+The operator has one deliberately narrow offline recovery workflow for a
+broker-created worktree that failed with the exact reason
+`worktree-provisioning: git-add-failed`. Close the failed provisioning session
+through the normal guarded session-stop flow while the daemon is running,
+then stop the daemon cleanly. A
+session close intentionally preserves its workspace quarantine; it does not
+delete the allocation, unregister Git metadata, or rewrite the failed session
+or provision intent.
+
+Inspect the registry without applying configuration or trusting `READY` as an
+admission proof:
+
+```powershell
+npm run broker -- quarantine-inspect --config C:\ops\agent-broker.json
+npm run broker -- quarantine-inspect --config C:\ops\agent-broker.json --workspace-id <workspace-id>
+```
+
+After confirming the output and the operator explanation, reconcile the one
+supported case:
+
+```powershell
+npm run broker -- reconcile-workspace --config C:\ops\agent-broker.json --workspace-id <workspace-id> --note "Confirmed failed allocation absent, old Git processes gone, no inference."
+```
+
+Reconciliation refuses an existing state-directory lock, active or unknown
+turns, pending intents, active execution/workspace reservations, open target sessions, native context,
+existing or registered allocation paths, mismatched journals, live recorded
+Windows PIDs, and every other quarantine reason. Unrelated IDLE sessions and
+their session-capacity slots may remain. Git may have launched; no native
+inference may have started. It takes a private consistent
+SQLite backup and writes a JSON receipt under `<state_dir>/recovery/`, then
+atomically clears only the target quarantine and appends an audit event. It
+never stops or kills a process, removes a lock, deletes workspace contents,
+prunes Git metadata, adopts a path, or releases unrelated resources. Start
+the daemon again only after the command succeeds.
+
 ## Selecting a route from a coordinator
 
 Use [these short coordinator instructions](coordinator-instructions.md) in the

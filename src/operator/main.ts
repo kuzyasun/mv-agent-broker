@@ -9,16 +9,27 @@ import { listNonterminalTurns, listPendingIntents } from "../storage/repo.ts";
 import { BrokerError } from "../shared/errors.ts";
 import { applyOperatorConfig, loadOperatorConfig, type OperatorConfig } from "./config.ts";
 import { readRuntimeRecord, startOperator, statusOperator, stopOperator } from "./operations.ts";
+import { inspectQuarantine, reconcileWorkspace } from "./recovery.ts";
 import { startOperatorUi } from "./ui.ts";
 
-type Command = "validate" | "stdio" | "daemon" | "mcp-config" | "ui" | "start" | "status" | "stop";
+type Command = "validate" | "stdio" | "daemon" | "mcp-config" | "ui" | "start" | "status" | "stop" | "quarantine-inspect" | "reconcile-workspace";
 
-function parseArgs(argv: string[]): { command: Command; configPath: string; connect: boolean; port: number; ref: string } {
+function parseArgs(argv: string[]): {
+  command: Command;
+  configPath: string;
+  connect: boolean;
+  port: number;
+  ref: string;
+  workspaceId?: string;
+  note?: string;
+} {
   let command: Command = "stdio";
   let configPath: string | undefined;
   let connect = false;
   let port = 4318;
   let ref = "HEAD";
+  let workspaceId: string | undefined;
+  let note: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--connect") { connect = true; continue; }
@@ -38,7 +49,17 @@ function parseArgs(argv: string[]): { command: Command; configPath: string; conn
       ref = value;
       continue;
     }
-    if (arg === "validate" || arg === "stdio" || arg === "daemon" || arg === "mcp-config" || arg === "ui" || arg === "start" || arg === "status" || arg === "stop") {
+    if (arg === "--workspace-id") {
+      workspaceId = argv[++index];
+      if (!workspaceId) throw new Error("--workspace-id requires a workspace id.");
+      continue;
+    }
+    if (arg === "--note") {
+      note = argv[++index];
+      if (!note) throw new Error("--note requires an operator explanation.");
+      continue;
+    }
+    if (arg === "validate" || arg === "stdio" || arg === "daemon" || arg === "mcp-config" || arg === "ui" || arg === "start" || arg === "status" || arg === "stop" || arg === "quarantine-inspect" || arg === "reconcile-workspace") {
       command = arg;
       continue;
     }
@@ -48,7 +69,13 @@ function parseArgs(argv: string[]): { command: Command; configPath: string; conn
   if (connect && command !== "mcp-config") throw new Error("--connect is only supported by mcp-config.");
   if (port !== 4318 && command !== "ui") throw new Error("--port is only supported by ui.");
   if (ref !== "HEAD" && command !== "start") throw new Error("--ref is only supported by start.");
-  return { command, configPath: path.resolve(configPath), connect, port, ref };
+  if (workspaceId !== undefined && command !== "quarantine-inspect" && command !== "reconcile-workspace") {
+    throw new Error("--workspace-id is only supported by quarantine-inspect or reconcile-workspace.");
+  }
+  if (note !== undefined && command !== "reconcile-workspace") throw new Error("--note is only supported by reconcile-workspace.");
+  if (command === "reconcile-workspace" && workspaceId === undefined) throw new Error("reconcile-workspace requires --workspace-id.");
+  if (command === "reconcile-workspace" && note === undefined) throw new Error("reconcile-workspace requires --note.");
+  return { command, configPath: path.resolve(configPath), connect, port, ref, workspaceId, note };
 }
 
 function binaryPins(config: OperatorConfig): Record<string, string | undefined> {
@@ -224,7 +251,7 @@ function printMcpConfig(configPath: string, config: OperatorConfig, connect: boo
 }
 
 async function main(): Promise<void> {
-  const { command, configPath, connect, port, ref } = parseArgs(process.argv.slice(2));
+  const { command, configPath, connect, port, ref, workspaceId, note } = parseArgs(process.argv.slice(2));
   if (command === "ui") {
     await runUi(configPath, port);
     return;
@@ -242,6 +269,10 @@ async function main(): Promise<void> {
     process.stdout.write(`${JSON.stringify(await statusOperator(config))}\n`);
   } else if (command === "stop") {
     process.stdout.write(`${JSON.stringify(await stopOperator(config))}\n`);
+  } else if (command === "quarantine-inspect") {
+    process.stdout.write(`${JSON.stringify(inspectQuarantine(config.state_dir, workspaceId))}\n`);
+  } else if (command === "reconcile-workspace") {
+    process.stdout.write(`${JSON.stringify(await reconcileWorkspace({ stateDir: config.state_dir, workspaceId: workspaceId!, note: note! }))}\n`);
   } else {
     await runStdio(config);
   }

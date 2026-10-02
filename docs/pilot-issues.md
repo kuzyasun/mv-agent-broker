@@ -9,6 +9,30 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-02: Stale failed worktree quarantine required explicit offline release
+
+The observed Beehive worktree provisioning failure was durably recorded as
+`worktree-provisioning: git-add-failed`. The generated allocation was absent
+and unregistered in Git, but the failed session's workspace quarantine
+correctly continued to block admission after the session was closed. Closing
+the session is intentionally not a quarantine-release operation.
+
+Impact: the corrected coverage configuration could not start a replacement
+worktree until an operator had a bounded, auditable release path. Workaround:
+close the failed session, stop the daemon, inspect the exact journal and
+quiescence evidence, then run the offline `reconcile-workspace` command. The
+command supports only this fully closed case with no native inference;
+the original Git launch receipt is retained and its processes must be absent.
+It creates a
+private SQLite backup and JSON receipt, clears one quarantine flag, and writes
+an audit event. Unknown/active turns, pending intents, execution/workspace reservations, existing
+or registered paths, live recorded PIDs, mismatched journals, and other
+quarantine reasons remain refused.
+
+Status: resolved by the explicit operator workflow. No provider retry,
+inference, path deletion, Git pruning, or generic force-release behavior was
+added.
+
 ## 2026-10-02: Beehive snapshot and Windows worktree blockers
 
 Beehive Stage review could not start: snapshot `INPUT_LIMIT` at an ignored Dart
