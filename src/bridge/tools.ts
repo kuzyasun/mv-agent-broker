@@ -13,6 +13,8 @@ import type { SessionRecord, TurnRecord } from "../shared/api-types.ts";
 export interface BridgeContext {
   coordinatorId: string;
   core: BrokerCore;
+  /** Cancellation for a read-only event wait when its transport disconnects. */
+  signal?: AbortSignal;
   /** Daemon readiness/incarnation surfaced by the bootstrap layer (§10.1.2). */
   daemonState?: string;
   incarnation?: string;
@@ -190,7 +192,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_turn_events",
-      description: "Durable bounded event page with monotonic cursor (§10.5). wait_ms is accepted and currently resolves immediately.",
+      description: "Durable bounded event page with monotonic cursor (§10.5). wait_ms waits for new events, terminal state, or timeout.",
       inputSchema: {
         type: "object",
         properties: { turn_id: str, after_cursor: int(0, Number.MAX_SAFE_INTEGER), limit: int(1, 200), wait_ms: int(0, 20000) },
@@ -497,7 +499,15 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
       rejectUnknownKeys(rawArgs, ["turn_id", "after_cursor", "limit", "wait_ms"]);
       const limit = optionalInt(rawArgs, "limit", 1, 200) ?? 50;
       const after = optionalInt(rawArgs, "after_cursor", 0, Number.MAX_SAFE_INTEGER) ?? 0;
-      const rows = core.turnEvents(ctx.coordinatorId, requireString(rawArgs, "turn_id"), after, limit);
+      const waitMs = optionalInt(rawArgs, "wait_ms", 0, 20_000) ?? 0;
+      const rows = await core.waitForTurnEvents(
+        ctx.coordinatorId,
+        requireString(rawArgs, "turn_id"),
+        after,
+        limit,
+        waitMs,
+        ctx.signal,
+      );
       return {
         events: rows.map((e) => ({
           cursor: e.seq,

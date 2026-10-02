@@ -3263,6 +3263,31 @@ export class BrokerCore {
     return listEventsByTurn(this.db, turnId, afterSeq, limit);
   }
 
+  /**
+   * Return a durable event page, waiting only on short metadata polls. Each
+   * poll reauthorizes the turn before reading events so revocation cannot turn
+   * an outstanding wait into an event disclosure.
+   */
+  async waitForTurnEvents(
+    coordinatorId: string,
+    turnId: string,
+    afterSeq: number,
+    limit: number,
+    waitMs: number,
+    signal?: AbortSignal,
+  ) {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      throwIfAborted(signal);
+      const turn = this.authorizeTurn(coordinatorId, turnId);
+      const rows = listEventsByTurn(this.db, turnId, afterSeq, limit);
+      if (rows.length > 0 || isTerminalTurnState(turn.state) || waitMs === 0) return rows;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return rows;
+      await waitForEventPoll(signal, Math.min(100, remaining));
+    }
+  }
+
   // ─── helpers ──────────────────────────────────────────────────────────────
 
   private authorizeSession(coordinatorId: string, sessionId: string): SessionRecord {
@@ -3292,6 +3317,31 @@ export class BrokerCore {
 }
 
 // ─── small module-local helpers (kept out of class for testability) ─────────
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw new Error("Event wait aborted.");
+}
+
+function waitForEventPoll(signal: AbortSignal | undefined, delayMs: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Event wait aborted."));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new Error("Event wait aborted."));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
 
 function namespaceOf(project_id: string, owner: string, op: OperationName, key: string) {
   return {

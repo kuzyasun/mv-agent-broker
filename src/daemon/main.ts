@@ -21,8 +21,8 @@ async function main(): Promise<void> {
     const daemon = await startDaemon(env);
     const ctx: McpToolContext = {
       listTools: () => bridgeToolDefs(),
-      callTool: (name, args) =>
-        callBridgeTool({ coordinatorId: env.coordinatorId, core: daemon.core }, name, args),
+      callTool: (name, args, signal) =>
+        callBridgeTool({ coordinatorId: env.coordinatorId, core: daemon.core, signal }, name, args),
     };
     process.stderr.write(
       `agent-broker bridge ready (state=${daemon.lifecycle.currentState} adapters=[${[...daemon.adapters.keys()].join(",")}])\n`,

@@ -30,6 +30,12 @@ JSON edits plus restart select settings for new sessions; existing bindings are
 preserved. Native CLI login remains provider-owned; account profile
 metadata does not switch a subscription plan or create a new vendor login.
 
+The accepted runtime and quarantine-operation checkpoints are complete. The
+next practical priorities are simple live UI status/errors, clear saved-versus-
+applied settings for new sessions, and a usable new-project startup path.
+Total storage budgeting, full native certification, and rare recovery cases
+remain deferred.
+
 The coordinator owns task decomposition and final acceptance. Role preferences
 belong to the broker configuration/coordinator instructions; the MCP connection
 in Codex only exposes the broker's tools. A small instruction file or skill
@@ -40,7 +46,7 @@ policy; UNKNOWN execution never authorizes a replacement launch.
 
 Retain the operator's existing route choices: ZCode Individual Flash/max workers,
 selected GLM/high reviews, Antigravity Gemini 3.8 medium/high, and explicit
-Cursor model/effort (auto was withdrawn). The current economical Cursor worker
+operator-selected Cursor model/effort. The current economical Cursor worker
 uses Luna/high; the stronger large-task preference remains editable by the
 operator. Antigravity long author runs returned server 500 in this package;
 one separate bounded Gemini medium review completed successfully.
@@ -58,8 +64,9 @@ raise effort or change the main coordinator model.
 - Run targeted existing checks for the changed behavior. Run the full suite at
   integration checkpoints or when a failure/cross-module change justifies it.
   Add regression tests for observed failures and material expected behavior.
-- Retrieve final results and bounded event deltas. Until event wait is completed,
-  a client can use bounded polling with backoff; avoid repeated full transcripts.
+- Retrieve final results and bounded event deltas. Use `agent_turn_events` with
+  the last numeric cursor and `wait_ms` 10000 or 20000; after terminal status,
+  retrieve the final result once. Avoid repeated full transcripts.
 - Record broker issues with provider/version, session/turn reference, observable
   error, short reproduction, impact and workaround. Keep credentials/raw native
   thinking out of the log. Missing quota telemetry remains unknown.
@@ -70,18 +77,18 @@ raise effort or change the main coordinator model.
 ### Deferred work and native subagents
 
 Complete A01–A53 closure, exhaustive provider/role/platform certification, total
-storage admission and richer event-wait behavior are later hardening work unless
-an actual pilot problem makes one necessary. Existing incomplete package clones
+storage admission and rare recovery cases are later hardening work unless an
+actual pilot problem makes one necessary. Existing incomplete package clones
 remain unaccepted; do not integrate them wholesale to close the old plan.
 Fresh inputs/slots initialization is part of P1 because it blocks ordinary setup.
 
-Cursor and Antigravity officially document native CLI subagents. First test one
-small task with the installed version; then decide whether exposing a simple
-native-delegation preference adds value. Do not build a nested orchestration
-platform first. Broker-visible workers and vendor-internal subagents are separate:
-internal models, quotas and child-task controls are not automatically observable
-through the current adapter. Parallel execution can improve elapsed time without
-reducing total usage. No native subagent acceptance has been established here.
+Cursor and Antigravity officially document native CLI subagents, and bounded
+smoke evidence exists for both; see [native subagent evidence](native-subagents.md).
+This does not certify full provider/role/platform profiles or enforce child
+models, permissions, counts, cancellation, or quota attribution. Do not build a
+nested orchestration platform first. Broker-visible workers and vendor-internal
+subagents are separate. Parallel execution can improve elapsed time without
+reducing total usage.
 
 References: [Codex MCP connection](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
 [Cursor subagents](https://cursor.com/docs/subagents),
@@ -94,7 +101,7 @@ References: [Codex MCP connection](https://learn.chatgpt.com/docs/extend/mcp?sur
 | ZCode worker | `account:zai-individual-coding-plan/GLM-5.3-Flash`, effort `max` |
 | Selected ZCode reviews | `account:zai-individual-coding-plan/GLM-5.3`, effort `high` |
 | Antigravity worker/reviewer | Gemini 3.8 Flash medium/high by task complexity |
-| Cursor worker/reviewer | `auto` |
+| Cursor worker/reviewer | Explicit operator-selected model/effort (current worker: Luna/high) |
 | Final acceptance | Coordinator inspects actual diff, validates findings and runs appropriate offline gates |
 
 Start Plan is currently unavailable through the verified standalone account
@@ -165,9 +172,9 @@ Production adapters do not rely on reading Desktop chat caches for reports.
 | Effective policy and inputs | Core narrowing and immutable binding completed; native mandatory enforcement, read/search-only reviewer and required-input enforcement remain open |
 | Runtime supervision | Durable launch/process ownership, managed descendant quiescence, crash/disconnect/restart cases and explicit UNKNOWN reconciliation |
 | Preflight and binding | Observed native readiness and lifetime account/config binding completed; actual vendor account identity and mandatory native confinement remain unverified |
-| Workspaces/resources | Bounded output/report artifacts and broker-created Git worktrees implemented; total storage admission including staging and event wait remain |
+| Workspaces/resources | Bounded output/report artifacts and broker-created Git worktrees implemented; total storage admission including staging remains |
 | Complete native feedback loop | Caller-independent four-turn harness implemented and verified offline; combined native R1/S1/R2/S2 continuity and cancellation during native tools remain open |
-| Operator setup | Validated registry configuration, runnable startup packaging, practical recovery/triage workflow |
+| Operator setup | Live UI status/errors, saved-versus-applied settings for new sessions, and practical new-project startup |
 | Acceptance closure | A01–A53 evidence by actual platform/provider/role/profile; retain unknown/failed statuses where no native proof exists |
 
 The daemon deadline timer and graceful-drain package is the first completed
@@ -279,4 +286,7 @@ and preserved dirty worktrees. Antigravity implementation and Cursor independent
 review ran through accepted stable broker a176221; the coordinator fixed confirmed
 findings and verified the final source. Integrated typecheck and full suite passed
 766 tests with one skip across 45 files; 39 worktree tests passed.
-Storage admission, event wait, operator setup, and complete native profiles remain open.
+Storage admission and complete native profiles remain open; the event-wait and
+quarantine-operation checkpoints are accepted. Practical operator follow-ups
+are live UI status/errors, saved-versus-applied new-session settings, and
+new-project startup.

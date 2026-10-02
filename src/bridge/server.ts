@@ -5,6 +5,7 @@
  */
 
 import * as readline from "node:readline";
+import type { Writable } from "node:stream";
 import {
   JSONRPC_ERROR,
   MCP_PROTOCOL_VERSION,
@@ -19,7 +20,7 @@ export interface McpToolDef {
 }
 
 export interface McpToolContext {
-  callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
+  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
   listTools(): McpToolDef[] | Promise<McpToolDef[]>;
 }
 
@@ -39,6 +40,7 @@ function formatErrorPayload(err: unknown): Record<string, unknown> {
 export async function handleJsonRpcLine(
   line: string,
   ctx: McpToolContext,
+  signal?: AbortSignal,
 ): Promise<JsonRpcResponse | null> {
   const trimmed = line.trim();
   if (!trimmed) return null;
@@ -96,7 +98,7 @@ export async function handleJsonRpcLine(
       const args = typeof rawArgs === "object" && rawArgs !== null && !Array.isArray(rawArgs) ? (rawArgs as Record<string, unknown>) : {};
 
       try {
-        const toolResult = await ctx.callTool(p["name"], args);
+        const toolResult = await ctx.callTool(p["name"], args, signal);
         return { jsonrpc: "2.0", id: req.id, result: { content: [{ type: "text", text: JSON.stringify(toolResult) }], isError: false } };
       } catch (err: unknown) {
         return { jsonrpc: "2.0", id: req.id, result: { content: [{ type: "text", text: JSON.stringify(formatErrorPayload(err)) }], isError: true } };
@@ -111,24 +113,74 @@ export async function handleJsonRpcLine(
 export async function runStdioBridge(
   ctx: McpToolContext,
   input: NodeJS.ReadableStream,
-  output: NodeJS.WritableStream,
+  output: Writable,
 ): Promise<void> {
   const rl = readline.createInterface({ input, crlfDelay: Infinity, terminal: false });
+  let serialized = Promise.resolve();
+  const waitTasks = new Set<Promise<void>>();
+  const waitControllers = new Set<AbortController>();
+  let acceptingResponses = true;
+  const writeResponse = (response: JsonRpcResponse | null): void => {
+    if (acceptingResponses && !output.writableEnded && !output.destroyed && response !== null) {
+      output.write(JSON.stringify(response) + "\n");
+    }
+  };
+  const writeFallback = (): void => {
+    const fallback: JsonRpcResponse = {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: JSONRPC_ERROR.INTERNAL_ERROR, message: "Internal error" },
+    };
+    try { writeResponse(fallback); } catch { /* ignore */ }
+  };
   try {
     for await (const rawLine of rl) {
       const trimmed = rawLine.trim();
       if (!trimmed) continue;
-      try {
-        const response = await handleJsonRpcLine(trimmed, ctx);
-        if (response !== null) output.write(JSON.stringify(response) + "\n");
-      } catch {
-        const fallback: JsonRpcResponse = { jsonrpc: "2.0", id: null, error: { code: JSONRPC_ERROR.INTERNAL_ERROR, message: "Internal error" } };
-        try { output.write(JSON.stringify(fallback) + "\n"); } catch { /* ignore */ }
+      if (isPositiveEventWaitRequest(trimmed)) {
+        const controller = new AbortController();
+        waitControllers.add(controller);
+        const prior = serialized;
+        const task = prior
+          .then(() => handleJsonRpcLine(trimmed, ctx, controller.signal))
+          .then(writeResponse)
+          .catch(() => writeFallback());
+        waitTasks.add(task);
+        void task.finally(() => {
+          waitTasks.delete(task);
+          waitControllers.delete(controller);
+        }).catch(() => {});
+        continue;
       }
+      serialized = serialized
+        .then(() => handleJsonRpcLine(trimmed, ctx))
+        .then(writeResponse)
+        .catch(() => writeFallback());
     }
   } catch {
     // never throws
   } finally {
+    for (const controller of waitControllers) controller.abort();
+    await serialized;
+    await Promise.allSettled(waitTasks);
+    acceptingResponses = false;
     rl.close();
+  }
+}
+
+function isPositiveEventWaitRequest(line: string): boolean {
+  try {
+    const raw = JSON.parse(line) as Record<string, unknown>;
+    if (raw.method !== "tools/call") return false;
+    const params = raw.params;
+    if (!params || typeof params !== "object" || Array.isArray(params)) return false;
+    const call = params as Record<string, unknown>;
+    if (call.name !== "agent_turn_events") return false;
+    const args = call.arguments;
+    if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+    const waitMs = (args as Record<string, unknown>).wait_ms;
+    return typeof waitMs === "number" && Number.isInteger(waitMs) && waitMs > 0 && waitMs <= 20_000;
+  } catch {
+    return false;
   }
 }

@@ -43,9 +43,40 @@ async function main(): Promise<void> {
       const res = (await client.listTools()) as { tools: McpToolDef[] };
       return res.tools;
     },
-    callTool: async (name, args) => {
+    callTool: async (name, args, signal) => {
+      if (signal?.aborted) throw new Error("Event wait aborted.");
       await client.connectAndHandshake(coordinatorId);
-      return client.call(name, args);
+      if (signal?.aborted) throw new Error("Event wait aborted.");
+      const request = client.call(name, args);
+      if (!signal) return request;
+      return new Promise<unknown>((resolve, reject) => {
+        let settled = false;
+        const onAbort = () => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener("abort", onAbort);
+          // Stdio EOF closes this bridge's connection, waking daemon read waits.
+          // This never cancels an owned worker turn.
+          client.close();
+          reject(new Error("Event wait aborted."));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        request.then(
+          (value) => {
+            if (settled) return;
+            settled = true;
+            signal.removeEventListener("abort", onAbort);
+            resolve(value);
+          },
+          (error: unknown) => {
+            if (settled) return;
+            settled = true;
+            signal.removeEventListener("abort", onAbort);
+            reject(error);
+          },
+        );
+        if (signal.aborted) onAbort();
+      });
     },
   };
 

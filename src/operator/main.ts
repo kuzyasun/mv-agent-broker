@@ -110,9 +110,10 @@ async function runStdio(config: OperatorConfig): Promise<void> {
   const daemon = await startDaemon(env);
   const ctx: McpToolContext = {
     listTools: () => bridgeToolDefs(),
-    callTool: (name, args) => callBridgeTool({
+    callTool: (name, args, signal) => callBridgeTool({
       coordinatorId: config.coordinator_id,
       core: daemon.core,
+      signal,
       daemonState: daemon.lifecycle.currentState,
       incarnation: daemon.lifecycle.currentIncarnation,
     }, name, args),

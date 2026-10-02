@@ -32,7 +32,9 @@ Known limitations (intentional, fail-closed):
 - The legacy in-process bridge remains available; normal multi-client operation
   uses the separate bridge attached to one daemon (ADR-0003 amendment).
 - Native verification is partial; full provider/role/platform profiles remain unverified (spec §13.1/§18.1).
-- `wait_ms` long-poll on `agent_turn_events` is accepted and resolves immediately.
+- `agent_turn_events.wait_ms` now provides a bounded durable wait (0..20000ms);
+  callers should still treat timeout as an empty page and continue from the
+  last numeric cursor.
 - Worktree mode creates broker-managed detached Git worktrees from an explicit
   registered source and commit; registered worktree paths remain supported
   ([checkpoint](docs/native-smoke/2026-10-01-worktree-provisioning/report.md)).
@@ -74,6 +76,17 @@ npm install
 npm run typecheck   # tsc --noEmit
 npm test            # vitest run (mock-level, no inference)
 ```
+
+For a submitted turn, keep the last consumed event cursor as a number and use
+the bounded wait instead of repeatedly fetching a full transcript:
+
+```json
+{"name":"agent_turn_events","arguments":{"turn_id":"turn-…","after_cursor":17,"limit":50,"wait_ms":10000}}
+```
+
+Advance `after_cursor` to the highest returned event cursor; keep it unchanged
+for an empty page. `wait_ms` may be as high as `20000`. Once `agent_turn_status` is terminal, call
+`agent_turn_result` once; do not poll the full event transcript.
 
 Stack (ADR-0001): TypeScript strict, Node 24 LTS, `node:sqlite` (`DatabaseSync`),
 vitest. Zero runtime dependencies.

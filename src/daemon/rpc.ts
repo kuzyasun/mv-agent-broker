@@ -77,6 +77,8 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
   private server: net.Server | null = null;
   private listening = false;
   private readonly activeSockets = new Set<net.Socket>();
+  private readonly connectionDrains = new Set<Promise<void>>();
+  private readonly connectionAborters = new Set<() => void>();
   private operatorStopping = false;
 
   constructor(opts: DaemonRpcOptions & { token: string }, socketPath: string) {
@@ -126,9 +128,11 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
     if (!this.listening && !this.server) return;
     this.listening = false;
 
+    for (const abort of this.connectionAborters) abort();
     for (const sock of this.activeSockets) {
       sock.destroy();
     }
+    await Promise.allSettled([...this.connectionDrains]);
     this.activeSockets.clear();
 
     if (this.server) {
@@ -156,6 +160,18 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
     let closedDueToOversize = false;
     let handshakedCoordinatorId: string | null = null;
     let messageQueue: Promise<void> = Promise.resolve();
+    const backgroundWaits = new Set<Promise<void>>();
+    const waitControllers = new Set<AbortController>();
+    let connectionClosed = false;
+    let resolveConnectionDrain!: () => void;
+    const connectionDrain = new Promise<void>((resolve) => {
+      resolveConnectionDrain = resolve;
+    });
+    this.connectionDrains.add(connectionDrain);
+    const abortWaits = (): void => {
+      for (const controller of waitControllers) controller.abort();
+    };
+    this.connectionAborters.add(abortWaits);
 
     const send = (payload: Record<string, unknown>, flushed?: () => void): void => {
       if (socket.writable && !socket.destroyed) {
@@ -172,7 +188,7 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
       });
     };
 
-    const handleLine = async (trimmed: string): Promise<void> => {
+    const handleLine = async (trimmed: string, signal?: AbortSignal): Promise<void> => {
       let raw: unknown;
       try {
         raw = JSON.parse(trimmed);
@@ -398,7 +414,7 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
 
           try {
             const toolResult = await callBridgeTool(
-              { coordinatorId: handshakedCoordinatorId, core: this.opts.core },
+              { coordinatorId: handshakedCoordinatorId, core: this.opts.core, signal },
               toolName,
               toolArgs,
             );
@@ -450,6 +466,20 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
     };
 
     const enqueueLine = (line: string): void => {
+      if (isPositiveEventWaitRequest(line)) {
+        const controller = new AbortController();
+        waitControllers.add(controller);
+        const prior = messageQueue;
+        const task = prior
+          .then(() => handleLine(line, controller.signal))
+          .catch(() => {});
+        backgroundWaits.add(task);
+        void task.finally(() => {
+          backgroundWaits.delete(task);
+          waitControllers.delete(controller);
+        }).catch(() => {});
+        return;
+      }
       messageQueue = messageQueue.then(() => handleLine(line)).catch(() => {});
     };
 
@@ -518,7 +548,16 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
     });
 
     const cleanup = () => {
+      if (connectionClosed) return;
+      connectionClosed = true;
       this.activeSockets.delete(socket);
+      this.connectionAborters.delete(abortWaits);
+      abortWaits();
+      const pending = [messageQueue, ...backgroundWaits];
+      void Promise.allSettled(pending).then(() => {
+        this.connectionDrains.delete(connectionDrain);
+        resolveConnectionDrain();
+      });
     };
     socket.on("close", cleanup);
     socket.on("error", cleanup);
@@ -531,4 +570,21 @@ export async function startDaemonRpc(opts: DaemonRpcOptions): Promise<DaemonRpcS
   const server = new DaemonRpcServerImpl({ ...opts, token }, socketPath);
   await server.start();
   return server;
+}
+
+function isPositiveEventWaitRequest(line: string): boolean {
+  try {
+    const raw = JSON.parse(line) as Record<string, unknown>;
+    if (raw.method !== "tool") return false;
+    const params = raw.params;
+    if (!params || typeof params !== "object" || Array.isArray(params)) return false;
+    const call = params as Record<string, unknown>;
+    if (call.name !== "agent_turn_events") return false;
+    const args = call.arguments;
+    if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+    const waitMs = (args as Record<string, unknown>).wait_ms;
+    return typeof waitMs === "number" && Number.isInteger(waitMs) && waitMs > 0 && waitMs <= 20_000;
+  } catch {
+    return false;
+  }
 }

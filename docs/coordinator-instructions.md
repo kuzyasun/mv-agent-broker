@@ -14,14 +14,18 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    writes. Pass `route_id` with project, instructions, workspace and a unique
    idempotency key; omit raw provider/model/account/role/policy binding fields.
 3. Use the single-agent route for small work. A large-task route may request native
-   subagents for independent pieces; `prefer` can carry a suggested maximum that
-   is advisory, while `auto` lets the agent decide whether delegation is useful
-   and lets the vendor choose the number. Native child models can differ. Avoid
-   delegation chains and duplicate source investigations.
-4. Send the task with its workspace precondition. Read bounded status/event deltas,
-   then `agent_turn_result`. A successful turn proves execution, while its reported
-   checks and quality remain claims. Inspect the actual changes and run the smallest
-   relevant acceptance check; broaden checks for a concrete integration risk.
+   subagents for independent pieces; the configured model/effort and any child
+   count are operator-selected preferences, not proof of enforcement. Native
+   subagent smoke evidence exists for Antigravity and Cursor; see
+   [native subagent evidence](native-subagents.md). Avoid delegation chains and
+   duplicate source investigations.
+4. Send the task with its workspace precondition. Read event deltas with the last
+   consumed numeric cursor and `wait_ms: 10000` (or `20000` for a longer bounded
+   wait), advancing the cursor from returned rows. Check status as needed; once
+   it is terminal, call `agent_turn_result` once. Do not poll a full transcript.
+   A successful turn proves execution, while its reported checks and quality
+   remain claims. Inspect the actual changes and run the smallest relevant
+   acceptance check; broaden checks for a concrete integration risk.
 5. For substantive changes, use a separate reviewer route with `review_slot` and
    the worker's original baseline/final target snapshot in `review_binding`.
    Request findings first with file/line, impact and reason. Deliver actual findings
