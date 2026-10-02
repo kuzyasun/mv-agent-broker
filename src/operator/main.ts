@@ -98,6 +98,7 @@ function daemonEnv(config: OperatorConfig) {
   return {
     stateDir: config.state_dir,
     coordinatorId: config.coordinator_id,
+    limits: config.limits,
     ...pins,
     routes: new Map(config.routes.map(route => [route.route_id, route])),
     configureRegistry: (db: Parameters<typeof applyOperatorConfig>[0]) => {

@@ -28,7 +28,7 @@ import { ClaudeAdapter } from "../providers/claude/claudeAdapter.ts";
 import { CodexAdapter } from "../providers/codex/codexAdapter.ts";
 import { ZcodeAdapter } from "../providers/zcode/zcodeAdapter.ts";
 import { AntigravityAdapter } from "../providers/antigravity/antigravityAdapter.ts";
-import type { OperatorRoute } from "../operator/config.ts";
+import { validateOperatorLimits, type OperatorRoute } from "../operator/config.ts";
 
 export interface DaemonEnv {
   /** Canonical state directory (registry + blobs + inputs + slots). */
@@ -213,6 +213,14 @@ export function daemonEnvFromProcess(procEnv: NodeJS.ProcessEnv): DaemonEnv {
   if (rawInterval !== undefined && !/^\d+$/.test(rawInterval)) {
     throw new RangeError("AB_DEADLINE_POLL_MS must contain an integer between 5 and 60000.");
   }
+  const rawGlobal = procEnv.AB_GLOBAL_UNFINISHED_TURNS;
+  const rawQuotaScope = procEnv.AB_QUOTA_SCOPE_UNFINISHED_TURNS;
+  const limits = rawGlobal === undefined && rawQuotaScope === undefined
+    ? undefined
+    : validateOperatorLimits({
+      ...(rawGlobal === undefined ? {} : { globalUnfinishedTurns: Number(rawGlobal) }),
+      ...(rawQuotaScope === undefined ? {} : { quotaScopeUnfinishedTurns: Number(rawQuotaScope) }),
+    });
   return {
     stateDir: procEnv.AB_STATE_DIR ?? "./.agent-broker-state",
     coordinatorId: procEnv.AB_COORDINATOR_ID ?? "",
@@ -223,6 +231,7 @@ export function daemonEnvFromProcess(procEnv: NodeJS.ProcessEnv): DaemonEnv {
     zcodeNodeBinary: procEnv.AB_ZCODE_NODE,
     zcodeBuiltinProviderConfigPath: procEnv.AB_ZCODE_BUILTIN_CONFIG,
     antigravityBinary: procEnv.AB_ANTIGRAVITY_BIN,
+    limits,
     deadlinePollIntervalMs: rawInterval === undefined ? undefined : validateDeadlinePollInterval(Number(rawInterval)),
   };
 }

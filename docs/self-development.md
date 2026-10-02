@@ -26,6 +26,13 @@ Setup must not require private coordinator scripts or manual SQLite edits.
 P1 and P2 are implemented by the [operator guide](operator-guide.md) and its
 mock/Windows examples. One JSON config contains CLI pins, project registration,
 named worker/reviewer routes, model/effort and advisory subagent preferences.
+The examples use six global unfinished broker turns and two per configured
+account quota scope for practical parallel self-development. These limits count
+unfinished broker turns across projects, not vendor token quotas or native
+child count; one unfinished turn per logical session remains and native child
+preference is independent. Stable daemon copies can use the validated
+`AB_GLOBAL_UNFINISHED_TURNS` and `AB_QUOTA_SCOPE_UNFINISHED_TURNS` environment
+overrides for the same 6/2 setting.
 In shared-daemon mode, save edits, stop only while idle, and start the daemon
 again before new sessions use them; reconnecting a bridge does not reload
 settings. Existing bindings are preserved. Native CLI login remains

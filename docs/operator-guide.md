@@ -42,6 +42,22 @@ The snippet uses absolute node, script, and config paths:
 npm run broker -- validate --config docs/examples/operator.mock.json
 ```
 
+The optional `limits` block controls unfinished broker turns:
+
+```json
+"limits": {
+  "globalUnfinishedTurns": 6,
+  "quotaScopeUnfinishedTurns": 2
+}
+```
+
+These are unfinished broker turns across projects and the configured account
+quota scope, not vendor token quotas or native child count. One unfinished
+turn per logical session remains; native child preference is independent. The
+defaults are `3` globally and `1` per quota scope. Values must be positive
+finite safe integers. Save the file and restart the owning daemon while idle
+before new sessions use changed limits.
+
 ## Local settings UI
 
 Start the settings page without starting a broker daemon or running a provider:
@@ -168,6 +184,10 @@ repository to the same state
 using new IDs; a separate config/state is another option. The UI does not inspect
 bound-session conflicts in the registry; daemon startup remains authoritative.
 
+The UI exposes the same global and quota-scope unfinished-turn controls. Its
+explanation refers to broker turns rather than vendor token quotas or native
+child count; the advanced JSON editor remains available for the full config.
+
 The shared daemon and each client's stdio bridge are separate processes. An
 updated bridge reconnects before its next discovery or tool call after the
 daemon restarts, rereads the bridge token, and authenticates the same
@@ -246,6 +266,13 @@ npm run --silent broker -- mcp-config --connect --config 'C:\ops\agent-broker.js
 For a Codex TOML client, put the emitted `command` and `args` under
 `[mcp_servers.agent_broker]`; copy emitted bridge environment values to
 `[mcp_servers.agent_broker.env]` when using `--connect`.
+
+The raw `src/daemon/main.ts` entry point (including self-development copies)
+may also set
+`AB_GLOBAL_UNFINISHED_TURNS=6` and
+`AB_QUOTA_SCOPE_UNFINISHED_TURNS=2`; these raw environment overrides use the
+same positive safe-integer validation and do not change other daemon defaults.
+Operator `start`, `daemon`, and direct `stdio` use the JSON `limits` block.
 
 ### Reproducible operator runtime
 

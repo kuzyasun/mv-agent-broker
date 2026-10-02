@@ -33,6 +33,7 @@ describe("operator runtime RPC", () => {
     const configPath = path.join(root, "operator.json");
     writeFileSync(configPath, JSON.stringify({
       version: 1, state_dir: "./state", coordinator_id: "operator",
+      limits: { globalUnfinishedTurns: 6, quotaScopeUnfinishedTurns: 2 },
       projects: [], coordinators: [{ coordinator_id: "operator", display_name: "Operator", allowed_project_ids: [] }],
       accounts: [], workspaces: [], policy_profiles: [], coverage_profiles: [], routes: [],
     }));
@@ -68,6 +69,12 @@ describe("operator runtime RPC", () => {
         await client.connect("operator");
         const result = await client.call("broker_status") as { daemon_state: string };
         expect(result.daemon_state).toBe("READY");
+        expect((await client.call("broker_status") as { limits: Record<string, number> }).limits).toEqual({
+          globalUnfinishedTurns: 6,
+          quotaScopeUnfinishedTurns: 2,
+          openSessionsPerProject: 20,
+          hardTurnDeadlineMs: 900_000,
+        });
       } finally { client.close(); }
       expect(() => cli("start")).toThrow(/DAEMON_ALREADY_RUNNING/);
       // A stale sidecar must not change the version reported by the running daemon.

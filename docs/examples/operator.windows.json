@@ -2,6 +2,10 @@
   "version": 1,
   "state_dir": "C:\\agent-broker\\state",
   "coordinator_id": "coord-windows",
+  "limits": {
+    "globalUnfinishedTurns": 6,
+    "quotaScopeUnfinishedTurns": 2
+  },
   "native_binary_pins": {
     "cursor": "C:\\Users\\<user>\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
     "antigravity": "C:\\Users\\<user>\\AppData\\Local\\agy\\bin\\agy.exe",

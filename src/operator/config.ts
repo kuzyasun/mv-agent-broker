@@ -16,14 +16,16 @@ import {
   insertProject,
   insertWorkspace,
 } from "../storage/repo.ts";
-import type {
-  AccountProfileRecord,
-  CoordinatorProfileRecord,
-  CoverageProfileRecord,
-  PolicyProfileRecord,
-  ProjectRecord,
-  WorkspaceMode,
-  WorkspaceRecord,
+import {
+  DEFAULT_LIMITS,
+  type AccountProfileRecord,
+  type CoordinatorProfileRecord,
+  type CoverageProfileRecord,
+  type PolicyProfileRecord,
+  type ProjectRecord,
+  type WorkspaceMode,
+  type WorkspaceRecord,
+  type Limits,
 } from "../shared/api-types.ts";
 import { coverageContractHash, validateCoverageConfig, type CoverageConfig } from "../workspaces/coverage.ts";
 
@@ -75,6 +77,8 @@ export type NativeSubagents =
   | { mode: "off" | "prefer"; max_agents: number }
   | { mode: "auto" };
 
+export type OperatorLimits = Pick<Limits, "globalUnfinishedTurns" | "quotaScopeUnfinishedTurns">;
+
 export interface OperatorRoute {
   route_id: string;
   project_id: string;
@@ -100,6 +104,7 @@ export interface OperatorConfig {
   policy_profiles: OperatorPolicyProfile[];
   coverage_profiles: OperatorCoverageProfile[];
   routes: OperatorRoute[];
+  limits?: Partial<OperatorLimits>;
 }
 
 export interface AppliedOperatorConfig {
@@ -114,6 +119,33 @@ function fail(message: string): never {
 function nonEmpty(value: unknown, name: string): string {
   if (typeof value !== "string" || value.trim().length === 0) fail(`${name} must be a non-empty string`);
   return value;
+}
+
+function positiveSafeInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isSafeInteger(value) || value < 1) {
+    fail(`${name} must be a positive finite safe integer`);
+  }
+  return value;
+}
+
+export function validateOperatorLimits(value: unknown): OperatorLimits {
+  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
+    fail("limits must be an object");
+  }
+  const raw = (value ?? {}) as Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (key !== "globalUnfinishedTurns" && key !== "quotaScopeUnfinishedTurns") {
+      fail(`unknown limits key '${key}'`);
+    }
+  }
+  return {
+    globalUnfinishedTurns: raw.globalUnfinishedTurns === undefined
+      ? DEFAULT_LIMITS.globalUnfinishedTurns
+      : positiveSafeInteger(raw.globalUnfinishedTurns, "limits.globalUnfinishedTurns"),
+    quotaScopeUnfinishedTurns: raw.quotaScopeUnfinishedTurns === undefined
+      ? DEFAULT_LIMITS.quotaScopeUnfinishedTurns
+      : positiveSafeInteger(raw.quotaScopeUnfinishedTurns, "limits.quotaScopeUnfinishedTurns"),
+  };
 }
 
 const PROVIDERS = new Set(["mock", "codex", "claude-code", "cursor", "zcode", "antigravity"]);
@@ -178,6 +210,7 @@ export function validateOperatorConfig(input: unknown, baseDir = process.cwd()):
   if (!input || typeof input !== "object" || Array.isArray(input)) fail("root must be an object");
   rejectCredentialFields(input);
   const raw = input as Record<string, unknown>;
+  const limits = validateOperatorLimits(raw.limits);
   if (raw.version !== undefined && raw.version !== 1) fail("version must be 1");
   const stateDir = path.resolve(baseDir, nonEmpty(raw.state_dir, "state_dir"));
   const coordinatorId = nonEmpty(raw.coordinator_id, "coordinator_id");
@@ -291,6 +324,7 @@ export function validateOperatorConfig(input: unknown, baseDir = process.cwd()):
     policy_profiles: policies,
     coverage_profiles: coverages,
     routes,
+    limits,
   };
 }
 

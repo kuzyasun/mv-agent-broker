@@ -9,6 +9,7 @@
   let projectFilter = "";
   let dirty = false;
   const advancedDirty = new Set();
+  const defaultLimits = { globalUnfinishedTurns: 3, quotaScopeUnfinishedTurns: 1 };
   const $ = (id) => document.getElementById(id);
   const make = (tag, text) => {
     const node = document.createElement(tag);
@@ -560,9 +561,16 @@
     $("codex-toml").value = bootstrap.snippets.toml;
   }
 
+  function renderLimits() {
+    const limits = state.limits || {};
+    $("global-unfinished-turns").value = String(limits.globalUnfinishedTurns ?? defaultLimits.globalUnfinishedTurns);
+    $("quota-scope-unfinished-turns").value = String(limits.quotaScopeUnfinishedTurns ?? defaultLimits.quotaScopeUnfinishedTurns);
+  }
+
   function render() {
     $("revision-label").textContent = `Revision ${revision.slice(0, 12)} · ${state.routes.length} route(s)`;
     $("project-filter").replaceChildren(option("", "All projects", !projectFilter), ...(state.projects || []).map(project => option(project.project_id, project.display_name, project.project_id === projectFilter)));
+    renderLimits();
     renderRoutes();
     renderProjects();
     renderAdvanced();
@@ -1053,6 +1061,14 @@
     renderWizard();
   }));
   $("project-filter").addEventListener("change", () => { projectFilter = $("project-filter").value; renderRoutes(); });
+  $("global-unfinished-turns").addEventListener("input", () => {
+    state.limits = { ...(state.limits || {}), globalUnfinishedTurns: Number($("global-unfinished-turns").value) };
+    markDirty();
+  });
+  $("quota-scope-unfinished-turns").addEventListener("input", () => {
+    state.limits = { ...(state.limits || {}), quotaScopeUnfinishedTurns: Number($("quota-scope-unfinished-turns").value) };
+    markDirty();
+  });
   for (const id of ["accounts-json", "pins-json", "coverage-json", "state-dir"]) {
     $(id).addEventListener("input", () => { advancedDirty.add(id); markDirty(); });
   }

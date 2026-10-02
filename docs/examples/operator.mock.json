@@ -2,6 +2,10 @@
   "version": 1,
   "state_dir": "../../.state/operator-mock",
   "coordinator_id": "coord-main",
+  "limits": {
+    "globalUnfinishedTurns": 6,
+    "quotaScopeUnfinishedTurns": 2
+  },
   "projects": [
     { "project_id": "demo", "display_name": "Clean-state mock demo" }
   ],

@@ -7,6 +7,7 @@ import {
   applyOperatorConfig,
   loadOperatorConfig,
   operatorConfigFingerprint,
+  validateOperatorConfig,
   type OperatorConfig,
 } from "../../src/operator/config.ts";
 import { createHarness, COVERAGE_CONFIG } from "../helpers/harness.ts";
@@ -97,6 +98,29 @@ describe("operator configuration", () => {
     expect(loaded.routes[0]?.route_id).toBe("route-main");
   });
 
+  it("normalizes concurrency defaults and validates only positive safe integers", () => {
+    const loaded = loadOperatorConfig(JSON.stringify(validConfig()));
+    expect(loaded.limits).toEqual({
+      globalUnfinishedTurns: 3,
+      quotaScopeUnfinishedTurns: 1,
+    });
+
+    for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => validateOperatorConfig({
+        ...validConfig(),
+        limits: { globalUnfinishedTurns: value },
+      })).toThrow(/positive finite safe integer/);
+    }
+    expect(() => validateOperatorConfig({
+      ...validConfig(),
+      limits: { quotaScopeUnfinishedTurns: -1 },
+    })).toThrow(/positive finite safe integer/);
+    expect(() => validateOperatorConfig({
+      ...validConfig(),
+      limits: { globalUnfinishedTurns: 6, unexpected: 2 },
+    })).toThrow(/unknown limits key/);
+  });
+
   it("fingerprints normalized semantic settings, not formatting or generated timestamps", () => {
     const first = validConfig();
     const route = first.routes[0]!;
@@ -127,6 +151,10 @@ describe("operator configuration", () => {
     expect(operatorConfigFingerprint(loadOperatorConfig(JSON.stringify({
       ...first,
       routes: [{ ...first.routes[0]!, model: "different-model" }],
+    })))).not.toBe(firstFingerprint);
+    expect(operatorConfigFingerprint(loadOperatorConfig(JSON.stringify({
+      ...first,
+      limits: { globalUnfinishedTurns: 6, quotaScopeUnfinishedTurns: 2 },
     })))).not.toBe(firstFingerprint);
   });
 

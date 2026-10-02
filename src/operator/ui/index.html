@@ -53,6 +53,28 @@
       </div>
     </section>
 
+    <section class="card" aria-labelledby="concurrency-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">CONCURRENCY</p>
+          <h2 id="concurrency-heading">Unfinished broker turns</h2>
+        </div>
+      </div>
+      <p class="muted">These are unfinished broker turns across projects and account scope, not vendor token quotas or native child count. One unfinished turn per logical session remains; native child preference is independent.</p>
+      <div class="field-grid">
+        <label>
+          <span>Global unfinished turns</span>
+          <span class="field-help">Maximum unfinished turns across this broker state directory.</span>
+          <input id="global-unfinished-turns" type="number" min="1" step="1">
+        </label>
+        <label>
+          <span>Quota-scope unfinished turns</span>
+          <span class="field-help">Maximum unfinished turns sharing one configured account quota scope.</span>
+          <input id="quota-scope-unfinished-turns" type="number" min="1" step="1">
+        </label>
+      </div>
+    </section>
+
     <section class="card">
       <div class="section-heading">
         <div>

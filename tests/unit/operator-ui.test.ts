@@ -83,6 +83,10 @@ describe("operator settings UI service", () => {
     const page = await (await fetch(service.url)).text();
     expect(page).toContain("new-state");
     expect(page).not.toContain("relative-state");
+    expect(page).toContain('id="global-unfinished-turns"');
+    expect(page).toContain('id="quota-scope-unfinished-turns"');
+    expect(page).toContain("unfinished broker turns across projects and account scope");
+    expect(page).toContain("not vendor token quotas or native child count");
   });
 
   it("protects config reads and writes with the loopback host, origin, and token", async () => {
