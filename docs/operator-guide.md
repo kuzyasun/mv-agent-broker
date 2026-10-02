@@ -235,6 +235,34 @@ For a Codex TOML client, put the emitted `command` and `args` under
 `[mcp_servers.agent_broker]`; copy emitted bridge environment values to
 `[mcp_servers.agent_broker.env]` when using `--connect`.
 
+### Reproducible operator runtime
+
+Use `start` for a detached daemon launched from a private runtime exported
+from a Git commit. The runtime is separate from the development checkout:
+dirty or untracked source is never copied, and the original absolute config
+path remains the source of relative configuration paths.
+
+```powershell
+npm run broker -- start --config C:\ops\agent-broker.json
+npm run broker -- start --config C:\ops\agent-broker.json --ref <accepted-commit>
+npm run broker -- status --config C:\ops\agent-broker.json
+npm run broker -- stop --config C:\ops\agent-broker.json
+```
+
+`start` waits for an authenticated `READY` response and reports the pinned
+commit, runtime path, state directory, and daemon PID. A second owner is
+refused by the state-directory lock. `status` reports live readiness, active
+turns, and pending intents. The commit comes from the responding daemon's
+exported manifest. An absent connection reports `stopped` only when there is
+no ownership lock; an unresolved lock or RPC failure reports `unavailable`.
+Authentication refusals remain explicit errors. After `start`, generate the
+client snippet with `mcp-config --connect`: it uses the exported bridge path.
+`stop` is graceful and idle-only: any active or unknown
+turn, or any pending lifecycle intent, causes a refusal and leaves the daemon
+running. It never kills a PID, removes a lock, cancels work, or clears a
+quarantine. A new version requires an explicit new accepted commit/runtime;
+there is no hot reload or automatic service installation.
+
 ## Selecting a route from a coordinator
 
 Use [these short coordinator instructions](coordinator-instructions.md) in the

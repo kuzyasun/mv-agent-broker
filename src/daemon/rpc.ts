@@ -22,11 +22,23 @@ export interface DaemonRpcServer {
   stop(): Promise<void>;
 }
 
+export interface OperatorStopPlan {
+  response: Record<string, unknown>;
+  shutdown(): Promise<void>;
+}
+
+export interface OperatorRpcHandlers {
+  coordinatorId: string;
+  status(): Record<string, unknown>;
+  stop(): OperatorStopPlan;
+}
+
 export interface DaemonRpcOptions {
   core: BrokerCore;
   coordinatorId: string;
   stateDir: string;
   token?: string;
+  operator?: OperatorRpcHandlers;
 }
 
 export function socketPathFor(stateDir: string): string {
@@ -65,6 +77,7 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
   private server: net.Server | null = null;
   private listening = false;
   private readonly activeSockets = new Set<net.Socket>();
+  private operatorStopping = false;
 
   constructor(opts: DaemonRpcOptions & { token: string }, socketPath: string) {
     this.opts = opts;
@@ -144,10 +157,19 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
     let handshakedCoordinatorId: string | null = null;
     let messageQueue: Promise<void> = Promise.resolve();
 
-    const send = (payload: Record<string, unknown>): void => {
+    const send = (payload: Record<string, unknown>, flushed?: () => void): void => {
       if (socket.writable && !socket.destroyed) {
-        socket.write(JSON.stringify(payload) + "\n");
+        const line = JSON.stringify(payload) + "\n";
+        socket.write(line, () => flushed?.());
       }
+    };
+
+    const sendError = (reqId: string | number | null, code: string, message: string, data: Record<string, unknown> = {}): void => {
+      send({
+        jsonrpc: "2.0",
+        id: reqId,
+        error: { code, message, data: { ok: false, error: { code, message, ...data } } },
+      });
     };
 
     const handleLine = async (trimmed: string): Promise<void> => {
@@ -277,19 +299,69 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
 
       // If connection not handshaked yet, reject all other methods
       if (!handshakedCoordinatorId) {
-        send({
-          jsonrpc: "2.0",
-          id: reqId,
-          error: {
-            code: "UNAUTHORIZED",
-            message: "handshake required",
-            data: { ok: false, error: { code: "UNAUTHORIZED", message: "handshake required" } },
-          },
-        });
+        sendError(reqId, "UNAUTHORIZED", "handshake required");
         return;
       }
 
       switch (msg.method) {
+        case "operator/status": {
+          const operator = this.opts.operator;
+          const coordinator = getCoordinator(this.opts.core.db, handshakedCoordinatorId);
+          if (!operator) {
+            sendError(reqId, "METHOD_NOT_FOUND", "Method not found: operator/status");
+            break;
+          }
+          if (handshakedCoordinatorId !== operator.coordinatorId || !coordinator || coordinator.revoked) {
+            sendError(reqId, "UNAUTHORIZED", "operator coordinator is not authorized");
+            break;
+          }
+          try {
+            send({ jsonrpc: "2.0", id: reqId, result: operator.status() });
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            sendError(reqId, "INTERNAL_ERROR", message);
+          }
+          break;
+        }
+
+        case "operator/stop": {
+          const operator = this.opts.operator;
+          const coordinator = getCoordinator(this.opts.core.db, handshakedCoordinatorId);
+          if (!operator) {
+            sendError(reqId, "METHOD_NOT_FOUND", "Method not found: operator/stop");
+            break;
+          }
+          if (handshakedCoordinatorId !== operator.coordinatorId || !coordinator || coordinator.revoked) {
+            sendError(reqId, "UNAUTHORIZED", "operator coordinator is not authorized");
+            break;
+          }
+          if (this.operatorStopping) {
+            sendError(reqId, "DAEMON_NOT_READY", "Daemon shutdown is already in progress.");
+            break;
+          }
+          try {
+            const plan = operator.stop();
+            this.operatorStopping = true;
+            send({ jsonrpc: "2.0", id: reqId, result: plan.response }, () => {
+              void plan.shutdown().catch((err: unknown) => {
+                console.error("Operator shutdown failed:", err);
+              });
+            });
+          } catch (err: unknown) {
+            if (err instanceof BrokerError) {
+              send({
+                jsonrpc: "2.0",
+                id: reqId,
+                error: { code: err.code, message: err.message, data: err.toJSON() },
+              });
+            } else {
+              const message = err instanceof Error ? err.message : String(err);
+              sendError(reqId, "INTERNAL_ERROR", message);
+            }
+          }
+          break;
+        }
+
         case "tools/list": {
           send({
             jsonrpc: "2.0",
@@ -300,6 +372,10 @@ class DaemonRpcServerImpl implements DaemonRpcServer {
         }
 
         case "tool": {
+          if (this.operatorStopping) {
+            sendError(reqId, "DAEMON_NOT_READY", "Daemon shutdown is in progress.");
+            break;
+          }
           const params = (msg.params as Record<string, unknown> | undefined) ?? {};
           const toolName = typeof params.name === "string" ? params.name : "";
           const toolArgs =

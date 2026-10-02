@@ -1,19 +1,24 @@
 import path from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { callBridgeTool, bridgeToolDefs } from "../bridge/tools.ts";
 import { runStdioBridge, type McpToolContext } from "../bridge/server.ts";
 import { startDaemon } from "../daemon/bootstrap.ts";
-import { startDaemonRpc } from "../daemon/rpc.ts";
+import { startDaemonRpc, type OperatorStopPlan } from "../daemon/rpc.ts";
+import { listNonterminalTurns, listPendingIntents } from "../storage/repo.ts";
+import { BrokerError } from "../shared/errors.ts";
 import { applyOperatorConfig, loadOperatorConfig, type OperatorConfig } from "./config.ts";
+import { readRuntimeRecord, startOperator, statusOperator, stopOperator } from "./operations.ts";
 import { startOperatorUi } from "./ui.ts";
 
-type Command = "validate" | "stdio" | "daemon" | "mcp-config" | "ui";
+type Command = "validate" | "stdio" | "daemon" | "mcp-config" | "ui" | "start" | "status" | "stop";
 
-function parseArgs(argv: string[]): { command: Command; configPath: string; connect: boolean; port: number } {
+function parseArgs(argv: string[]): { command: Command; configPath: string; connect: boolean; port: number; ref: string } {
   let command: Command = "stdio";
   let configPath: string | undefined;
   let connect = false;
   let port = 4318;
+  let ref = "HEAD";
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--connect") { connect = true; continue; }
@@ -27,7 +32,13 @@ function parseArgs(argv: string[]): { command: Command; configPath: string; conn
       port = Number(value);
       continue;
     }
-    if (arg === "validate" || arg === "stdio" || arg === "daemon" || arg === "mcp-config" || arg === "ui") {
+    if (arg === "--ref") {
+      const value = argv[++index];
+      if (!value) throw new Error("--ref requires a Git commit.");
+      ref = value;
+      continue;
+    }
+    if (arg === "validate" || arg === "stdio" || arg === "daemon" || arg === "mcp-config" || arg === "ui" || arg === "start" || arg === "status" || arg === "stop") {
       command = arg;
       continue;
     }
@@ -36,7 +47,8 @@ function parseArgs(argv: string[]): { command: Command; configPath: string; conn
   if (!configPath) throw new Error("--config PATH is required.");
   if (connect && command !== "mcp-config") throw new Error("--connect is only supported by mcp-config.");
   if (port !== 4318 && command !== "ui") throw new Error("--port is only supported by ui.");
-  return { command, configPath: path.resolve(configPath), connect, port };
+  if (ref !== "HEAD" && command !== "start") throw new Error("--ref is only supported by start.");
+  return { command, configPath: path.resolve(configPath), connect, port, ref };
 }
 
 function binaryPins(config: OperatorConfig): Record<string, string | undefined> {
@@ -87,29 +99,89 @@ async function runStdio(config: OperatorConfig): Promise<void> {
   }
 }
 
+function daemonOperatorStatus(daemon: Awaited<ReturnType<typeof startDaemon>>): Record<string, unknown> {
+  const runtimePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const manifestPath = path.join(runtimePath, "runtime-manifest.json");
+  const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) as { commit: string } : null;
+  return {
+    readiness: daemon.lifecycle.currentState,
+    state: daemon.lifecycle.currentState,
+    incarnation: daemon.lifecycle.currentIncarnation,
+    daemon_pid: process.pid,
+    runtime_commit: manifest?.commit ?? null,
+    runtime_path: manifest ? runtimePath : null,
+    active_turns: listNonterminalTurns(daemon.db).map(turn => ({
+      turn_id: turn.turn_id,
+      state: turn.state,
+      session_id: turn.session_id,
+    })),
+    pending_intents: listPendingIntents(daemon.db).map(intent => ({
+      intent_id: intent.intent_id,
+      kind: intent.kind,
+      session_id: intent.session_id,
+      turn_id: intent.turn_id,
+    })),
+  };
+}
+
 async function runDaemon(config: OperatorConfig): Promise<void> {
   const env = daemonEnv(config);
   const daemon = await startDaemon(env);
+  let stopRequestedResolve: (() => void) | undefined;
+  let operatorStopPromise: Promise<void> | null = null;
+  const stopRequested = new Promise<void>(resolve => { stopRequestedResolve = resolve; });
+  const operator = {
+    coordinatorId: config.coordinator_id,
+    status: () => daemonOperatorStatus(daemon),
+    stop: (): OperatorStopPlan => {
+      const activeTurns = listNonterminalTurns(daemon.db);
+      const pendingIntents = listPendingIntents(daemon.db);
+      if (daemon.lifecycle.currentState !== "READY") {
+        throw new BrokerError("DAEMON_NOT_READY", `Daemon is ${daemon.lifecycle.currentState}.`);
+      }
+      if (activeTurns.length > 0 || pendingIntents.length > 0) {
+        throw new BrokerError("RESOURCE_BUSY", "Daemon stop requires no active turns or pending intents.", {
+          details: {
+            active_turns: activeTurns.map(turn => ({ turn_id: turn.turn_id, state: turn.state })),
+            pending_intents: pendingIntents.map(intent => ({ intent_id: intent.intent_id, kind: intent.kind })),
+          },
+        });
+      }
+      return {
+        response: { ...daemonOperatorStatus(daemon), accepted: true, readiness: "STOPPING" },
+        shutdown: () => {
+          operatorStopPromise ??= daemon.stop();
+          stopRequestedResolve?.();
+          return operatorStopPromise;
+        },
+      };
+    },
+  };
   const rpc = await startDaemonRpc({
     core: daemon.core,
     coordinatorId: config.coordinator_id,
     stateDir: config.state_dir,
+    operator,
   });
   process.stderr.write(`agent-broker daemon listening ${rpc.socketPath}\n`);
+  let signalResolve: (() => void) | undefined;
+  const signal = new Promise<void>(resolve => { signalResolve = resolve; });
+  const shutdown = () => {
+    process.off("SIGINT", shutdown);
+    process.off("SIGTERM", shutdown);
+    signalResolve?.();
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
   try {
-    await new Promise<void>(resolve => {
-      const shutdown = () => {
-        process.off("SIGINT", shutdown);
-        process.off("SIGTERM", shutdown);
-        resolve();
-      };
-      process.on("SIGINT", shutdown);
-      process.on("SIGTERM", shutdown);
-    });
-  } finally {
+    await Promise.race([signal, stopRequested]);
+    // A rejected drain retains the registry, RPC, ownership, and supervision.
+    await (operatorStopPromise ?? daemon.stop());
     await rpc.stop();
-    await daemon.stop();
     daemon.db.close();
+  } finally {
+    process.off("SIGINT", shutdown);
+    process.off("SIGTERM", shutdown);
   }
 }
 
@@ -136,8 +208,9 @@ async function runUi(configPath: string, port: number): Promise<void> {
 }
 
 function printMcpConfig(configPath: string, config: OperatorConfig, connect: boolean): void {
+  const record = connect ? readRuntimeRecord(config.state_dir) : null;
   const scriptPath = connect
-    ? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../bridge/main-stdio.ts")
+    ? path.resolve(record?.runtime_path ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."), "src/bridge/main-stdio.ts")
     : path.resolve(fileURLToPath(import.meta.url));
   process.stdout.write(`${JSON.stringify({
     mcpServers: {
@@ -151,7 +224,7 @@ function printMcpConfig(configPath: string, config: OperatorConfig, connect: boo
 }
 
 async function main(): Promise<void> {
-  const { command, configPath, connect, port } = parseArgs(process.argv.slice(2));
+  const { command, configPath, connect, port, ref } = parseArgs(process.argv.slice(2));
   if (command === "ui") {
     await runUi(configPath, port);
     return;
@@ -163,6 +236,12 @@ async function main(): Promise<void> {
     printMcpConfig(configPath, config, connect);
   } else if (command === "daemon") {
     await runDaemon(config);
+  } else if (command === "start") {
+    process.stdout.write(`${JSON.stringify(await startOperator(config, configPath, ref))}\n`);
+  } else if (command === "status") {
+    process.stdout.write(`${JSON.stringify(await statusOperator(config))}\n`);
+  } else if (command === "stop") {
+    process.stdout.write(`${JSON.stringify(await stopOperator(config))}\n`);
   } else {
     await runStdio(config);
   }

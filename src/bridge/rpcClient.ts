@@ -107,6 +107,11 @@ export class DaemonRpcClient {
     return this.sendRequest("tool", { name, arguments: args });
   }
 
+  async request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    await this.ensureReady();
+    return this.sendRequest(method, params);
+  }
+
   async listTools(): Promise<{ tools: McpToolDef[] }> {
     await this.ensureReady();
     return (await this.sendRequest("tools/list")) as { tools: McpToolDef[] };
