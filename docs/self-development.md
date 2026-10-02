@@ -26,8 +26,10 @@ Setup must not require private coordinator scripts or manual SQLite edits.
 P1 and P2 are implemented by the [operator guide](operator-guide.md) and its
 mock/Windows examples. One JSON config contains CLI pins, project registration,
 named worker/reviewer routes, model/effort and advisory subagent preferences.
-JSON edits plus restart select settings for new sessions; existing bindings are
-preserved. Native CLI login remains provider-owned; account profile
+In shared-daemon mode, save edits, stop only while idle, and start the daemon
+again before new sessions use them; reconnecting a bridge does not reload
+settings. Existing bindings are preserved. Native CLI login remains
+provider-owned; account profile
 metadata does not switch a subscription plan or create a new vendor login.
 
 The accepted runtime and quarantine-operation checkpoints are complete. The

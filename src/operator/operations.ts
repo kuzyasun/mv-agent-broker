@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { DaemonRpcError, DaemonRpcClient } from "../bridge/rpcClient.ts";
 import { readBridgeToken, socketPathFor } from "../daemon/rpc.ts";
-import type { OperatorConfig } from "./config.ts";
+import { operatorConfigFingerprint, type OperatorConfig } from "./config.ts";
 
 const OPERATOR_RECORD = "operator-runtime.json";
 const READY_TIMEOUT_MS = 20_000;
@@ -47,6 +47,9 @@ export interface OperatorStatus {
   status: "ready" | "stopped" | "unavailable";
   readiness: string;
   runtime_observation: "observed-running" | "last-known" | "unknown";
+  settings_state: "applied" | "restart_required" | "unknown";
+  saved_config_fingerprint: string;
+  applied_config_fingerprint: string | null;
   runtime_commit: string | null;
   runtime_path: string | null;
   daemon_pid: number | null;
@@ -325,6 +328,9 @@ export async function startOperator(config: OperatorConfig, configPath: string, 
   return {
     status: "ready",
     readiness: "READY",
+    settings_state: status.applied_config_fingerprint === operatorConfigFingerprint(config) ? "applied" : "unknown",
+    saved_config_fingerprint: operatorConfigFingerprint(config),
+    applied_config_fingerprint: typeof status.applied_config_fingerprint === "string" ? status.applied_config_fingerprint : null,
     runtime_commit: record.runtime_commit,
     runtime_path: record.runtime_path,
     state_dir: config.state_dir,
@@ -342,14 +348,23 @@ export async function startOperator(config: OperatorConfig, configPath: string, 
 
 export async function statusOperator(config: OperatorConfig): Promise<OperatorStatus> {
   const record = readRuntimeRecord(config.state_dir);
+  const savedConfigFingerprint = operatorConfigFingerprint(config);
   try {
     const status = await requestDaemon(config, "operator/status") as Record<string, unknown>;
     const readiness = String(status.readiness ?? status.state ?? "UNAVAILABLE");
     if (readiness === "READY") {
+      const appliedConfigFingerprint = typeof status.applied_config_fingerprint === "string"
+        ? status.applied_config_fingerprint
+        : null;
       return {
         status: "ready",
         readiness,
         runtime_observation: "observed-running",
+        settings_state: appliedConfigFingerprint === null
+          ? "unknown"
+          : appliedConfigFingerprint === savedConfigFingerprint ? "applied" : "restart_required",
+        saved_config_fingerprint: savedConfigFingerprint,
+        applied_config_fingerprint: appliedConfigFingerprint,
         runtime_commit: typeof status.runtime_commit === "string" ? status.runtime_commit : null,
         runtime_path: typeof status.runtime_path === "string" ? status.runtime_path : null,
         daemon_pid: typeof status.daemon_pid === "number" ? status.daemon_pid : null,
@@ -367,6 +382,9 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
       status: "unavailable",
       readiness,
       runtime_observation: record ? "last-known" : "unknown",
+      settings_state: "unknown",
+      saved_config_fingerprint: savedConfigFingerprint,
+      applied_config_fingerprint: null,
       runtime_commit: record?.runtime_commit ?? null,
       runtime_path: record?.runtime_path ?? null,
       daemon_pid: record?.daemon_pid ?? null,
@@ -385,6 +403,9 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
       status: error instanceof DaemonRpcError || existsSync(path.join(config.state_dir, "daemon.lock")) ? "unavailable" : "stopped",
       readiness: "UNAVAILABLE",
       runtime_observation: record ? "last-known" : "unknown",
+      settings_state: "unknown",
+      saved_config_fingerprint: savedConfigFingerprint,
+      applied_config_fingerprint: null,
       runtime_commit: record?.runtime_commit ?? null,
       runtime_path: record?.runtime_path ?? null,
       daemon_pid: record?.daemon_pid ?? null,

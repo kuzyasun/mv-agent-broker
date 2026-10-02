@@ -188,6 +188,20 @@
       ? `Showing ${payload[rowsKey].length} of ${count} newest.`
       : `${count} total.`;
   };
+  const renderSettingsState = (payload) => {
+    const node = $("settings-state");
+    const state = payload?.settings_state;
+    if (state === "applied") {
+      node.textContent = "Saved settings applied";
+      node.className = "settings-state success";
+    } else if (state === "restart_required") {
+      node.textContent = "Saved settings need daemon restart";
+      node.className = "settings-state warning";
+    } else {
+      node.textContent = "Application state unknown";
+      node.className = "settings-state";
+    }
+  };
   const renderLiveRows = (container, rows, errorRows = false) => {
     container.replaceChildren();
     if (!Array.isArray(rows)) {
@@ -212,6 +226,7 @@
     });
   };
   const renderLiveStatus = (payload) => {
+    renderSettingsState(payload);
     const live = payload && payload.status === "ready" && payload.readiness === "READY";
     const observation = payload && payload.runtime_observation || "unknown";
     const runtimeVersion = typeof payload?.runtime_commit === "string" && payload.runtime_commit
@@ -687,7 +702,7 @@
       field("Copy agent profiles", copy, "Reuse providers, models, effort, roles, and subagent preferences from another project."),
     );
     wizard.append(policyGrid);
-    const explanation = make("p", "Create adds the project to your draft. Save configuration afterwards, then restart MCP to use it.");
+    const explanation = make("p", "Create adds the project to your draft. Save, then stop the shared daemon while idle and start it again to apply it to new sessions.");
     explanation.className = "small-note";
     wizard.append(explanation);
     const actions = make("div");
@@ -960,7 +975,7 @@
       projectFilter = projectId;
       markDirty();
       render();
-      status("New project staged with new bindings. Save, then restart the operator.", "success");
+      status("New project staged with new bindings. Save, then restart the idle shared daemon.", "success");
     });
     renderPicker();
     renderCodeChoices();
@@ -970,6 +985,7 @@
   async function load() {
     try {
       const body = await api("/api/config");
+      bootstrap.snippets = body.snippets;
       state = body.config;
       revision = body.revision;
       dirty = false;
@@ -977,6 +993,7 @@
       $("change-label").textContent = "Saved configuration";
       render();
       status("Configuration loaded. Changes are local until saved.", "success");
+      await refreshLiveStatus();
     } catch (error) {
       status(error.message, "error");
     }
@@ -986,11 +1003,13 @@
     try {
       syncAdvanced();
       const body = await api("/api/config", { method: "PUT", body: JSON.stringify({ config: state, revision }) });
+      bootstrap.snippets = body.snippets;
       revision = body.revision;
       dirty = false;
-      $("change-label").textContent = "Saved · restart MCP for new sessions";
+      $("change-label").textContent = "Saved configuration";
       render();
       status(`${body.message} Backup: ${body.backup}`, "success");
+      await refreshLiveStatus();
     } catch (error) {
       status(error.message, "error");
     }
@@ -1056,5 +1075,4 @@
     });
   }
   runConfigOperation($("reload"), load);
-  void refreshLiveStatus();
 })();

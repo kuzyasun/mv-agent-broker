@@ -3,12 +3,17 @@
 Use the operator's configured routes; keep task descriptions and final results
 concise. The coordinator owns decomposition, integration and final acceptance.
 
-1. Call `broker_status`, then page `agents_list` for the selected allowed project.
-   Choose a `kind: route` entry with the desired role and model/effort. Registered
-   adapters/account labels do not establish available vendor quota or a different
-   vendor login. Respect known exhausted/failed routes; record an observed failure
-   before explicitly choosing an allowed alternative. Do not silently escalate
-   models, effort, or the number of agents.
+1. Call `broker_status` first and require `daemon_state: READY`. Then call
+   `agents_list` for the exact selected allowed `project_id`, following every
+   `next_cursor` until it is `null`; never choose from a partial page. Choose
+   the exact `kind: route` entry with the desired role and model/effort, and
+   record its `route_id`. Registered adapters/account labels do not establish
+   available vendor quota or a different vendor login. Respect known
+   exhausted/failed routes; record an observed failure before explicitly
+   choosing an allowed alternative. Do not silently escalate models, effort,
+   or the number of agents.
+   The ready project example is
+   [DMP protocol](coordinator-projects/dmp-protocol.md).
 2. Give one worker a complete bounded outcome, owned paths, required context,
    acceptance checks, and a deadline. Prefer separate worktrees for independent
    writes. Pass `route_id` with project, instructions, workspace and a unique
@@ -32,8 +37,12 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    artifacts to follow-up worker tasks. The original coordinator verifies confirmed
    findings and reviews the final diff. Do not repeat vendor reviews for unchanged
    mechanical details.
-6. New route settings apply to new sessions after restarting the daemon that loads
-   the operator configuration. Keep existing sessions
+6. New route settings apply to new sessions after restarting the daemon that
+   loads the operator configuration. In shared-daemon mode, save the file,
+   stop only when there are no active turns or pending intents, then start the
+   daemon before rediscovering routes. The UI distinguishes saved settings that
+   are applied, settings needing a daemon restart, and unknown application
+   state; **Unsaved changes** is only a draft indicator. Keep existing sessions
    and evidence; replace a native session when its durable context is incompatible.
    An `UNKNOWN` execution does not authorize a replacement paid launch.
 7. Record observed blockers in a short issue log: provider/model/version, route and

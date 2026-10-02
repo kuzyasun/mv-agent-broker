@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { sha256Hex } from "../shared/ids.ts";
 import type { RegistryDb } from "../storage/db.ts";
 import {
   getAccount,
@@ -145,6 +146,15 @@ function stableJson(value: unknown): string {
       `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+/**
+ * Hash the validated, path-normalized settings that affect new sessions.
+ * The root timestamp is generated when it is absent and is not a setting.
+ */
+export function operatorConfigFingerprint(config: OperatorConfig): string {
+  const { created_at: _generatedCreatedAt, ...semanticConfig } = config;
+  return sha256Hex(stableJson(semanticConfig));
 }
 
 function parseInput(input: string): { value: unknown; baseDir: string } {

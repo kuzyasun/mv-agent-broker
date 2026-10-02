@@ -61,6 +61,30 @@ async function request(
 }
 
 describe("operator settings UI service", () => {
+  it("refreshes shared bridge snippets after saved state directory changes", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "operator-ui-snippets-"));
+    roots.push(root);
+    const configPath = path.join(root, "operator.json");
+    writeFileSync(configPath, JSON.stringify(config()));
+    const service = await startOperatorUi({ configPath, port: 0 });
+    services.push(service);
+    const headers = { "x-operator-token": service.token };
+    const current = await (await request(service, "GET", "/api/config", undefined, headers)).json() as { revision: string };
+    const updated = { ...config(), state_dir: "./new-state" };
+    const saved = await (await request(service, "PUT", "/api/config", { revision: current.revision, config: updated }, headers)).json() as { snippets: { json: string } };
+    const check = (snippets: { json: string }) => {
+      const connection = JSON.parse(snippets.json).mcpServers["agent-broker"];
+      expect(connection.env).toEqual({ AB_STATE_DIR: path.join(root, "new-state"), AB_COORDINATOR_ID: "coord-main" });
+      expect(connection.args).toEqual(["--experimental-transform-types", path.resolve("src/bridge/main-stdio.ts")]);
+    };
+    check(saved.snippets);
+    const reloaded = await (await request(service, "GET", "/api/config", undefined, headers)).json() as { snippets: { json: string } };
+    check(reloaded.snippets);
+    const page = await (await fetch(service.url)).text();
+    expect(page).toContain("new-state");
+    expect(page).not.toContain("relative-state");
+  });
+
   it("protects config reads and writes with the loopback host, origin, and token", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "operator-ui-unit-"));
     roots.push(root);
@@ -74,6 +98,10 @@ describe("operator settings UI service", () => {
     const page = await pageResponse.text();
     expect(page).toContain('window.__OPERATOR_BOOTSTRAP__ = {"token":');
     expect(page).not.toContain("/*OPERATOR_BOOTSTRAP_JSON*/");
+    expect(page).toContain("main-stdio.ts");
+    expect(page).toContain("AB_STATE_DIR");
+    expect(page).toContain("AB_COORDINATOR_ID");
+    expect(page).not.toContain('"stdio", "--config"');
 
     expect((await fetch(`${service.url}/api/config`)).status).toBe(401);
     expect((await request(service, "GET", "/api/config", undefined, { "x-operator-token": service.token })).status).toBe(200);
@@ -111,6 +139,7 @@ describe("operator settings UI service", () => {
       status: "stopped",
       readiness: "UNAVAILABLE",
       runtime_observation: "unknown",
+      settings_state: "unknown",
       active_turns: null,
       error_turns: null,
     });

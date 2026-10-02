@@ -7,7 +7,7 @@ import { startDaemon } from "../daemon/bootstrap.ts";
 import { startDaemonRpc, type OperatorStopPlan } from "../daemon/rpc.ts";
 import { listNonterminalTurns, listPendingIntents } from "../storage/repo.ts";
 import { BrokerError } from "../shared/errors.ts";
-import { applyOperatorConfig, loadOperatorConfig, type OperatorConfig } from "./config.ts";
+import { applyOperatorConfig, loadOperatorConfig, operatorConfigFingerprint, type OperatorConfig } from "./config.ts";
 import { readRuntimeRecord, startOperator, statusOperator, stopOperator } from "./operations.ts";
 import { projectOperatorOverview } from "./overview.ts";
 import { inspectQuarantine, reconcileWorkspace } from "./recovery.ts";
@@ -128,7 +128,10 @@ async function runStdio(config: OperatorConfig): Promise<void> {
   }
 }
 
-export function daemonOperatorStatus(daemon: Awaited<ReturnType<typeof startDaemon>>): Record<string, unknown> {
+export function daemonOperatorStatus(
+  daemon: Awaited<ReturnType<typeof startDaemon>>,
+  appliedConfigFingerprint: string,
+): Record<string, unknown> {
   const runtimePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const manifestPath = path.join(runtimePath, "runtime-manifest.json");
   const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) as { commit: string } : null;
@@ -139,6 +142,7 @@ export function daemonOperatorStatus(daemon: Awaited<ReturnType<typeof startDaem
     incarnation: daemon.lifecycle.currentIncarnation,
     daemon_pid: process.pid,
     runtime_observation: "observed-running",
+    applied_config_fingerprint: appliedConfigFingerprint,
     runtime_commit: manifest?.commit ?? null,
     runtime_path: manifest ? runtimePath : null,
     ...overview,
@@ -154,12 +158,13 @@ export function daemonOperatorStatus(daemon: Awaited<ReturnType<typeof startDaem
 async function runDaemon(config: OperatorConfig): Promise<void> {
   const env = daemonEnv(config);
   const daemon = await startDaemon(env);
+  const appliedConfigFingerprint = operatorConfigFingerprint(config);
   let stopRequestedResolve: (() => void) | undefined;
   let operatorStopPromise: Promise<void> | null = null;
   const stopRequested = new Promise<void>(resolve => { stopRequestedResolve = resolve; });
   const operator = {
     coordinatorId: config.coordinator_id,
-    status: () => daemonOperatorStatus(daemon),
+    status: () => daemonOperatorStatus(daemon, appliedConfigFingerprint),
     stop: (): OperatorStopPlan => {
       const activeTurns = listNonterminalTurns(daemon.db);
       const pendingIntents = listPendingIntents(daemon.db);
@@ -175,7 +180,7 @@ async function runDaemon(config: OperatorConfig): Promise<void> {
         });
       }
       return {
-        response: { ...daemonOperatorStatus(daemon), accepted: true, readiness: "STOPPING" },
+        response: { ...daemonOperatorStatus(daemon, appliedConfigFingerprint), accepted: true, readiness: "STOPPING" },
         shutdown: () => {
           operatorStopPromise ??= daemon.stop();
           stopRequestedResolve?.();

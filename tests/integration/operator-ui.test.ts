@@ -7,6 +7,7 @@ import path from "node:path";
 import { startDaemon } from "../../src/daemon/bootstrap.ts";
 import { startDaemonRpc } from "../../src/daemon/rpc.ts";
 import { daemonOperatorStatus } from "../../src/operator/main.ts";
+import { operatorConfigFingerprint, validateOperatorConfig } from "../../src/operator/config.ts";
 import { startOperatorUi } from "../../src/operator/ui.ts";
 import { insertCoordinator, insertProject, insertSession, insertTurn } from "../../src/storage/repo.ts";
 import type { SessionRecord, TurnRecord } from "../../src/shared/api-types.ts";
@@ -82,15 +83,24 @@ describe("operator UI CLI", () => {
       version: 1,
       state_dir: stateDir,
       coordinator_id: "operator",
-      projects: [],
-      coordinators: [{ coordinator_id: "operator", display_name: "Operator", allowed_project_ids: [] }],
-      accounts: [],
-      workspaces: [],
-      policy_profiles: [],
+      projects: [{ project_id: "project-main", display_name: "Main" }],
+      coordinators: [{ coordinator_id: "operator", display_name: "Operator", allowed_project_ids: ["project-main"] }],
+      accounts: [{ account_profile_id: "account-main", provider: "mock", quota_scope_id: "mock", auth_mode: "cli-owned" }],
+      workspaces: [{ workspace_id: "workspace-main", project_id: "project-main", mode: "current", canonical_path: null }],
+      policy_profiles: [{ policy_profile_id: "policy-main", config: { access: "read_only" } }],
       coverage_profiles: [],
-      routes: [],
+      routes: [{
+        route_id: "route-main",
+        project_id: "project-main",
+        provider: "mock",
+        account_profile_id: "account-main",
+        model: "mock-model",
+        role: "worker",
+        policy_profile_id: "policy-main",
+      }],
     };
     writeFileSync(configPath, JSON.stringify(config));
+    const appliedConfigFingerprint = operatorConfigFingerprint(validateOperatorConfig(config, root));
 
     const daemon = await startDaemon({ stateDir, coordinatorId: "operator" });
     insertCoordinator(daemon.db, {
@@ -195,7 +205,7 @@ describe("operator UI CLI", () => {
       stateDir,
       operator: {
         coordinatorId: "operator",
-        status: () => daemonOperatorStatus(daemon),
+        status: () => daemonOperatorStatus(daemon, appliedConfigFingerprint),
         stop: () => ({ response: { accepted: true }, shutdown: async () => undefined }),
       },
     });
@@ -211,6 +221,7 @@ describe("operator UI CLI", () => {
       expect(payload).toMatchObject({
         status: "ready",
         readiness: "READY",
+        settings_state: "applied",
         runtime_observation: "observed-running",
         runtime_commit: null,
         daemon_pid: process.pid,
@@ -230,6 +241,30 @@ describe("operator UI CLI", () => {
       });
       expect(JSON.stringify(payload)).not.toContain("private-");
       expect(readFileSync(configPath)).toEqual(before);
+      expect(Number(daemon.db.raw.prepare("SELECT COUNT(*) AS count FROM turns").get()?.count)).toBe(turnCountBefore);
+
+      const configResponse = await fetch(`${service.url}/api/config`, {
+        headers: { "x-operator-token": service.token },
+      });
+      const savedConfig = await configResponse.json() as { revision: string };
+      const save = await fetch(`${service.url}/api/config`, {
+        method: "PUT",
+        headers: { "x-operator-token": service.token, "content-type": "application/json" },
+        body: JSON.stringify({ revision: savedConfig.revision, config: {
+          ...config,
+          routes: [{ ...config.routes[0], model: "new-model" }],
+        } }),
+      });
+      expect(save.status).toBe(200);
+      expect(await save.json()).not.toHaveProperty("restart_required");
+      const changed = await fetch(`${service.url}/api/status`, {
+        headers: { host: new URL(service.url).host, "x-operator-token": service.token },
+      });
+      expect(changed.status).toBe(200);
+      expect(await changed.json()).toMatchObject({
+        settings_state: "restart_required",
+        active_turns: [{ model: "mock-model" }],
+      });
       expect(Number(daemon.db.raw.prepare("SELECT COUNT(*) AS count FROM turns").get()?.count)).toBe(turnCountBefore);
 
       writeFileSync(configPath, JSON.stringify({

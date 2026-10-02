@@ -49,6 +49,9 @@ h2 { margin: .15rem 0 0; font-size: 1.35rem; letter-spacing: -.025em; }
 .status:empty { display: none; }
 .status.success { background: #e8f5ef; color: var(--green); }
 .status.error { background: #fcecec; color: var(--red); }
+.settings-state { margin: .7rem 0 0; padding: .55rem .75rem; border-radius: 8px; background: #f1f3f6; color: var(--muted); font-size: .82rem; font-weight: 700; }
+.settings-state.success { background: #e8f5ef; color: var(--green); }
+.settings-state.warning { background: #fff9e6; color: #624d11; }
 .live-card { border-color: #c9d8f2; }
 .live-runtime { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .65rem; margin: .7rem 0 1rem; }
 .live-runtime-item { padding: .65rem .75rem; border: 1px solid #d8e3f5; border-radius: 9px; background: #f7faff; }

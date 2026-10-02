@@ -6,6 +6,7 @@ import { openRegistryDb } from "../../src/storage/db.ts";
 import {
   applyOperatorConfig,
   loadOperatorConfig,
+  operatorConfigFingerprint,
   type OperatorConfig,
 } from "../../src/operator/config.ts";
 import { createHarness, COVERAGE_CONFIG } from "../helpers/harness.ts";
@@ -94,6 +95,39 @@ describe("operator configuration", () => {
 
     expect(loaded.state_dir).toBe(path.join(root, "owned-state"));
     expect(loaded.routes[0]?.route_id).toBe("route-main");
+  });
+
+  it("fingerprints normalized semantic settings, not formatting or generated timestamps", () => {
+    const first = validConfig();
+    const route = first.routes[0]!;
+    const second = {
+      routes: [{
+        policy_profile_id: route.policy_profile_id,
+        role: route.role,
+        model: route.model,
+        account_profile_id: route.account_profile_id,
+        provider: route.provider,
+        project_id: route.project_id,
+        route_id: route.route_id,
+      }],
+      coverage_profiles: first.coverage_profiles,
+      policy_profiles: first.policy_profiles,
+      workspaces: first.workspaces,
+      accounts: first.accounts,
+      coordinators: first.coordinators,
+      projects: first.projects,
+      coordinator_id: first.coordinator_id,
+      state_dir: first.state_dir,
+      version: first.version,
+    };
+    const firstFingerprint = operatorConfigFingerprint(loadOperatorConfig(JSON.stringify(first)));
+    const secondFingerprint = operatorConfigFingerprint(loadOperatorConfig(` \n${JSON.stringify(second, null, 2)}\n`));
+
+    expect(secondFingerprint).toBe(firstFingerprint);
+    expect(operatorConfigFingerprint(loadOperatorConfig(JSON.stringify({
+      ...first,
+      routes: [{ ...first.routes[0]!, model: "different-model" }],
+    })))).not.toBe(firstFingerprint);
   });
 
   it("rejects duplicate IDs and foreign route references", () => {

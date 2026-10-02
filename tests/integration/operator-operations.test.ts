@@ -57,6 +57,8 @@ describe("operator runtime RPC", () => {
       }
       const status = cli("status");
       expect(status.status).toBe("ready");
+      expect(status.settings_state).toBe("applied");
+      expect(status.applied_config_fingerprint).toBe(status.saved_config_fingerprint);
       expect(status.runtime_commit).toBe(commit);
       expect(status.daemon_pid).toBe(running.daemon_pid);
       const snippet = cli("mcp-config", ["--connect"]).mcpServers["agent-broker"];
@@ -71,6 +73,12 @@ describe("operator runtime RPC", () => {
       // A stale sidecar must not change the version reported by the running daemon.
       writeFileSync(path.join(root, "state/operator-runtime.json"), JSON.stringify({ runtime_commit: "stale", runtime_path: "stale", manifest_path: "stale", daemon_pid: 1 }));
       expect(cli("status").runtime_commit).toBe(commit);
+      const savedConfig = JSON.parse(readFileSync(configPath, "utf8"));
+      savedConfig.coordinators[0].display_name = "Saved name changed";
+      writeFileSync(configPath, JSON.stringify(savedConfig));
+      const changedStatus = cli("status");
+      expect(changedStatus.settings_state).toBe("restart_required");
+      expect(changedStatus.applied_config_fingerprint).toBe(status.applied_config_fingerprint);
       const stopped = cli("stop");
       expect(stopped.status).toBe("stopped");
       expect(stopped.runtime_commit).toBe(commit);
@@ -78,6 +86,7 @@ describe("operator runtime RPC", () => {
       started = false;
       expect(existsSync(path.join(root, "state/daemon.lock"))).toBe(false);
       expect(cli("status").status).toBe("stopped");
+      expect(cli("status").settings_state).toBe("unknown");
     } finally {
       if (started) cli("stop");
     }

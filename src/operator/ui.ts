@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DaemonRpcError } from "../bridge/rpcClient.ts";
 import { validateOperatorConfig, type OperatorConfig } from "./config.ts";
-import { statusOperator } from "./operations.ts";
+import { readRuntimeRecord, statusOperator } from "./operations.ts";
 import { parseAntigravityModelCatalog } from "../providers/antigravity/antigravityAdapter.ts";
 import { parseCursorModelCatalog, resolveCursorModel } from "../providers/cursor/cursorAdapter.ts";
 import { boundedSanitizedDetail, resolveBinaryPath, runMetadataProbe } from "../providers/common/readiness.ts";
@@ -346,13 +346,20 @@ export function buildModelOptions(provider: string, catalog: readonly string[]):
   }));
 }
 
-function buildConnectionSnippets(configPath: string, scriptPath: string, config: OperatorConfig): { json: string; toml: string } {
+function buildConnectionSnippets(scriptPath: string, config: OperatorConfig): { json: string; toml: string } {
   const command = path.resolve(process.execPath);
-  const absoluteScript = path.resolve(scriptPath);
-  const args = ["--experimental-transform-types", absoluteScript, "stdio", "--config", path.resolve(configPath)];
+  const record = readRuntimeRecord(config.state_dir);
+  const bridgeScript = record
+    ? path.resolve(record.runtime_path, "src", "bridge", "main-stdio.ts")
+    : path.resolve(path.dirname(scriptPath), "..", "bridge", "main-stdio.ts");
+  const args = ["--experimental-transform-types", bridgeScript];
   const json = JSON.stringify({
     mcpServers: {
-      "agent-broker": { command, args },
+      "agent-broker": {
+        command,
+        args,
+        env: { AB_STATE_DIR: config.state_dir, AB_COORDINATOR_ID: config.coordinator_id },
+      },
     },
   }, null, 2);
   const toml = [
@@ -360,8 +367,11 @@ function buildConnectionSnippets(configPath: string, scriptPath: string, config:
     `command = ${JSON.stringify(command)}`,
     `args = ${JSON.stringify(args)}`,
     "",
+    "[mcp_servers.agent_broker.env]",
+    `AB_STATE_DIR = ${JSON.stringify(config.state_dir)}`,
+    `AB_COORDINATOR_ID = ${JSON.stringify(config.coordinator_id)}`,
+    "",
   ].join("\n");
-  void config;
   return { json, toml };
 }
 
@@ -370,7 +380,7 @@ function bootstrapHtml(token: string, port: number, configPath: string, scriptPa
     token,
     port,
     configPath: path.resolve(configPath),
-    snippets: buildConnectionSnippets(configPath, scriptPath, config),
+    snippets: buildConnectionSnippets(scriptPath, config),
   }).replace(/</g, "\\u003c");
   const html = readFileSync(path.join(UI_DIR, "index.html"), "utf8");
   return html.replace("/*OPERATOR_BOOTSTRAP_JSON*/", () => bootstrap);
@@ -445,7 +455,9 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
         return;
       }
       if (request.method === "GET" && pathName === "/") {
-        sendText(response, 200, bootstrapHtml(token, actualPort, configPath, scriptPath, validated), "text/html; charset=utf-8");
+        const current = readRawConfig(configPath);
+        const currentConfig = validateRawConfig(configPath, current.value);
+        sendText(response, 200, bootstrapHtml(token, actualPort, configPath, scriptPath, currentConfig), "text/html; charset=utf-8");
         return;
       }
       const asset = request.method === "GET" ? fileAsset(pathName) : null;
@@ -456,8 +468,8 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
       if (request.method === "GET" && pathName === "/api/config") {
         try {
           const current = readRawConfig(configPath);
-          validateRawConfig(configPath, current.value);
-          sendJson(response, 200, { config: current.value, revision: sha256(current.bytes) });
+          const currentConfig = validateRawConfig(configPath, current.value);
+          sendJson(response, 200, { config: current.value, revision: sha256(current.bytes), snippets: buildConnectionSnippets(scriptPath, currentConfig) });
         } catch (error) {
           sendJson(response, 409, { error: safeError(error) });
         }
@@ -489,15 +501,16 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
               sendJson(response, 409, { error: "stale config revision", revision: currentRevision });
               return;
             }
-            validateRawConfig(configPath, update.config);
+            const nextConfig = validateRawConfig(configPath, update.config);
+            const snippets = buildConnectionSnippets(scriptPath, nextConfig);
             const backup = writeConfigAtomically(configPath, current, update.config);
             const next = readRawConfig(configPath);
             sendJson(response, 200, {
               saved: true,
               revision: sha256(next.bytes),
               backup,
-              restart_required: true,
-              message: "Configuration saved. Restart the operator for new sessions to use it; existing sessions keep their bindings.",
+              snippets,
+              message: "Configuration saved. Check the application state above. If settings need a restart, stop the shared daemon while idle and start it again. Existing sessions keep their bindings.",
             });
           };
           saveChain = saveChain.then(runSave, runSave);

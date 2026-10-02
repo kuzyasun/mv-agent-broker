@@ -25,7 +25,8 @@
         <p class="eyebrow" id="change-label">Saved configuration</p>
         <strong id="revision-label">Loading configuration…</strong>
       </div>
-      <p class="muted">Save settings, then restart MCP to use them in new sessions. A backup is created with every save.</p>
+      <p class="muted">Save writes the file. The shared daemon must be stopped while idle and started again before new sessions use the settings; reconnecting a bridge or this page is not enough.</p>
+      <p id="settings-state" class="settings-state" role="status" aria-live="polite">Application state unknown</p>
     </section>
 
     <section class="card live-card" aria-labelledby="live-heading">
@@ -78,7 +79,7 @@
         </div>
         <button id="new-project" class="button secondary">New project wizard</button>
       </div>
-      <p class="notice">Add another repository with the project wizard, then save and restart MCP. You can reuse your agent profiles. Existing sessions keep their original project folder.</p>
+      <p class="notice">Add another repository with the project wizard, save, then stop the shared daemon only when there are no active turns or pending intents and start it again. You can reuse your agent profiles. Existing sessions keep their original project folder.</p>
       <div id="projects" class="project-list"></div>
       <div id="project-wizard" class="wizard hidden"></div>
     </section>
@@ -90,7 +91,7 @@
           <h2>Client snippets</h2>
         </div>
       </div>
-      <p class="muted">Both snippets point to this exact configuration path. Restart a running MCP client and start new sessions; never terminate paid jobs automatically.</p>
+      <p class="muted">These snippets attach to the shared daemon through the local bridge using its state directory and coordinator ID; they never launch a second daemon owner. Start the daemon first. Never terminate paid jobs automatically.</p>
       <div class="snippet-grid">
         <label> MCP JSON <textarea id="mcp-json" class="code" readonly></textarea></label>
         <label> Codex TOML <textarea id="codex-toml" class="code" readonly></textarea></label>

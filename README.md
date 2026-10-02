@@ -72,8 +72,10 @@ npm run --silent broker -- ui --config docs/examples/operator.mock.json
 ```
 
 Open the printed loopback URL. For native providers, select your prepared
-operator config instead of the mock example. Saves create backups; restart
-MCP to use changed settings in new sessions.
+operator config instead of the mock example. Saves create backups. In shared
+daemon mode, stop the daemon only while idle and start it again to apply
+changed settings to new sessions; reconnecting a bridge or page does not
+reload the daemon.
 
 ```bash
 npm install

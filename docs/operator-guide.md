@@ -12,10 +12,12 @@ npm install
 npm run --silent broker -- mcp-config --config docs/examples/operator.mock.json
 ```
 
-Copy the emitted `mcpServers` entry into your MCP client. The client starts the
-stdio server; its first start creates the state directory. For a manual protocol
-diagnostic, use `npm run --silent broker -- stdio --config ...` and send JSON-RPC
-to that process's stdin. Avoid starting two owners of the same state directory.
+Copy the emitted `mcpServers` entry into your MCP client for deliberate direct
+stdio mode. That mode starts its own daemon in the same process and is separate
+from shared-daemon operation. Its first start creates the state directory. For
+a manual protocol diagnostic, use `npm run --silent broker -- stdio --config ...`
+and send JSON-RPC to that process's stdin. Avoid starting two owners of the
+same state directory.
 
 ```powershell
 npm run --silent broker -- mcp-config --config C:\path\to\operator.json
@@ -54,9 +56,11 @@ to `127.0.0.1`, uses a per-process token for API reads and writes, and serves
 only its fixed UI assets. It loads the raw JSON so unknown fields and relative
 paths remain visible and intact. Saving validates a clone with the same
 operator validator, rejects stale revisions, writes an exact same-directory
-backup, and atomically replaces the config. A save reports that the operator
-must be restarted; it never starts a daemon, edits the registry, runs
-inference, exports credentials, or terminates existing paid jobs.
+backup, and atomically replaces the config. In shared-daemon mode, stop the
+daemon only while idle and start it again to apply settings to new sessions;
+reconnecting the bridge or settings page alone does not reload the daemon. The
+UI never starts a daemon, edits the registry, runs inference, exports
+credentials, or terminates existing paid jobs.
 
 The Profiles section edits routes with explicit project, configured account,
 role, policy, model, effort, and advisory native-subagent settings. Route IDs
@@ -80,9 +84,11 @@ and write scopes. Newly introduced top-level files or folders need adding to
 coverage; the presets are a snapshot of the folder, not an unrestricted wildcard.
 Folder browsing lists names only and does not run an agent or spend quota.
 Creation stages new project, workspace, policy, and coverage IDs locally;
-**Save** writes the configuration, then restart MCP to use the new project.
-Existing sessions retain their bindings. The new project can share the current
-configuration and state; a separate configuration/state is optional.
+**Save** writes the configuration. In shared-daemon mode, stop the daemon only
+when there are no active turns or pending intents, then start it again to use
+the new project. Existing sessions retain their bindings. The new project can
+share the current configuration and state; a separate configuration/state is
+optional.
 
 ### Snapshot size and build caches
 
@@ -101,9 +107,10 @@ files or folders directly under `web` later; new files inside `web/src` are
 already covered.
 
 When replacing a coverage or policy already bound to a session, use a new
-profile ID for future sessions and keep the historical evidence. Restart the
-shared daemon after saving. Verify `agent_workspace_snapshot` before paying
-for a worker or reviewer turn.
+profile ID for future sessions and keep the historical evidence. After saving,
+stop and start the shared daemon only when there are no active turns or pending
+intents. Verify `agent_workspace_snapshot` before paying for a worker or
+reviewer turn.
 
 Broker-managed Windows Git operations enable `core.longpaths` for each
 invocation; they do not change repository or global Git configuration. A
@@ -112,9 +119,12 @@ changes, use a current-checkout snapshot with a sealed baseline/target review
 binding, or explicitly transfer only the intended changes into an isolated
 checkout before capturing it.
 
-The Connection section emits MCP JSON and Codex TOML using the same absolute
-config path, node executable, and operator script. Restart a client after
-copying a snippet so new sessions use the saved routes.
+The Connection section emits MCP JSON and Codex TOML that attach to the shared
+daemon through `src/bridge/main-stdio.ts`, with `AB_STATE_DIR` and
+`AB_COORDINATOR_ID`. It reuses the accepted runtime path when one exists;
+otherwise it points at the available bridge source. Start the daemon before
+attaching. Reload a client after copying a snippet if its bridge process is
+already running; this reconnects the bridge but does not reload daemon settings.
 
 Use the project selector to filter profiles. Duplicate a profile to create a
 different model/effort or review preset, then give it a unique ID using letters,
@@ -148,10 +158,11 @@ desired count or an enforced cap; it guides delegation only in `prefer` mode.
 preset because ZCode native children are not verified; a ZCode worker can
 still implement a large task. Duplicate a profile to make another preset.
 
-The settings process is independent of MCP. After saving, restart the process
-that loads the configuration: the MCP server for direct stdio mode, or the
-shared daemon for `--connect` mode. Restarting only the settings page or only
-a shared-daemon bridge does not apply saved route settings. An updated bridge
+The settings process is independent of MCP. After saving, direct stdio mode
+must be started again, while shared-daemon mode requires stopping the daemon
+only when idle and starting it again. Stop refuses active turns and pending
+intents; it never kills paid work. Restarting only the settings page or only a
+shared-daemon bridge does not apply saved route settings. An updated bridge
 reconnects after the shared daemon returns. The project wizard can add a
 repository to the same state
 using new IDs; a separate config/state is another option. The UI does not inspect
@@ -187,7 +198,8 @@ guarantee child count, child model, or permissions. The default is one broker
 session with no native delegation preference.
 
 To change a route, edit its JSON `model`, `effort`, or `native_subagents` and
-restart the operator. New sessions use the new route; existing sessions keep
+restart the process that owns the settings: direct stdio mode itself, or the
+idle shared daemon. New sessions use the new route; existing sessions keep
 their immutable provider, account, model, effort, role, policy, and workspace
 settings. A raw `agent_session_spawn` may select `route_id`, or may continue
 using the existing explicit provider/account/model/role/policy fields. Mixing
@@ -227,8 +239,8 @@ private RPC. Generate an existing-daemon bridge snippet with `--connect`;
 shutdown drains accepted work:
 
 ```powershell
-npm run broker -- daemon --config C:\ops\agent-broker.json
-npm run --silent broker -- mcp-config --connect --config C:\ops\agent-broker.json
+npm run --silent broker -- daemon --config 'C:\ops\agent-broker.json'
+npm run --silent broker -- mcp-config --connect --config 'C:\ops\agent-broker.json'
 ```
 
 For a Codex TOML client, put the emitted `command` and `args` under
@@ -243,10 +255,10 @@ dirty or untracked source is never copied, and the original absolute config
 path remains the source of relative configuration paths.
 
 ```powershell
-npm run broker -- start --config C:\ops\agent-broker.json
-npm run broker -- start --config C:\ops\agent-broker.json --ref <accepted-commit>
-npm run broker -- status --config C:\ops\agent-broker.json
-npm run broker -- stop --config C:\ops\agent-broker.json
+npm run --silent broker -- start --config 'C:\ops\agent-broker.json'
+npm run --silent broker -- start --config 'C:\ops\agent-broker.json' --ref '<accepted-commit>'
+npm run --silent broker -- status --config 'C:\ops\agent-broker.json'
+npm run --silent broker -- stop --config 'C:\ops\agent-broker.json'
 ```
 
 `start` waits for an authenticated `READY` response and reports the pinned
@@ -300,6 +312,24 @@ atomically clears only the target quarantine and appends an audit event. It
 never stops or kills a process, removes a lock, deletes workspace contents,
 prunes Git metadata, adopts a path, or releases unrelated resources. Start
 the daemon again only after the command succeeds.
+
+## Coordinator startup and new projects
+
+After attaching a bridge, call `broker_status` first and require `daemon_state`
+`READY`. For the exact project, call `agents_list` with a deliberate
+`project_id` and `limit` (for example `100`), then repeat with each returned
+`next_cursor` until it is `null`; do not choose from a partial page. Select the
+exact `kind: "route"` and record its `route_id`, then use the exact registered
+workspace ID in `agent_session_spawn`. The UI's **Saved settings applied**,
+**Saved settings need daemon restart**, and **Application state unknown** are
+separate from the draft's **Unsaved changes** label; saving alone is not proof
+that the daemon loaded the file.
+
+For a ready project configuration and coordinator example, see
+[docs/coordinator-projects/dmp-protocol.md](coordinator-projects/dmp-protocol.md).
+The new-project wizard only stages IDs and bindings locally. Save them, then
+stop the shared daemon only when there are no active turns or pending intents
+and start it again before discovering the new project.
 
 ## Selecting a route from a coordinator
 
