@@ -148,10 +148,24 @@ desired count or an enforced cap; it guides delegation only in `prefer` mode.
 preset because ZCode native children are not verified; a ZCode worker can
 still implement a large task. Duplicate a profile to make another preset.
 
-The settings process is independent of MCP: restart MCP after saving, not just
-the settings page. The project wizard can add a repository to the same state
+The settings process is independent of MCP. After saving, restart the process
+that loads the configuration: the MCP server for direct stdio mode, or the
+shared daemon for `--connect` mode. Restarting only the settings page or only
+a shared-daemon bridge does not apply saved route settings. An updated bridge
+reconnects after the shared daemon returns. The project wizard can add a
+repository to the same state
 using new IDs; a separate config/state is another option. The UI does not inspect
 bound-session conflicts in the registry; daemon startup remains authoritative.
+
+The shared daemon and each client's stdio bridge are separate processes. An
+updated bridge reconnects before its next discovery or tool call after the
+daemon restarts, rereads the bridge token, and authenticates the same
+coordinator. If the daemon is unavailable, the call fails; a later call can
+connect once it returns. A tool call interrupted after dispatch is reported as
+an error and is never automatically replayed. Inspect its session/turn or reuse
+the original idempotency key explicitly when resolving an uncertain outcome.
+Reload an already running older bridge once to load this behavior; updating
+files on disk cannot change code already loaded by that process.
 
 ## Accounts, roles, and routes
 

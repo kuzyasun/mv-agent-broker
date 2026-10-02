@@ -20,8 +20,7 @@ async function main(): Promise<void> {
   const socketPath = socketPathFor(stateDir);
   let client: DaemonRpcClient;
   try {
-    const token = readBridgeToken(stateDir);
-    client = new DaemonRpcClient(socketPath, token);
+    client = new DaemonRpcClient(socketPath, () => readBridgeToken(stateDir));
     await client.connect(coordinatorId);
   } catch (err: unknown) {
     if (err instanceof DaemonRpcError && err.code === "UNAUTHORIZED") {
@@ -40,10 +39,14 @@ async function main(): Promise<void> {
 
   const ctx: McpToolContext = {
     listTools: async () => {
+      await client.connectAndHandshake(coordinatorId);
       const res = (await client.listTools()) as { tools: McpToolDef[] };
       return res.tools;
     },
-    callTool: (name, args) => client.call(name, args),
+    callTool: async (name, args) => {
+      await client.connectAndHandshake(coordinatorId);
+      return client.call(name, args);
+    },
   };
 
   try {

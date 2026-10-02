@@ -13,14 +13,17 @@
  *   - Clean shutdown and resource release
  */
 import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
 import net from "node:net";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { startDaemon, type Daemon } from "../../src/daemon/bootstrap.ts";
 import {
   startDaemonRpc,
   readBridgeToken,
+  socketPathFor,
   writeBridgeToken,
   type DaemonRpcServer,
 } from "../../src/daemon/rpc.ts";
@@ -193,6 +196,234 @@ describe("private-socket daemon/bridge split (ADR-0003, spec §4.1)", () => {
       client1.close();
       client2.close();
       await fixture.cleanup();
+    }
+  });
+
+  it("reconnects concurrent requests once and recovers after an unavailable daemon", async () => {
+    const fixture = await setupDaemonRpc();
+    let tokenReads = 0;
+    const client = new DaemonRpcClient(
+      fixture.rpcServer.socketPath,
+      () => {
+        tokenReads += 1;
+        return readBridgeToken(fixture.stateDir);
+      },
+    );
+    let activeRpc: DaemonRpcServer = fixture.rpcServer;
+    try {
+      await client.connect("coord-rpc");
+      expect(tokenReads).toBe(1);
+
+      await activeRpc.stop();
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      activeRpc = await startDaemonRpc({
+        core: fixture.daemon.core,
+        coordinatorId: "coord-rpc",
+        stateDir: fixture.stateDir,
+      });
+
+      const [tools, status] = await Promise.all([
+        client.listTools(),
+        client.call("broker_status", {}),
+      ]);
+      expect(tokenReads).toBe(2); // concurrent requests share one new handshake
+      expect(tools.tools).toHaveLength(13);
+      expect((status as { allowed_projects: Array<{ project_id: string }> }).allowed_projects)
+        .toEqual(expect.arrayContaining([expect.objectContaining({ project_id: "p-rpc" })]));
+
+      await activeRpc.stop();
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await expect(client.call("broker_status", {})).rejects.toThrow(/not connected|connect/i);
+
+      activeRpc = await startDaemonRpc({
+        core: fixture.daemon.core,
+        coordinatorId: "coord-rpc",
+        stateDir: fixture.stateDir,
+      });
+      const recovered = (await client.call("broker_status", {})) as {
+        allowed_projects: Array<{ project_id: string }>;
+      };
+      expect(recovered.allowed_projects.some((p) => p.project_id === "p-rpc")).toBe(true);
+      expect(tokenReads).toBe(3);
+    } finally {
+      client.close();
+      if (activeRpc !== fixture.rpcServer) await activeRpc.stop();
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps the stdio bridge alive across daemon restart and token rotation", async () => {
+    const fixture = await setupDaemonRpc();
+    const child = spawn(process.execPath, [
+      "--experimental-transform-types",
+      path.resolve("src/bridge/main-stdio.ts"),
+    ], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        AB_STATE_DIR: fixture.stateDir,
+        AB_COORDINATOR_ID: "coord-rpc",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const rl = createInterface({ input: child.stdout });
+    const responses = new Map<number, (value: any) => void>();
+    rl.on("line", (line) => {
+      const response = JSON.parse(line) as { id: number };
+      responses.get(response.id)?.(response);
+    });
+    const call = (id: number, method: string, params?: unknown): Promise<any> =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          responses.delete(id);
+          reject(new Error(`stdio response timed out for request ${id}`));
+        }, 5_000);
+        responses.set(id, (response) => {
+          clearTimeout(timer);
+          resolve(response);
+        });
+        child.stdin.write(`${JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method,
+          ...(params === undefined ? {} : { params }),
+        })}\n`);
+      });
+
+    let restartedRpc: DaemonRpcServer | undefined;
+    try {
+      expect((await call(1, "initialize")).result.serverInfo.name).toBe("agent-broker");
+      expect((await call(2, "tools/list")).result.tools).toHaveLength(13);
+
+      await fixture.rpcServer.stop();
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      restartedRpc = await startDaemonRpc({
+        core: fixture.daemon.core,
+        coordinatorId: "coord-rpc",
+        stateDir: fixture.stateDir,
+      });
+
+      expect((await call(3, "tools/list")).result.tools).toHaveLength(13);
+      const status = await call(4, "tools/call", {
+        name: "broker_status",
+        arguments: {},
+      });
+      const statusBody = JSON.parse(status.result.content[0].text) as {
+        allowed_projects: Array<{ project_id: string }>;
+      };
+      expect(statusBody.allowed_projects.some((project) => project.project_id === "p-rpc")).toBe(true);
+    } finally {
+      rl.close();
+      child.kill();
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null) {
+          resolve();
+        } else {
+          child.once("exit", () => resolve());
+        }
+      });
+      if (restartedRpc) await restartedRpc.stop();
+      await fixture.cleanup();
+    }
+  });
+
+  it("rejects a lost in-flight tool once, then recovers on the next call", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "ab-rpc-fake-"));
+    const socketPath = socketPathFor(stateDir);
+    let token = writeBridgeToken(stateDir, "fake-token-1");
+    let toolCalls = 0;
+    let server: net.Server | undefined;
+
+    const startFakeServer = async (dropFirstTool: boolean): Promise<void> => {
+      server = net.createServer((socket) => {
+        let buffer = "";
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          let newlineIdx: number;
+          while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
+            const line = buffer.slice(0, newlineIdx);
+            buffer = buffer.slice(newlineIdx + 1);
+            if (!line.trim()) continue;
+            const request = JSON.parse(line) as {
+              id: number;
+              method: string;
+              params?: Record<string, unknown>;
+            };
+            if (request.method === "handshake") {
+              expect(request.params?.token).toBe(token);
+              expect(request.params?.coordinatorId).toBe("coord-rpc");
+              socket.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { ok: true } }) + "\n");
+            } else if (request.method === "tool") {
+              toolCalls += 1;
+              if (dropFirstTool && toolCalls === 1) {
+                socket.destroy();
+              } else {
+                socket.write(JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: request.id,
+                  result: { ok: true, tool: request.params?.name },
+                }) + "\n");
+              }
+            }
+          }
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        server!.once("error", reject);
+        server!.listen(socketPath, () => resolve());
+      });
+    };
+
+    const stopFakeServer = async (): Promise<void> => {
+      if (!server) return;
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = undefined;
+    };
+
+    const client = new DaemonRpcClient(socketPath, () => readBridgeToken(stateDir));
+    try {
+      await startFakeServer(true);
+      await client.connect("coord-rpc");
+      await expect(client.call("once_only", { idempotency_key: "once-1" })).rejects.toThrow(/closed|connect|not connected/i);
+      expect(toolCalls).toBe(1);
+
+      await stopFakeServer();
+      token = writeBridgeToken(stateDir, "fake-token-2");
+      await startFakeServer(false);
+      await expect(client.call("recovered", {})).resolves.toEqual({ ok: true, tool: "recovered" });
+      expect(toolCalls).toBe(2);
+    } finally {
+      client.close();
+      await stopFakeServer();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds a silent handshake and cleans up the failed socket", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "ab-rpc-silent-"));
+    const socketPath = socketPathFor(stateDir);
+    writeBridgeToken(stateDir, "silent-token");
+    const sockets = new Set<net.Socket>();
+    const server = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, () => resolve());
+    });
+
+    const client = new DaemonRpcClient(socketPath, () => readBridgeToken(stateDir));
+    const startedAt = Date.now();
+    try {
+      await expect(client.connect("coord-rpc")).rejects.toThrow(/timed out/i);
+      expect(Date.now() - startedAt).toBeLessThan(6_000);
+    } finally {
+      client.close();
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(stateDir, { recursive: true, force: true });
     }
   });
 

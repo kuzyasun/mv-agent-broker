@@ -41,8 +41,37 @@ Private evidence: `.state/coordinator/beehive-workspace-acceptance.private.json`
 and `.state/coordinator/beehive-config-plan.private.json`; author/reviewer
 receipts under `.state/coordinator/workspace-fix-repo/.state/dogfood/`.
 
-Status: both observed blockers resolved. Restart the client's MCP bridge after
-the shared daemon update before resuming work.
+Status: both observed blockers resolved. Bridges running older code need one
+client reload. Updated bridges recover from later daemon restarts as described
+below.
+
+## 2026-10-02: Running bridge loses connection after daemon restart
+
+After the Beehive fixes restarted the shared daemon, an already running client
+continued exposing MCP tools but every call failed with
+`Daemon RPC client is not connected`. Fresh clients returned READY. The bridge
+authenticated only at startup, kept the old token, and never reconnected.
+
+The bridge now reconnects before its next discovery/tool call with the same
+coordinator and rereads the rotated token. Concurrent callers share one
+connection/handshake, and old-socket events affect only that socket's pending
+requests. Connection/authentication has a five-second bound. Failed connection
+attempts do not prevent a later call from recovering. A dispatched tool call
+whose connection is lost fails without automatic replay.
+
+Validation: 11 integration tests, typecheck, independent Antigravity review,
+and coordinator final review. A separate coordinator-owned process check kept
+one real stdio bridge alive while restarting its test daemon and rotating the
+token. A call while unavailable failed; later status and tool discovery
+recovered. No paid inference was submitted in that process check.
+
+Private evidence: `.state/coordinator/bridge-recovery-acceptance.private.json`
+and author/reviewer receipts under
+`.state/coordinator/bridge-reconnect-repo/.state/dogfood/`.
+
+Status: fixed for updated bridges. An old bridge must be reloaded once to load
+the code. The live daemon and project configuration do not need another restart
+for this bridge-only change.
 
 ## 2026-10-01: Antigravity coding turn server failures
 

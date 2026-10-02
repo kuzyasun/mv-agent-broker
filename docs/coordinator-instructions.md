@@ -28,13 +28,22 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    artifacts to follow-up worker tasks. The original coordinator verifies confirmed
    findings and reviews the final diff. Do not repeat vendor reviews for unchanged
    mechanical details.
-6. New route settings apply to new sessions after restart. Keep existing sessions
+6. New route settings apply to new sessions after restarting the daemon that loads
+   the operator configuration. Keep existing sessions
    and evidence; replace a native session when its durable context is incompatible.
    An `UNKNOWN` execution does not authorize a replacement paid launch.
 7. Record observed blockers in a short issue log: provider/model/version, route and
    turn IDs, error, reproduction, impact, workaround, status. Keep native thinking
    and credentials out of reports. Prioritize lost work, runaway paid execution,
    false completion and everyday workflow blockers; defer rare recoverable cases.
+
+After a daemon restart, an updated stdio bridge reconnects on its next call.
+Confirm `broker_status` is READY and rediscover the project's routes before
+resuming. If transport failed during a submitted operation, inspect the known
+session/turn first; the bridge never replays that call automatically. Resolve
+the original operation using its original idempotency key rather than creating
+a replacement paid turn merely because its response was lost. Bridges already
+running an older version need one client reload to load the new reconnect code.
 
 See [operator setup](operator-guide.md), [native child evidence](native-subagents.md),
 and [the current pilot issue log](pilot-issues.md). These instructions can be copied
