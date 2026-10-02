@@ -9,6 +9,41 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-02: Beehive snapshot and Windows worktree blockers
+
+Beehive Stage review could not start: snapshot `INPUT_LIMIT` at an ignored Dart
+cache under `artifacts`, followed by `git-worktree-add-failed: git-exit-nonzero`
+in session `session-0ab0909cd092b68c1da12aa5`. No inference was submitted.
+
+The project wizard admitted `artifacts` as source, and the saved coverage also
+included nested Angular dependencies/build outputs under `web`. Corrected
+active coverage excludes those caches, declares `web/src` and its root files
+separately, and captures approximately 153 MiB without raising the 256 MiB cap.
+New coverage/worker-policy IDs preserve the failed session's historical
+bindings; route models, efforts, accounts, and delegation settings stay intact.
+The wizard now excludes common top-level `artifacts`, `.dart_tool`, and
+`.angular` folders; nested cache scope still requires explicit configuration.
+
+An isolated reproduction of the selected commit exposed Git's `Filename too
+long` error for tracked research images under the longer managed worktree
+root. Windows mutations now pass `-c core.longpaths=true` per invocation,
+without writing Git configuration. Bounded stderr inspection returns
+`git-path-too-long` for that failure, without exposing raw paths or stderr.
+
+Validation: 50 targeted worktree/UI tests, typecheck, independent Antigravity
+review, and coordinator final diff review. The updated live MCP sealed a
+current-checkout snapshot and provisioned an IDLE detached worktree containing
+a tracked file at a 262-character absolute path. The test session had zero
+turns and was closed. Beehive HEAD, Git index, and the three Stage files matched
+their captured baseline. Stage review/acceptance remains with its coordinator.
+
+Private evidence: `.state/coordinator/beehive-workspace-acceptance.private.json`
+and `.state/coordinator/beehive-config-plan.private.json`; author/reviewer
+receipts under `.state/coordinator/workspace-fix-repo/.state/dogfood/`.
+
+Status: both observed blockers resolved. Restart the client's MCP bridge after
+the shared daemon update before resuming work.
+
 ## 2026-10-01: Antigravity coding turn server failures
 
 Two author turns using requested `gemini-3.8-flash-high` through accepted

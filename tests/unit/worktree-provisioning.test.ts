@@ -27,6 +27,7 @@ import { readSessionPhysicalBinding } from "../../src/workspaces/identity.ts";
 import { computeSourceDigest, takeInventory } from "../../src/workspaces/inventory.ts";
 import {
   createRealWorktreeGitRunner,
+  worktreeAddDetached,
   WorktreeGitRunError,
   type WorktreeGitRunner,
   type WorktreeGitRun,
@@ -1414,6 +1415,29 @@ describe("createRealWorktreeGitRunner process fixtures", () => {
     }
   }, 30_000);
 
+  it("classifies bounded path-too-long stderr without exposing its private path", async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "wt-runner-"));
+    const privatePath = path.join(cwd, "private-secret", "tracked-image.png");
+    const message = `error: unable to create file ${privatePath}: Filename too long\n`;
+    const runner = createRealWorktreeGitRunner({
+      programOverride: (gitArgs, kind) =>
+        kind === "mutate" ? nodeScript(`process.stderr.write(${JSON.stringify(message)});process.exit(1);`)(gitArgs, kind) : undefined,
+    });
+    try {
+      const err = await runner
+        .run({ cwd, gitArgs: MUTATE_ARGS, kind: "mutate" })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expectNoLeakedContext(err);
+      expect((err as WorktreeGitRunError).reason).toBe("git-path-too-long");
+      expect((err as WorktreeGitRunError).message).not.toContain(privatePath);
+    } finally {
+      rmSyncRetry(cwd);
+    }
+  }, 30_000);
+
   it("bounds a read-side flood and classifies read failures without leaking content", async () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "wt-runner-"));
     try {
@@ -1455,6 +1479,39 @@ describe("createRealWorktreeGitRunner process fixtures", () => {
       expect((nonzero as WorktreeGitRunError).reason).toBe("git-exit-nonzero");
     } finally {
       rmSyncRetry(cwd);
+    }
+  }, 60_000);
+
+  it("enables Windows Git long paths for a real managed checkout", async () => {
+    const f = makeFixture();
+    try {
+      const nested = "tracked-" + "x".repeat(120);
+      const longRelativePath = path.join("assets", nested, "tracked-image.png");
+      const longSourcePath = path.join(f.repoPath, longRelativePath);
+      mkdirSync(path.dirname(longSourcePath), { recursive: true });
+      writeFileSync(longSourcePath, "fixture image bytes\n", "utf8");
+      git(f.repoPath, ["add", "."]);
+      git(f.repoPath, ["commit", "-m", "add long tracked path"]);
+      const longHead = git(f.repoPath, ["rev-parse", "HEAD"]);
+
+      const failedTarget = path.join(f.worktreesRoot, "without-longpaths-" + "y".repeat(80));
+      expect(failedTarget.length + longRelativePath.length).toBeGreaterThan(260);
+      expect(() => git(f.repoPath, ["-c", "core.longpaths=false", "worktree", "add", "--detach", failedTarget, longHead])).toThrow();
+      rmSync(failedTarget, { recursive: true, force: true });
+
+      const managedTarget = path.join(f.worktreesRoot, "with-longpaths-" + "z".repeat(80));
+      const runner = createRealWorktreeGitRunner();
+      await expect(worktreeAddDetached({
+        sourcePath: f.repoPath,
+        worktreePath: managedTarget,
+        baseCommit: longHead,
+        runner,
+        onOwnership: () => undefined,
+      })).resolves.toBeTruthy();
+      expect(readFileSync(path.join(managedTarget, longRelativePath), "utf8").replace(/\r\n/g, "\n")).toBe("fixture image bytes\n");
+      expect(path.join(managedTarget, longRelativePath).length).toBeGreaterThan(260);
+    } finally {
+      f.cleanup();
     }
   }, 60_000);
 

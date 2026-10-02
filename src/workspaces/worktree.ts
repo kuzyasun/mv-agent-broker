@@ -47,6 +47,7 @@ const BASE_COMMIT_PATTERN = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
 export const READ_TIMEOUT_MS = 10_000;
 export const MUTATE_TIMEOUT_MS = 60_000;
 export const MAX_OUTPUT_BYTES = 64 * 1024;
+const PATH_TOO_LONG_PATTERN = /\b(?:file(?:name)?|path)\s+too\s+long\b/i;
 
 /**
  * Stages of the durable provisioning journal (inside the session-owned
@@ -493,8 +494,17 @@ export interface WorktreeGitRunnerOptions {
 export function createRealWorktreeGitRunner(options: WorktreeGitRunnerOptions = {}): WorktreeGitRunner {
   const readTimeoutMs = options.readTimeoutMs ?? READ_TIMEOUT_MS;
   const mutateTimeoutMs = options.mutateTimeoutMs ?? MUTATE_TIMEOUT_MS;
-  const resolveProgram = (gitArgs: string[], kind: "read" | "mutate") =>
-    options.programOverride?.(gitArgs, kind) ?? { program: "git", args: gitArgs };
+  const resolveProgram = (gitArgs: string[], kind: "read" | "mutate") => {
+    // Keep the setting per invocation: broker worktrees must not alter the
+    // source repository or the user's global Git configuration.
+    const invocationArgs =
+      kind === "mutate" && process.platform === "win32"
+        ? ["-c", "core.longpaths=true", ...gitArgs]
+        : gitArgs;
+    return options.programOverride?.(invocationArgs, kind) ?? { program: "git", args: invocationArgs };
+  };
+  const classifyGitExit = (stderr: string): string =>
+    PATH_TOO_LONG_PATTERN.test(stderr) ? "git-path-too-long" : "git-exit-nonzero";
 
   /** Bounded read: plain spawn, both pipes drained, settle only on close. */
   const runBoundedRead = (args: WorktreeGitRun): Promise<{ stdout: string }> =>
@@ -513,6 +523,7 @@ export function createRealWorktreeGitRunner(options: WorktreeGitRunnerOptions = 
         return;
       }
       let stdout: Buffer[] = [];
+      let stderr: Buffer[] = [];
       let stdoutBytes = 0;
       let stderrBytes = 0;
       let overflowed = false;
@@ -540,7 +551,7 @@ export function createRealWorktreeGitRunner(options: WorktreeGitRunnerOptions = 
         if (child.exitCode === 0 && child.signalCode === null) {
           resolve({ stdout: Buffer.concat(stdout).toString("utf8").trim() });
         } else {
-          reject(new WorktreeGitRunError("git-exit-nonzero", true));
+          reject(new WorktreeGitRunError(classifyGitExit(Buffer.concat(stderr).toString("utf8")), true));
         }
       };
       const timer = setTimeout(() => {
@@ -558,6 +569,10 @@ export function createRealWorktreeGitRunner(options: WorktreeGitRunnerOptions = 
       });
       child.stderr?.on("data", (chunk: Buffer) => {
         stderrBytes += chunk.byteLength;
+        if (stderrBytes <= MAX_OUTPUT_BYTES) stderr.push(chunk);
+        else if (stderrBytes - chunk.byteLength < MAX_OUTPUT_BYTES) {
+          stderr.push(chunk.subarray(0, MAX_OUTPUT_BYTES - (stderrBytes - chunk.byteLength)));
+        }
         if (stderrBytes > MAX_OUTPUT_BYTES) overflowed = true; // drained, discarded
       });
       child.stdout?.on("error", () => undefined);
@@ -582,6 +597,7 @@ export function createRealWorktreeGitRunner(options: WorktreeGitRunnerOptions = 
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), mutateTimeoutMs);
     let stdout: Buffer[] = [];
+    let stderr: Buffer[] = [];
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let outputLimited = false;
@@ -624,6 +640,10 @@ export function createRealWorktreeGitRunner(options: WorktreeGitRunnerOptions = 
         },
         onStderrChunk: (bytes) => {
           stderrBytes += bytes.byteLength; // drained; never echoed anywhere
+          if (stderrBytes <= MAX_OUTPUT_BYTES) stderr.push(bytes);
+          else if (stderrBytes - bytes.byteLength < MAX_OUTPUT_BYTES) {
+            stderr.push(bytes.subarray(0, MAX_OUTPUT_BYTES - (stderrBytes - bytes.byteLength)));
+          }
           if (stderrBytes > MAX_OUTPUT_BYTES) outputLimited = true;
         },
       });
@@ -651,7 +671,8 @@ export function createRealWorktreeGitRunner(options: WorktreeGitRunnerOptions = 
         );
       }
       if (result.exitCode !== 0) {
-        throw new WorktreeGitRunError("git-exit-nonzero", true);
+        const stderrText = `${Buffer.concat(stderr).toString("utf8")}\n${result.stderrTail}`;
+        throw new WorktreeGitRunError(classifyGitExit(stderrText), true);
       }
       return {
         stdout: Buffer.concat(stdout).toString("utf8").trim(),

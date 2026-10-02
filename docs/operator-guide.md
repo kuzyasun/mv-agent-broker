@@ -84,6 +84,34 @@ Creation stages new project, workspace, policy, and coverage IDs locally;
 Existing sessions retain their bindings. The new project can share the current
 configuration and state; a separate configuration/state is optional.
 
+### Snapshot size and build caches
+
+A snapshot captures the declared source files, including untracked files. Git
+ignore rules do not remove files from that contract. The source byte limit is
+256 MiB (spec section 15.1), independent of provider token quota. Do not raise
+the limit to accommodate disposable build caches.
+
+The presets exclude known top-level output folders, including `artifacts`,
+`node_modules`, `.dart_tool`, and `.angular`. Inspect nested output folders too.
+Coverage prefixes must be disjoint: instead of source `web` plus exclusion
+`web/node_modules`, declare source `web/src` and the root files inside `web`,
+then exclude `web/node_modules`, `web/.angular`, and `web/dist`. Match the
+worker policy's `write_scope` to the resulting source prefixes. Add new source
+files or folders directly under `web` later; new files inside `web/src` are
+already covered.
+
+When replacing a coverage or policy already bound to a session, use a new
+profile ID for future sessions and keep the historical evidence. Restart the
+shared daemon after saving. Verify `agent_workspace_snapshot` before paying
+for a worker or reviewer turn.
+
+Broker-managed Windows Git operations enable `core.longpaths` for each
+invocation; they do not change repository or global Git configuration. A
+detached worktree contains the selected commit only. To review unfinished
+changes, use a current-checkout snapshot with a sealed baseline/target review
+binding, or explicitly transfer only the intended changes into an isolated
+checkout before capturing it.
+
 The Connection section emits MCP JSON and Codex TOML using the same absolute
 config path, node executable, and operator script. Restart a client after
 copying a snippet so new sessions use the saved routes.

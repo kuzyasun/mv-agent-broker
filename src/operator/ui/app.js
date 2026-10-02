@@ -481,7 +481,7 @@
     let pickerLoading = false;
     let displayTouched = false;
     let scopeMode = "project";
-    const ignoredNames = new Set([".git", ".state", "node_modules", "dist", "build", "coverage", ".next", ".nuxt", ".cache", ".venv", "venv", "__pycache__", ".DS_Store"]);
+    const ignoredNames = new Set([".git", ".state", "node_modules", "dist", "build", "coverage", "artifacts", ".next", ".nuxt", ".cache", ".dart_tool", ".angular", ".venv", "venv", "__pycache__", ".DS_Store"]);
     const commonCodeDirectories = new Set(["src", "app", "apps", "lib", "libs", "packages", "tests", "test", "scripts", "docs", "include", "public"]);
     const selectedCodeDirectories = new Set();
     const display = document.createElement("input");
@@ -556,7 +556,7 @@
     );
     const scopeGrid = make("div");
     scopeGrid.className = "field-grid";
-    scopeGrid.append(field("Scope preset", scopeSelect, "Generated folders are excluded. Add new files or folders in the project root to coverage later."));
+    scopeGrid.append(field("Scope preset", scopeSelect, "Presets skip common output folders at the project root. For nested caches such as web/node_modules, use Advanced scope to select source folders such as web/src separately. Add new root files or folders later."));
     const scopeHelp = make("p", "Project files includes every scanned top-level file and folder except ignored generated folders. Code folders and root files lets you choose existing common code folders.");
     scopeHelp.className = "small-note";
     scopeGrid.append(scopeHelp);
