@@ -198,6 +198,118 @@
     if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
     return body;
   };
+  let storagePreview = null;
+  let storageEpoch = 0;
+  let storageBusy = false;
+  const storageMessage = (text, kind = "") => {
+    $("storage-message").textContent = text;
+    $("storage-message").className = `status ${kind}`;
+  };
+  const registeredBytes = (bytes) => {
+    if (bytes < 1024) return `${bytes.toLocaleString()} B`;
+    const divisor = bytes < 1_048_576 ? 1024 : 1_048_576;
+    const unit = bytes < 1_048_576 ? "KiB" : "MiB";
+    return `${(bytes / divisor).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`;
+  };
+  const storageDays = () => $("storage-days").value.trim() === "" ? NaN : Number($("storage-days").value);
+  const validStorageDays = () => Number.isInteger(storageDays()) && storageDays() >= 0 && storageDays() <= 3650;
+  function invalidateStoragePreview() {
+    storageEpoch += 1;
+    storagePreview = null;
+    $("storage-summary").replaceChildren();
+    storageMessage("Selection changed. Preview before clearing any data.");
+    updateStorageControls();
+  }
+  function updateStorageControls() {
+    const projectId = $("storage-project").value;
+    const ready = storagePreview && storagePreview.project_id === projectId
+      && storagePreview.retention_days === storageDays() && storagePreview.expires_at > Date.now();
+    $("storage-preview").disabled = storageBusy || Boolean(configOperation) || !projectId || !validStorageDays();
+    $("storage-execute").disabled = storageBusy || (Boolean(configOperation) && configOperation !== $("storage-execute")) || !ready
+      || Boolean(storagePreview.gc_blocked_reason)
+      || (storagePreview.eligible_artifact_count === 0 && storagePreview.reclaimable_blob_count === 0);
+    $("storage-project").disabled = Boolean(configOperation);
+    $("storage-days").disabled = Boolean(configOperation);
+    if (storagePreview && storagePreview.expires_at <= Date.now()) {
+      storageMessage("Preview expired. Preview again before clearing data.");
+    }
+  }
+  function renderStorageProjects() {
+    const select = $("storage-project");
+    const projectId = (state.projects || []).some(project => project.project_id === select.value)
+      ? select.value : state.projects[0]?.project_id || "";
+    select.replaceChildren(...(state.projects || []).map(project => option(project.project_id, project.display_name, project.project_id === projectId)));
+    select.value = projectId;
+    invalidateStoragePreview();
+  }
+  function showStoragePreview(body) {
+    const fields = ["registered_blob_bytes", "registered_blob_count", "eligible_artifact_count", "protected_artifact_count", "reclaimable_registered_bytes", "reclaimable_blob_count"];
+    if (fields.some(field => !Number.isSafeInteger(body[field]) || body[field] < 0)
+      || typeof body.preview_token !== "string" || !body.preview_token
+      || !Number.isFinite(body.expires_at) || !Number.isFinite(body.cutoff_at)) {
+      throw new Error("Storage preview is unavailable: invalid daemon response.");
+    }
+    storagePreview = body;
+    const summary = $("storage-summary");
+    summary.replaceChildren(
+      liveRuntimeItem("Registered blobs", `${registeredBytes(body.registered_blob_bytes)} · ${body.registered_blob_count} blobs`),
+      liveRuntimeItem("Old unpinned artifacts", String(body.eligible_artifact_count)),
+      liveRuntimeItem("Protected artifacts", String(body.protected_artifact_count)),
+      liveRuntimeItem("Previewed reclaimable", `${registeredBytes(body.reclaimable_registered_bytes)} · ${body.reclaimable_blob_count} blobs`),
+      liveRuntimeItem("Keep data newer than", displayTimestamp(body.cutoff_at) || "Unknown"),
+      liveRuntimeItem("Preview expires", displayTimestamp(body.expires_at) || "Unknown"),
+    );
+    for (const reason of body.protected_reasons || []) {
+      summary.append(liveRuntimeItem(`Protection: ${reason.root_kind}`, String(reason.count)));
+    }
+    storageMessage(body.gc_blocked_reason
+      ? `Cleanup blocked: ${body.gc_blocked_reason}. Retained data was not changed.`
+      : "Preview ready. Pins and references are checked again when you confirm cleanup.", body.gc_blocked_reason ? "error" : "success");
+  }
+  async function previewStorage() {
+    const projectId = $("storage-project").value;
+    const days = storageDays();
+    if (!projectId || !validStorageDays()) return;
+    const epoch = ++storageEpoch;
+    storagePreview = null;
+    storageBusy = true;
+    $("storage-summary").replaceChildren();
+    storageMessage("Reading registered storage and protection reasons…");
+    updateStorageControls();
+    try {
+      const body = await api("/api/storage/preview", { method: "POST", body: JSON.stringify({ project_id: projectId, retention_days: days }) });
+      if (epoch !== storageEpoch) return;
+      if (body.project_id !== projectId || body.retention_days !== days) throw new Error("Storage preview does not match this selection.");
+      showStoragePreview(body);
+    } catch (error) {
+      if (epoch === storageEpoch) {
+        storagePreview = null;
+        $("storage-summary").replaceChildren();
+        storageMessage(`Storage preview failed: ${error.message}`, "error");
+      }
+    } finally {
+      storageBusy = false;
+    }
+  }
+  async function executeStorage() {
+    const preview = storagePreview;
+    if (!preview || preview.expires_at <= Date.now() || preview.gc_blocked_reason) return;
+    const project = (state.projects || []).find(project => project.project_id === preview.project_id);
+    if (!window.confirm(`Clear ${preview.eligible_artifact_count} old unpinned artifacts and up to ${registeredBytes(preview.reclaimable_registered_bytes)} of registered blob data for ${project?.display_name || preview.project_id}? Expired content cannot be retrieved. Active and recovery data stays protected.`)) return;
+    storageBusy = true;
+    storageMessage("Clearing only the previewed data; checking live protection…");
+    try {
+      const body = await api("/api/storage/execute", { method: "POST", body: JSON.stringify({ preview_token: preview.preview_token }) });
+      // A confirmed result belongs to this bound project, even if the form rerenders.
+      storagePreview = null;
+      storageMessage(`${project?.display_name || preview.project_id}: Expired ${body.expired_artifact_count} artifacts; removed ${body.deleted_blob_count} blobs (${registeredBytes(body.reclaimed_registered_bytes)} registered). Skipped ${body.skipped_artifact_count} artifacts.${body.gc_blocked_reason ? ` Blob deletion blocked: ${body.gc_blocked_reason}.` : ""}${body.replayed_request ? " Replayed the previous result." : ""} Preview again for current totals.`, body.gc_blocked_reason ? "error" : "success");
+      $("storage-summary").replaceChildren();
+    } catch (error) {
+      storageMessage(`Cleanup request failed: ${error.message}. Retrying uses the same preview; no automatic retry.`, "error");
+    } finally {
+      storageBusy = false;
+    }
+  }
   const readLiveStatus = () => api("/api/status");
   const liveMessage = (message, kind = "") => {
     const node = $("live-message");
@@ -463,6 +575,7 @@
   }
   let backgroundRefreshRunning = false;
   setInterval(async () => {
+    updateStorageControls();
     if (document.hidden || configOperation || backgroundRefreshRunning || $("refresh-status").disabled) return;
     backgroundRefreshRunning = true;
     try { renderLiveStatus(await readLiveStatus(), true); }
@@ -1026,6 +1139,7 @@
   function render() {
     $("revision-label").textContent = `Revision ${revision.slice(0, 12)} · ${state.routes.length} profile(s)`;
     $("project-filter").replaceChildren(option("", "All projects", !projectFilter), ...(state.projects || []).map(project => option(project.project_id, project.display_name, project.project_id === projectFilter)));
+    renderStorageProjects();
     renderLimits();
     renderRoutes();
     renderProjects();
@@ -1497,7 +1611,8 @@
   async function runConfigOperation(button, callback) {
     if (configOperation) return;
     configOperation = button;
-    const peers = [$("save"), $("reload"), $("restart-daemon")].filter(peer => peer !== button);
+    updateStorageControls();
+    const peers = [$("save"), $("reload"), $("restart-daemon"), $("apply-advanced")].filter(peer => peer !== button);
     const disabled = peers.map(peer => peer.disabled);
     peers.forEach(peer => { peer.disabled = true; });
     try {
@@ -1506,9 +1621,19 @@
       peers.forEach((peer, index) => { peer.disabled = disabled[index]; });
       configOperation = null;
       updateRestartButton();
+      updateStorageControls();
     }
   }
 
+  $("storage-days").value = "7";
+  $("storage-project").addEventListener("change", invalidateStoragePreview);
+  $("storage-days").addEventListener("input", invalidateStoragePreview);
+  $("storage-preview").addEventListener("click", () => {
+    void withButtonBusy($("storage-preview"), previewStorage).finally(updateStorageControls);
+  });
+  $("storage-execute").addEventListener("click", () => {
+    void runConfigOperation($("storage-execute"), executeStorage);
+  });
   $("reload").addEventListener("click", () => {
     if (!dirty || window.confirm("Discard unsaved changes and reload?")) runConfigOperation($("reload"), load);
   });
@@ -1541,7 +1666,7 @@
   for (const id of ["accounts-json", "pins-json", "coverage-json", "state-dir"]) {
     $(id).addEventListener("input", () => { advancedDirty.add(id); markDirty(); });
   }
-  $("apply-advanced").addEventListener("click", () => action(() => { syncAdvanced(); render(); status("Advanced edits applied to the form. Save to persist them."); }));
+  $("apply-advanced").addEventListener("click", () => runConfigOperation($("apply-advanced"), () => action(() => { syncAdvanced(); render(); status("Advanced edits applied to the form. Save to persist them."); })));
   for (const [button, field] of [["copy-json", "mcp-json"], ["copy-toml", "codex-toml"]]) {
     $(button).addEventListener("click", async () => {
       let copied = false;

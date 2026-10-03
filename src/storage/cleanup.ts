@@ -35,18 +35,38 @@ export interface CleanupPreview {
   protected: CleanupProtectedItem[];
   /** Blob hashes still referenced if all eligible artifacts were expired (i.e. NOT reclaimable). */
   retainedBlobHashes: string[];
+  /** Blob hashes that would be reclaimed by expiring the eligible set (empty when fail-closed). */
+  reclaimableBlobHashes: string[];
   /** Unique blob bytes that would be reclaimed by expiring the eligible set. */
   reclaimableBytes: number;
   reclaimableBlobCount: number;
+  /** Registered (blobs-table) totals for the project; reported even when fail-closed. */
   totalBlobBytes: number;
   totalBlobCount: number;
   /** Retained manifests whose blob could not be read/parsed — the reclaimable estimate is untrusted (fail-closed). */
   unreadableManifests: string[];
 }
 
+export interface CleanupPreviewOptions {
+  /** Restrict the eligible set to these artifact IDs (intersection with default eligibility). */
+  selectedArtifactIds?: ReadonlySet<string>;
+  /**
+   * Only artifacts whose MAX(created_at, sealed_at) is strictly older than this
+   * epoch-ms cutoff are eligible; newer artifacts are retained. Registered blob
+   * GC candidates must also have a blobs.created_at older than the cutoff.
+   * Undefined means no age filter.
+   */
+  cutoffAt?: number;
+}
+
+export interface CleanupExecuteOptions {
+  /** Restrict the blob-GC phase to these candidate hashes; other orphans survive. */
+  candidateBlobHashes?: ReadonlySet<string>;
+}
+
 export interface CleanupResult {
   expiredArtifactIds: string[];
-  /** Selection items skipped at execution time: pinned, or not sealed/not found (§15.3.2 re-check). */
+  /** Selection items skipped at execution time: pinned, or state-ineligible/not found (§15.3.2 re-check). */
   skippedPinned: string[];
   deletedBlobHashes: string[];
   reclaimedBytes: number;
@@ -61,6 +81,23 @@ interface ArtifactRow {
   size_bytes: number | null;
   state: string;
   created_at: number;
+  sealed_at: number | null;
+}
+
+/** State eligibility only; callers must still check pins and the age cutoff. */
+export function isCleanupStateEligible(
+  db: RegistryDb,
+  projectId: string,
+  artifact: Pick<ArtifactRow, "artifact_id" | "kind" | "content_hash" | "state">,
+): boolean {
+  if (artifact.state === "sealed") return artifact.content_hash !== null;
+  if (artifact.state !== "staging" || artifact.kind !== "snapshot_manifest" || artifact.content_hash !== null) return false;
+  // A FAILED capture is terminal: it cannot publish or resume this manifest.
+  // Unknown owners and any still-CAPTURING/SEALED owner remain protected.
+  const owners = db.raw.prepare(
+    "SELECT COUNT(*) total, SUM(state = 'FAILED') failed FROM snapshot_records WHERE project_id = ? AND manifest_artifact_id = ?",
+  ).get(projectId, artifact.artifact_id) as { total: number; failed: number | null };
+  return Number(owners.total) > 0 && Number(owners.failed) === Number(owners.total);
 }
 
 /**
@@ -108,15 +145,24 @@ function collectBlobReferences(
 }
 
 /**
- * Operator preview (§15.3.3): sealed artifacts with ZERO pins are eligible;
+ * Operator preview (§15.3.3): sealed artifacts and terminal failed-capture staging artifacts with ZERO pins are eligible;
  * pinned ones are listed as protected with their pin reasons. Blob references =
  * content_hash of every non-expired artifact PLUS file content_hashes parsed from
  * every non-expired snapshot_manifest artifact's JSON.
+ *
+ * Optional `options` narrow the eligible set (explicit artifact selection and/or
+ * an age cutoff on MAX(created_at, sealed_at), with the same cutoff applied to
+ * registered blob GC candidates) without changing the default full-scan behavior.
  */
-export function previewCleanup(db: RegistryDb, blobs: BlobStore, projectId: string): CleanupPreview {
+export function previewCleanup(
+  db: RegistryDb,
+  blobs: BlobStore,
+  projectId: string,
+  options: CleanupPreviewOptions = {},
+): CleanupPreview {
   const rawArtRows = db.raw
     .prepare(
-      "SELECT artifact_id, kind, content_hash, size_bytes, state, created_at FROM artifacts WHERE project_id = ?",
+      "SELECT artifact_id, kind, content_hash, size_bytes, state, created_at, sealed_at FROM artifacts WHERE project_id = ?",
     )
     .all(projectId) as Array<Record<string, unknown>>;
 
@@ -127,6 +173,7 @@ export function previewCleanup(db: RegistryDb, blobs: BlobStore, projectId: stri
     size_bytes: r.size_bytes === null ? null : Number(r.size_bytes),
     state: String(r.state),
     created_at: Number(r.created_at),
+    sealed_at: r.sealed_at === null || r.sealed_at === undefined ? null : Number(r.sealed_at),
   }));
 
   const rawPinRows = db.raw
@@ -170,7 +217,12 @@ export function previewCleanup(db: RegistryDb, blobs: BlobStore, projectId: stri
             (a.owner_turn_id ?? "").localeCompare(b.owner_turn_id ?? ""),
         ),
       });
-    } else if (art.state === "sealed") {
+    } else if (isCleanupStateEligible(db, projectId, art)) {
+      if (options.selectedArtifactIds && !options.selectedArtifactIds.has(art.artifact_id)) continue;
+      if (options.cutoffAt !== undefined) {
+        const effectiveAt = Math.max(art.created_at, art.sealed_at ?? art.created_at);
+        if (effectiveAt >= options.cutoffAt) continue; // sealed/created too recently — retained
+      }
       eligible.push({
         artifact_id: art.artifact_id,
         kind: art.kind,
@@ -197,11 +249,18 @@ export function previewCleanup(db: RegistryDb, blobs: BlobStore, projectId: stri
   let totalBlobCount = 0;
   if (previewUnreadable.length > 0) {
     // Fail-closed preview: with unreadable retained manifests the reclaimable
-    // estimate cannot be trusted — report zero reclaimable (§15.3.1).
+    // estimate cannot be trusted — report zero reclaimable (§15.3.1) while the
+    // registered totals stay visible for truthful operator accounting.
+    const totals = db.raw
+      .prepare("SELECT COALESCE(SUM(size_bytes), 0) s, COUNT(*) c FROM blobs WHERE project_id = ?")
+      .get(projectId) as Record<string, unknown> | undefined;
+    totalBlobBytes = totals ? Number(totals.s) : 0;
+    totalBlobCount = totals ? Number(totals.c) : 0;
     return {
       eligible,
       protected: protectedItems,
       retainedBlobHashes,
+      reclaimableBlobHashes: [],
       reclaimableBytes: 0,
       reclaimableBlobCount: 0,
       totalBlobBytes,
@@ -212,11 +271,12 @@ export function previewCleanup(db: RegistryDb, blobs: BlobStore, projectId: stri
 
   // Query blobs table for project blob statistics and reclaimable byte calculations (§15.3.3)
   const rawBlobRows = db.raw
-    .prepare("SELECT content_hash, size_bytes FROM blobs WHERE project_id = ?")
+    .prepare("SELECT content_hash, size_bytes, created_at FROM blobs WHERE project_id = ?")
     .all(projectId) as Array<Record<string, unknown>>;
 
   let reclaimableBytes = 0;
   let reclaimableBlobCount = 0;
+  const reclaimableBlobHashes: string[] = [];
 
   for (const r of rawBlobRows) {
     const hash = String(r.content_hash);
@@ -224,16 +284,20 @@ export function previewCleanup(db: RegistryDb, blobs: BlobStore, projectId: stri
     totalBlobCount++;
     totalBlobBytes += size;
 
-    if (!retainedRefs.has(hash)) {
-      reclaimableBlobCount++;
-      reclaimableBytes += size;
-    }
+    if (retainedRefs.has(hash)) continue;
+    if (options.cutoffAt !== undefined && Number(r.created_at) >= options.cutoffAt) continue;
+    reclaimableBlobCount++;
+    reclaimableBytes += size;
+    reclaimableBlobHashes.push(hash);
   }
+
+  reclaimableBlobHashes.sort();
 
   return {
     eligible,
     protected: protectedItems,
     retainedBlobHashes,
+    reclaimableBlobHashes,
     reclaimableBytes,
     reclaimableBlobCount,
     totalBlobBytes,
@@ -244,11 +308,15 @@ export function previewCleanup(db: RegistryDb, blobs: BlobStore, projectId: stri
 
 /**
  * Operator-confirmed execution (§15.3.2, §15.3.3): in ONE transaction expire
- * the selected artifacts (only those still sealed and still pin-free — re-check inside
+ * the selected artifacts (only those still state-eligible and still pin-free — re-check inside
  * the tx; others go to skippedPinned); AFTER commit, rescan live blob
  * references (non-expired artifacts + their manifest entries) and delete
  * orphan blobs via blobs.delete(projectId, hash) (missing files tolerated
  * silently). Tombstone (expired) records stay; nothing else is deleted.
+ *
+ * Optional `options.candidateBlobHashes` restricts the GC sweep to the exact
+ * preview candidates: orphan blobs created after the preview (or outside it)
+ * are never swept.
  */
 export function executeCleanup(
   db: RegistryDb,
@@ -256,6 +324,7 @@ export function executeCleanup(
   projectId: string,
   selection: { artifact_ids: string[] },
   now: number,
+  options: CleanupExecuteOptions = {},
 ): CleanupResult {
   const expiredArtifactIds: string[] = [];
   const skippedPinned: string[] = [];
@@ -273,10 +342,10 @@ export function executeCleanup(
   db.tx(() => {
     for (const artId of uniqueSelection) {
       const art = db.raw
-        .prepare("SELECT artifact_id, state FROM artifacts WHERE artifact_id = ? AND project_id = ?")
-        .get(artId, projectId) as Record<string, unknown> | undefined;
+        .prepare("SELECT artifact_id, kind, content_hash, state FROM artifacts WHERE artifact_id = ? AND project_id = ?")
+        .get(artId, projectId) as Pick<ArtifactRow, "artifact_id" | "kind" | "content_hash" | "state"> | undefined;
 
-      if (!art || String(art.state) !== "sealed") {
+      if (!art || !isCleanupStateEligible(db, projectId, art)) {
         skippedPinned.push(artId);
         continue;
       }
@@ -291,7 +360,7 @@ export function executeCleanup(
         continue;
       }
 
-      // Re-checked: still sealed and pin-free (§15.3.2 serialized metadata boundary)
+      // Re-checked: still state-eligible and pin-free (§15.3.2 serialized metadata boundary)
       db.raw
         .prepare(
           "UPDATE artifacts SET state = 'expired', expired_at = ? WHERE artifact_id = ? AND project_id = ?",
@@ -304,7 +373,7 @@ export function executeCleanup(
   // 2. AFTER commit, rescan live blob references across remaining non-expired artifacts (§15.3.2)
   const rawLiveArts = db.raw
     .prepare(
-      "SELECT artifact_id, kind, content_hash, size_bytes, state, created_at FROM artifacts WHERE project_id = ? AND state != 'expired'",
+      "SELECT artifact_id, kind, content_hash, size_bytes, state, created_at, sealed_at FROM artifacts WHERE project_id = ? AND state != 'expired'",
     )
     .all(projectId) as Array<Record<string, unknown>>;
 
@@ -315,6 +384,7 @@ export function executeCleanup(
     size_bytes: r.size_bytes === null ? null : Number(r.size_bytes),
     state: String(r.state),
     created_at: Number(r.created_at),
+    sealed_at: r.sealed_at === null || r.sealed_at === undefined ? null : Number(r.sealed_at),
   }));
 
   const { refs: liveBlobRefs, unreadableManifests } = collectBlobReferences(blobs, projectId, liveArtifacts);
@@ -364,6 +434,7 @@ export function executeCleanup(
     const hash = String(r.content_hash);
     const size = Number(r.size_bytes);
 
+    if (options.candidateBlobHashes && !options.candidateBlobHashes.has(hash)) continue;
     if (!liveBlobRefs.has(hash)) {
       try {
         blobs.delete(projectId, hash);

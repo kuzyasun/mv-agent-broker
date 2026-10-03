@@ -258,3 +258,14 @@ it is not a default stage of any task, and no profile or route is added for
 it until the operator configures and verifies one. Even then, a researcher
 summary remains a claim, its source map stays historical input, and the
 researcher never receives broker tools.
+
+## Operator storage cleanup
+
+Storage preview and confirmed cleanup belong to the operator UI/private RPC,
+not coordinator MCP tools or worker file cleanup. Keep open sessions and
+required evidence pinned while they are needed; do not close sessions solely
+to make historical content eligible. After explicit operator expiry,
+ARTIFACT_EXPIRED means content is unavailable: preserve the recorded tombstone,
+request a fresh required snapshot/input where appropriate, and never fabricate
+an empty report or reset native history to hide it. A retry of a completed
+cleanup handle does not run agents or spend inference quota.

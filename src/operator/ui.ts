@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DaemonRpcError } from "../bridge/rpcClient.ts";
 import { validateOperatorConfig, type OperatorConfig } from "./config.ts";
-import { clearQuotaPauseOperator, readRuntimeRecord, restartOperator, statusOperator, turnErrorOperator } from "./operations.ts";
+import { clearQuotaPauseOperator, executeStorageOperator, previewStorageOperator, readRuntimeRecord, restartOperator, statusOperator, turnErrorOperator } from "./operations.ts";
 import { parseAntigravityModelCatalog } from "../providers/antigravity/antigravityAdapter.ts";
 import { parseCursorModelCatalog, resolveCursorModel } from "../providers/cursor/cursorAdapter.ts";
 import { boundedSanitizedDetail, resolveBinaryPath, runMetadataProbe, runMetadataProbeWithFailFastRetry } from "../providers/common/readiness.ts";
@@ -462,6 +462,39 @@ function operatorHttpError(error: unknown): { status: number; body: Record<strin
   return { status: 409, body: { error: safeError(error) } };
 }
 
+const MAX_STORAGE_RETENTION_DAYS = 3650;
+
+/**
+ * Storage actions keep invalid inputs at 400 (including daemon INVALID_REQUEST,
+ * which operatorHttpError maps to 404 for turn errors), unauthorized at 403,
+ * and unavailable/conflict conditions at 409. Error text stays bounded.
+ */
+function storageHttpError(error: unknown): { status: number; body: Record<string, unknown> } {
+  if (error instanceof OperatorUiHttpError) return { status: error.statusCode, body: error.body };
+  if (error instanceof DaemonRpcError) {
+    if (error.code === "UNAUTHORIZED") return { status: 403, body: { error: "forbidden" } };
+    if (error.code === "INVALID_REQUEST") {
+      const message = boundedSanitizedDetail(error.message.replace(/^[A-Z_]+:\s*/, ""), 240) || "invalid storage request";
+      return { status: 400, body: { error: message } };
+    }
+  }
+  return { status: 409, body: { error: safeError(error) } };
+}
+
+function parseStoragePreviewBody(body: unknown): { project_id: string; retention_days?: number } {
+  if (!isRecord(body) || typeof body.project_id !== "string" || body.project_id.trim().length === 0) {
+    throw new OperatorUiHttpError(400, { error: "request must contain project_id" });
+  }
+  if (body.retention_days === undefined) {
+    return { project_id: body.project_id };
+  }
+  const days = body.retention_days;
+  if (typeof days !== "number" || !Number.isSafeInteger(days) || days < 0 || days > MAX_STORAGE_RETENTION_DAYS) {
+    throw new OperatorUiHttpError(400, { error: `retention_days must be an integer from 0 to ${MAX_STORAGE_RETENTION_DAYS}` });
+  }
+  return { project_id: body.project_id, retention_days: days };
+}
+
 function parseRevisionBody(body: unknown): { revision: string; config: Record<string, unknown> } {
   if (!isRecord(body) || typeof body.revision !== "string" || !isRecord(body.config)) {
     throw new Error("request must contain config and revision");
@@ -661,6 +694,42 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
           } else {
             sendJson(response, error instanceof Error && /exceeds 1 MiB/.test(error.message) ? 413 : 400, { error: safeError(error) });
           }
+        }
+        return;
+      }
+      if (request.method === "POST" && pathName === "/api/storage/preview") {
+        try {
+          const parsed = parseStoragePreviewBody(parseJsonBody(await readBody(request)));
+          const current = readRawConfig(configPath);
+          const currentConfig = validateRawConfig(configPath, current.value);
+          if (!currentConfig.projects.some(project => project.project_id === parsed.project_id)) {
+            throw new OperatorUiHttpError(400, { error: "project is not configured" });
+          }
+          sendJson(response, 200, await previewStorageOperator(currentConfig, parsed.project_id, parsed.retention_days ?? 7));
+        } catch (error) {
+          const mapped = storageHttpError(error);
+          sendJson(response, mapped.status, mapped.body);
+        }
+        return;
+      }
+      if (request.method === "POST" && pathName === "/api/storage/execute") {
+        try {
+          const body = parseJsonBody(await readBody(request));
+          if (!isRecord(body) || typeof body.preview_token !== "string" || body.preview_token.trim().length === 0) {
+            throw new OperatorUiHttpError(400, { error: "request must contain preview_token" });
+          }
+          const previewToken = body.preview_token;
+          const result = await enqueue(async () => {
+            // Resolve the saved daemon binding inside the same control queue
+            // as configuration save/restart, not before a pending operation.
+            const current = readRawConfig(configPath);
+            const currentConfig = validateRawConfig(configPath, current.value);
+            return executeStorageOperator(currentConfig, previewToken);
+          });
+          sendJson(response, 200, result);
+        } catch (error) {
+          const mapped = storageHttpError(error);
+          sendJson(response, mapped.status, mapped.body);
         }
         return;
       }

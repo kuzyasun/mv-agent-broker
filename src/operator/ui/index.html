@@ -61,6 +61,22 @@
       </div>
     </section>
 
+    <section class="card" aria-labelledby="storage-heading">
+      <div class="section-heading">
+        <div><p class="eyebrow">RETAINED DATA</p><h2 id="storage-heading">Storage and cleanup</h2></div>
+      </div>
+      <p class="muted">Preview old, unpinned broker data before clearing it. Active work, open sessions and recovery evidence stay protected. Cleanup never runs automatically.</p>
+      <div class="storage-controls">
+        <label>Storage project <select id="storage-project"></select></label>
+        <label><span>Keep data at least (days)</span><span class="field-help">7 by default. Use 0 only to include all unpinned data. Newer data is retained.</span><input id="storage-days" type="number" min="0" max="3650" step="1" value="7"></label>
+        <button id="storage-preview" class="button secondary" type="button">Preview cleanup</button>
+        <button id="storage-execute" class="button danger" type="button" disabled>Clear previewed data</button>
+      </div>
+      <p id="storage-message" class="status" role="status" aria-live="polite">Choose a project and preview its retained data.</p>
+      <div id="storage-summary" class="live-runtime"></div>
+      <p class="small-note">Registered blob accounting only. SQLite, working copies, temporary input areas, provider history and unregistered files are not counted or deleted. This is not total disk usage.</p>
+    </section>
+
     <section class="card" aria-labelledby="concurrency-heading">
       <div class="section-heading">
         <div>

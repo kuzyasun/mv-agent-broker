@@ -4,7 +4,7 @@ Status: implemented and accepted in the isolated development worktree. Baseline:
 Checkpoint: [agent pools acceptance](../native-smoke/2026-10-03-agent-pools.md).
 Operator direction: three role pools with tagged profiles; multiple simultaneous
 workers, including several sessions from one profile. Benchmarks are deferred.
-Disk accumulation control is the next separate portion.
+Disk accumulation control is implemented separately; see [storage control](storage-control.md).
 
 ## Outcome and selection
 

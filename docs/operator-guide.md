@@ -219,6 +219,48 @@ the new project. Existing sessions retain their bindings. The new project can
 share the current configuration and state; a separate configuration/state is
 optional.
 
+### Storage and cleanup
+
+**Storage and cleanup** operates on the selected project's broker data through
+the owning daemon. Choose **Storage project**, set **Keep data at least (days)**
+(default 7), then **Preview cleanup**. This is a per-action retention choice,
+not automatic deletion or a saved background schedule. Use 0 only when you
+intend to include all unpinned historical data.
+
+The preview counts registered blobs, old eligible artifacts, protected objects,
+protection reasons and unique reclaimable registered bytes. It retains newer
+artifacts, recent publications and every referenced blob in retained snapshot
+manifests. Shared blobs count once. SQLite, working copies, materialized inputs,
+provider history and unregistered files are excluded: the figure is not total
+physical disk usage, a storage-pressure admission gate or vendor quota.
+
+**Clear previewed data** asks for confirmation naming the project and previewed
+amount. A five-minute daemon-owned preview handle binds the exact candidates;
+execution rechecks live pins, authorization, manifest references and in-flight
+publications. Active work, open-session roots, unknown-execution recovery and
+operator-held data remain protected. Newly protected candidates are skipped,
+and newly created objects are not silently added. Retained unreadable manifests
+or an in-flight publication block deletion; their storage totals still appear.
+Old unpinned staging manifests owned only by terminal `FAILED` snapshots are
+eligible under the same retention cutoff. Their failed snapshot record and
+error stay in the registry. A live `CAPTURING` owner, unknown owner, newer data
+or a recovery pin remains protected; retained unpublished data blocks cleanup.
+No control clears a quarantine, closes an agent, deletes a repository/worktree,
+removes provider state or runs inference.
+
+Changing project/retention, reload or saving configuration clears the UI preview.
+An expired or displaced preview, or a daemon restart, requires a fresh preview.
+The daemon keeps at most 20 handles; creating more displaces the oldest. There is no
+automatic retry; a repeated execute request with the same still-valid completed
+handle replays its recorded result without another mutation. The daemon records
+an operator audit event with project/counts, not prompts or preview tokens.
+
+Historical expired artifacts retain metadata tombstones. Their content is no
+longer available (`ARTIFACT_EXPIRED`); choose retention accordingly if you need
+old reports or unpinned snapshots later. Cleanup does not purge turn metadata,
+idempotency history or native conversations. Current native sessions keep their
+bindings and protected evidence. Preview again after cleanup for current totals.
+
 ### Snapshot size and build caches
 
 A snapshot captures the declared source files, including untracked files. Git

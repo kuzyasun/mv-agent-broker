@@ -609,3 +609,26 @@ export async function clearQuotaPauseOperator(config: OperatorConfig, quotaScope
   }
   return value as Record<string, unknown>;
 }
+
+export async function previewStorageOperator(
+  config: OperatorConfig,
+  projectId: string,
+  retentionDays: number,
+): Promise<Record<string, unknown>> {
+  const value = await requestDaemon(config, "operator/storage-preview", {
+    project_id: projectId,
+    retention_days: retentionDays,
+  });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Storage preview is unavailable.");
+  }
+  return value as Record<string, unknown>;
+}
+
+export async function executeStorageOperator(config: OperatorConfig, previewToken: string): Promise<Record<string, unknown>> {
+  const value = await requestDaemon(config, "operator/storage-execute", { preview_token: previewToken });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Storage execute is unavailable.");
+  }
+  return value as Record<string, unknown>;
+}

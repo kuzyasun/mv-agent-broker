@@ -11,6 +11,7 @@ import { applyOperatorConfig, loadOperatorConfig, operatorConfigFingerprint, typ
 import { readRuntimeRecord, startOperator, statusOperator, stopOperator } from "./operations.ts";
 import { operatorTurnErrorResult, projectOperatorOverview, projectOperatorQuotaPauses, clearQuotaPauseResult } from "./overview.ts";
 import { inspectQuarantine, reconcileWorkspace } from "./recovery.ts";
+import { createOperatorStorageHandlers } from "./storage.ts";
 import { startOperatorUi } from "./ui.ts";
 
 type Command = "validate" | "stdio" | "daemon" | "mcp-config" | "ui" | "start" | "status" | "stop" | "quarantine-inspect" | "reconcile-workspace";
@@ -164,11 +165,14 @@ async function runDaemon(config: OperatorConfig): Promise<void> {
   let stopRequestedResolve: (() => void) | undefined;
   let operatorStopPromise: Promise<void> | null = null;
   const stopRequested = new Promise<void>(resolve => { stopRequestedResolve = resolve; });
+  const storageHandlers = createOperatorStorageHandlers(daemon.db, daemon.blobs, config.coordinator_id);
   const operator = {
     coordinatorId: config.coordinator_id,
     status: () => daemonOperatorStatus(daemon, appliedConfigFingerprint),
     turnError: (params: Record<string, unknown>) => operatorTurnErrorResult(daemon.db, params),
     clearQuotaPause: (params: Record<string, unknown>) => clearQuotaPauseResult(daemon.db, params),
+    storagePreview: (params: Record<string, unknown>) => storageHandlers.preview(params),
+    storageExecute: (params: Record<string, unknown>) => storageHandlers.execute(params),
     stop: (): OperatorStopPlan => {
       const activeTurns = listNonterminalTurns(daemon.db);
       const pendingIntents = listPendingIntents(daemon.db);

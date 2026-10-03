@@ -142,3 +142,6 @@ textarea { min-height: 7rem; resize: vertical; }
   .live-runtime, .overview-grid { grid-template-columns: 1fr; }
   .manual-folder { display: grid; align-items: stretch; }
 }
+
+.storage-controls { display: flex; gap: .8rem; flex-wrap: wrap; align-items: flex-end; margin-bottom: .8rem; }
+.storage-controls label { flex: 1 1 220px; }
