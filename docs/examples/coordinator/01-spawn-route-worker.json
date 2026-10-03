@@ -1,0 +1,14 @@
+{
+  "tool": "agent_session_spawn",
+  "note": "Route-based worker spawn. Only route_id selects the model/effort/role/policy; raw provider/model/account/role/policy fields are omitted. Replace placeholders with discovery/status data before use; the idempotency key marks one new logical request.",
+  "arguments": {
+    "project_id": "<project-id>",
+    "idempotency_key": "<new-unique-key>",
+    "route_id": "<configured-worker-route-id>",
+    "instructions": "Follow the repository AGENTS.md and preserve existing changes. Do not stage, commit or push. Return a concise summary with changed paths, check results and remaining problems.",
+    "workspace": {
+      "mode": "current",
+      "workspace_id": "<registered-workspace-id>"
+    }
+  }
+}

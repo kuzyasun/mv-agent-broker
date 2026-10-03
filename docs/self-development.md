@@ -87,6 +87,12 @@ raise effort or change the main coordinator model.
   execution, misreports completion, or blocks the ordinary workflow. Defer rare
   recoverable cases with a recorded limitation and workaround.
 
+Coordinator-side context-efficiency rules (CE-01–CE-06), task/handoff
+templates and the fresh-session recipe are in the
+[coordinator instructions](coordinator-instructions.md); their gap mapping,
+AD-C01–08 verification status and the deferred benchmark protocol are in the
+[post-v0.2 efficiency check](validation/post-v0.2-efficiency-check.md).
+
 ### Deferred work and native subagents
 
 Complete A01–A53 closure, exhaustive provider/role/platform certification, total

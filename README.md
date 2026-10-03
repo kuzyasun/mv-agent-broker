@@ -61,8 +61,12 @@ Native self-development, frozen broker runtimes and current remaining work:
 
 The operator pilot now has a bounded JSON configuration entrypoint with named
 routes, transactional registry application, and mock-first examples. See the
-[operator guide](docs/operator-guide.md). Full native/provider acceptance
-remains deferred; existing behavior and evidence are preserved.
+[operator guide](docs/operator-guide.md). Coordinator working rules
+(CE-01–CE-06) with ready tool-call examples live in the
+[coordinator instructions](docs/coordinator-instructions.md) and
+[docs/examples/coordinator/](docs/examples/coordinator/README.md). Full
+native/provider acceptance remains deferred; existing behavior and evidence
+are preserved.
 
 Edit agent profiles, models, effort, subagent preferences and projects in a
 local settings page:

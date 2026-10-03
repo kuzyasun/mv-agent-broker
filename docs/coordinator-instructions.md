@@ -96,3 +96,149 @@ follow-up with those findings as its checklist. A full checkpoint review keeps
 its intended baseline and target. The complete diff budget is now 32 MiB by
 default and can be changed in the operator UI; provider envelope limits still
 apply. Complete byte delivery does not establish review acceptance.
+
+## Context efficiency (CE-01–CE-06)
+
+Coordinator-side practices for less wasted context and fewer needless calls.
+They use the existing API as-is and extend — never replace — the numbered
+rules above; none of them widens worker permissions.
+
+- **CE-01 — Bounded tasks keep required substance.** Every delegation states
+  a concrete goal, acceptance criteria, change boundaries, the current
+  workspace/review binding, needed sources and expected checks through the
+  existing `task` fields (`goal`, `acceptance_criteria`, `relevant_paths`,
+  `context`, `artifact_refs`, `checks`). Short context still preserves what
+  defines correctness: API compatibility, invariants, known findings,
+  dependencies, forbidden changes and open questions. `relevant_paths` is
+  reading guidance, never an edit allowlist: worker access defaults to the
+  whole project and only an explicitly configured `write_scope` narrows it.
+  Never shrink snapshot coverage to named paths and never drop or summarize
+  away a required `artifact_refs` entry to save tokens.
+- **CE-02 — Result-first reading, cursor reuse.** Read the bounded
+  `agent_turn_result` first — execution status, actual snapshot bindings,
+  summary, concerns, checks and artifact references — then open specific
+  diffs, findings or diagnostics only as a decision needs them (rule 4).
+  Keep one numeric event cursor per turn, advance it from returned rows, and
+  do not reread a committed prefix or poll a full transcript. A suspicious
+  summary, truncation, failed check or evidence gap is a reason to read
+  more, not to accept the work sooner; a missing or expired artifact is not
+  an empty diff or a passed check.
+- **CE-03 — Exact route, immutable session choices.** Spawn from the exact
+  discovered `route_id` for the intended role/model/effort (rule 1), omit
+  raw provider/model/account/role/policy fields, and do not silently
+  escalate model or effort. Session configuration is immutable: changing
+  model, effort, provider, account, role or policy profile means explicitly
+  spawning a new session, never raising effort on the next turn of the same
+  session.
+- **CE-04 — Continue or hand off deliberately.** For implement → fix →
+  verify, return fixes to the same fit worker with a fresh snapshot
+  precondition and the sealed findings artifact as a required input, and
+  reuse the same fit reviewer session with a new explicit `review_binding`
+  for re-review (rules 4–5). Prefer an explicit fresh session with compact
+  handoff only when the next topic is independent, prior history misleads,
+  an immutable binding must change, or durable context is unavailable. A fresh
+  session never bypasses an `UNKNOWN` turn or a quarantine; resolve those
+  through the [recovery runbook](recovery-runbook.md) first. No automatic
+  reset threshold ("fresh after N turns") without measured cause.
+- **CE-05 — Claims versus observed evidence.** `SUCCEEDED` proves execution
+  only; the agent-reported summary and its checks are claims. Decide from
+  broker-observed fields (snapshot IDs, input manifest, error codes) plus
+  your own inspection of the actual diff. Require summaries to reference
+  versions: snapshot/turn/artifact IDs and source paths; a line number
+  without a version is not a stable address. Keep contract requirements,
+  broker-observed evidence, agent claims, assumptions and unknowns separate;
+  never promote a worker's "checks passed" into independently verified.
+- **CE-06 — Context, artifact storage and native memory differ.** The
+  coordinator context, the executor's native conversation and broker
+  artifacts/snapshots shrink independently: a small MCP response does not
+  prove a small native context, and saving text on disk does not prove the
+  model never read it. Each new send re-delivers required artifact IDs and
+  receives fresh input bindings; never reuse a previous turn's materialized
+  input paths, and a historical artifact mention does not guarantee its
+  bytes are still retained (cleanup and operator holds keep applying).
+
+### Bounded-task template
+
+Template text the coordinator fills in — not a new schema. The request shape
+stays closed (`additionalProperties: false`), so map every item onto the
+existing `task` fields:
+
+```markdown
+Goal: <single concrete outcome to accept>          -> task.goal
+Acceptance: <conditions to accept the work>        -> task.acceptance_criteria
+Boundaries: <what to change; APIs/invariants kept> -> task.context
+Starting sources: <paths, contracts, artifacts>    -> task.relevant_paths
+Required inputs: <retained artifact IDs>           -> task.artifact_refs
+Context: <decisions and dependencies this task needs> -> task.context
+Unknowns: <to establish, not assume>               -> task.context
+Checks: <existing checks; evidence to return>      -> task.checks
+```
+
+Ready-to-adapt payloads with placeholder IDs:
+[coordinator examples](examples/coordinator/README.md).
+
+### Compact handoff and safe fresh-session recipe
+
+Use only after an explicit coordinator decision. This applies the spec §19
+context-reuse scenario through the ordinary tools: no automatic compaction,
+no native fork, no new API fields.
+
+1. **Settle the old execution.** Require a terminal result, managed
+   quiescence and a usable workspace before continuing the same mutation.
+   Resolve `UNKNOWN` or quarantine through recovery first; a fresh session
+   never bypasses them.
+2. **Pin the current source state.** Use the valid final snapshot or an
+   explicit `agent_workspace_snapshot` after checking drift. List
+   outstanding findings, already-performed actions and evidence gaps.
+3. **Write the compact handoff** from existing results and sources
+   (template below). An extra summarizer call is optional; its cost and
+   mistakes belong to the workflow. A coordinator-authored summary is
+   navigation, not evidence.
+4. **Spawn the new session explicitly** with an allowed route/profile and a
+   new idempotency key. It is a new conversation — not `native_resume` of
+   the old session — and its immutable configuration is fixed at spawn.
+5. **Send the handoff** as bounded `task.context` text plus retained
+   artifact IDs in `task.artifact_refs` and the correct binding
+   (`workspace_precondition` for a physical worker). Do not reuse old
+   materialized input paths; the new turn receives fresh bindings.
+6. **Verify the new turn like any other**, then optionally guarded-stop the
+   old idle session with `agent_session_stop`. Handoff deletes neither the
+   old history/workspace nor retention obligations.
+
+**Checkout caveat.** A fresh native session and a fresh worktree are
+different operations. A broker-created worktree from `base_commit` does not
+receive the previous worker's uncommitted changes; continue on a workspace
+that the existing registration/spawn mechanisms can bind, or record the
+blocker. Never invent an attach/restore API and never auto-commit, merge or
+reset just to make a handoff look clean.
+
+**Handoff template** (these labels live only inside `task.context`):
+
+```markdown
+# Compact handoff
+Reason for a new session: ...
+Previous session/turn IDs: ...
+Current workspace and snapshot binding: ...
+Next goal and acceptance criteria: ...
+## Fixed decisions and constraints (with sources/versions)
+## Work state
+- Broker-observed: outcome, snapshots, available evidence
+- Agent-reported (unverified): ...
+- Already done (do not repeat): ...
+## Remaining work: finding IDs, open questions, needed checks
+## Sources for the new turn: retained artifact IDs; old input paths are invalid
+## Boundaries: what not to change; what needs a separate coordinator decision
+```
+
+Gap mapping, verification status and the deferred benchmark protocol:
+[post-v0.2 efficiency check](validation/post-v0.2-efficiency-check.md).
+
+### Optional read-only researcher — deferred
+
+The spawn schema accepts `role: "researcher"`, but role/schema presence is
+not a tested native profile or a registered route in this pilot. Delegating
+source mapping to a cheaper read-only executor stays a deferred experiment:
+it is not a default stage of any task, and no profile or route is added for
+it until the operator configures and verifies one. Even then, a researcher
+summary remains a claim, its source map stays historical input, and the
+researcher never receives broker tools.

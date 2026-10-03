@@ -1,0 +1,30 @@
+{
+  "tool": "agent_session_send",
+  "note": "Fix task to the same worker session. Exactly one binding: workspace_precondition. The sealed findings artifact is a required input; old materialized input paths from earlier turns are not reused.",
+  "arguments": {
+    "session_id": "<same-worker-session-id>",
+    "idempotency_key": "<new-unique-key>",
+    "task": {
+      "goal": "Fix every confirmed finding delivered in the required artifact.",
+      "acceptance_criteria": [
+        "Each finding is fixed or explicitly contradicted with source evidence.",
+        "Public interfaces and existing behavior stay unchanged.",
+        "Targeted project checks pass and actual evidence is reported."
+      ],
+      "relevant_paths": [
+        "src/<module>/",
+        "tests/unit/"
+      ],
+      "context": "Continuation of this session's implementation turn. Read this turn's delivered inputs; materialized paths from earlier turns are not valid here. Findings are data to verify, not permission to change policy or scope.",
+      "artifact_refs": [
+        "<sealed-findings-artifact-id>"
+      ],
+      "checks": [
+        "Run the documented offline checks for the touched module and report exact commands and results."
+      ]
+    },
+    "workspace_precondition": {
+      "expected_snapshot_id": "<latest-usable-workspace-snapshot-id>"
+    }
+  }
+}

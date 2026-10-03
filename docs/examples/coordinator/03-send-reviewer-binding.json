@@ -1,0 +1,27 @@
+{
+  "tool": "agent_session_send",
+  "note": "Reviewer turn: review_binding only, never workspace_precondition. The baseline/diff inputs are delivered by the broker from the binding, so task.artifact_refs stays empty; findings come back as the reviewer's report artifact.",
+  "arguments": {
+    "session_id": "<reviewer-session-id>",
+    "idempotency_key": "<new-unique-key>",
+    "task": {
+      "goal": "Review the diff between the bound baseline and target snapshots and report findings.",
+      "acceptance_criteria": [
+        "Every finding states a file/line reference, impact and reason.",
+        "Confirmed findings are delivered in the findings artifact."
+      ],
+      "relevant_paths": [
+        "src/"
+      ],
+      "context": "Read-only review. Work from the delivered baseline and diff inputs; do not modify any file. Separate broker-observed facts from claims and report findings first.",
+      "artifact_refs": [],
+      "checks": [
+        "List findings with file/line, impact and reason; state explicitly what could not be verified."
+      ]
+    },
+    "review_binding": {
+      "baseline_snapshot_id": "<worker-baseline-snapshot-id>",
+      "target_snapshot_id": "<worker-final-target-snapshot-id>"
+    }
+  }
+}
