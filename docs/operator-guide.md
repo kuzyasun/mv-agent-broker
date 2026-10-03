@@ -147,6 +147,31 @@ reconnecting the bridge or settings page alone does not reload the daemon. The
 UI can restart the same accepted daemon runtime while idle. It never runs
 inference, exports credentials, or terminates existing paid jobs.
 
+To run an independent background UI process that survives closing Codex or the
+parent shell, launch the settings page via the tracked launcher script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-ui.ps1 -ConfigPath C:\ops\agent-broker.json
+```
+
+Optional `-Port` (default `4318`, range `1..65535`) and `-NodePath` (defaults to
+`node` on `PATH`) are accepted. The launcher verifies the accepted frozen
+runtime from `operator-runtime.json` under `state_dir`, verifies runtime manifest
+commit and config-path identity before launch, refuses an already-owned port,
+and spawns only the UI via hidden `Win32_Process.Create`. It checks that the
+launched process owns the loopback listener and serves HTTP 200 before returning
+success (up to 10 seconds). Failed startup produces no success receipt and stops
+only the launcher's own still-identified process. It emits a JSON receipt with
+`url`, `pid`, UTC `creation_date` and `runtime_commit`, and saves one
+`operator-ui-<port>.json` sidecar in `state_dir` without credentials. Sidecars are
+informational: stale metadata does not reserve a port. Because it runs as an
+independent process decoupled from the caller's process tree, closing Codex
+leaves the UI process running. Closing Codex differs
+from restarting Windows: the launcher does not install a service supervisor or
+autostart scheduler, so a Windows reboot terminates the process. The interactive
+foreground `ui` command remains available whenever direct console logging or
+ephemeral execution is desired.
+
 The Profiles section edits routes with explicit project, configured account,
 role, policy, model, effort, and advisory native-subagent settings. Route IDs
 are editable profile names: the fields in each profile select its behavior.
