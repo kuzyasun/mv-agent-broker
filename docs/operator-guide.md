@@ -90,6 +90,13 @@ Save and restart the idle daemon to apply it. This is the complete rendered
 baseline-to-target diff budget, separate from snapshot size and each provider's
 full input envelope limit. Over-budget delivery fails before inference; the
 broker never truncates the required diff or changes the review binding.
+The rendered diff keeps every added and deleted line, in order, with file
+identity, line numbers and no-newline markers. Unchanged lines are limited to
+three around each change; overlapping windows merge. Full unchanged source
+stays in the sealed baseline and target snapshots. The smaller text is a UTF-8
+byte reduction of unchanged context, not a token count, a cost figure, or a
+measured native-reviewer saving. A compact complete diff that still exceeds
+the budget is refused before inference.
 Large inputs use the existing read-only file transport. Delivery establishes
 the bytes supplied, not that a reviewer read or accepted every byte.
 

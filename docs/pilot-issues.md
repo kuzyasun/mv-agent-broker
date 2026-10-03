@@ -45,8 +45,10 @@ The operations follow-up sets a configurable 32 MiB default (maximum 256 MiB),
 passes it to actual complete-diff rendering, and tests delivery of the full
 head/tail through read-only transport without replacing the original binding.
 The coordinator guide now explains checkpoint IDs/keys, route-revision drift
-and deliberate follow-up review scope. Compact unchanged diff context remains
-a separate token-economy improvement. See the
+and deliberate follow-up review scope. Review diffs now use compact hunks:
+every changed line stays, unchanged context is three lines, and full source
+remains in the baseline and target snapshots. That is a UTF-8 byte reduction,
+not a token or cost measurement. See the
 [checkpoint](native-smoke/2026-10-03-pilot-operations.md).
 
 ## 2026-10-03: Gemini timeout is not confirmed quota exhaustion

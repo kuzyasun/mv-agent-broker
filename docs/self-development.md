@@ -332,5 +332,7 @@ tracks regional UI dates, configurable complete review delivery and persisted
 quota pauses. The original native author remains a retained scope failure;
 acceptance uses an explicit current-source capture and separate review.
 Keep the shared daemon on its accepted runtime until an idle update is agreed.
-The next practical token-economy improvement is compact unchanged review
-context; do not infer a need for broad edge-case certification from this pilot.
+Review diffs keep every changed line and three lines of unchanged context.
+Full unchanged source remains in the sealed baseline and target snapshots.
+The reduction is measured in UTF-8 bytes, not tokens or native cost. Do not
+infer a need for broad edge-case certification from this pilot.
