@@ -45,7 +45,7 @@ verification in this repository; native behavior is reported separately.
 | AD-C03 fresh input bindings per turn; old paths/expired IDs stay invalid | **pass (offline)**; native | `src/inputs/manifest.ts` per-turn manifest; `required-input-integrity.test.ts` (12 passed); native input-access enforcement remains a separate open gate |
 | AD-C04 handoff = new conversation, immutable config untouched, worktree caveat | **documented; native not_run** | Recipe in coordinator-instructions; spec §5.2/§8.3 semantics unchanged; no new continuity evidence was collected |
 | AD-C05 no hidden fallback/retry on quota error, UNKNOWN, missing history | **pass (offline, unchanged guards)** | `tests/unit/zcode-quota.test.ts`, `tests/unit/quota-cooldown.test.ts` untouched and green in the last full runs; no src diff in this package |
-| AD-C06 researcher has no broker tools; summary stays a claim | **deferred (documented)** | `role: "researcher"` exists in the spawn schema only; no tested native profile or registered route in the pilot; no profile added |
+| AD-C06 researcher has no broker tools; summary stays a claim | **deferred (documented)** | `role: "researcher"` exists in the spawn schema; this does not certify a native profile or establish a registered pilot route; no profile added |
 | AD-C07 usage honest; unknown ≠ zero; no invented costs | **pass (docs review)** | This report claims no savings or costs; `agent_turn_result.usage.availability` remains `unknown` in `src/bridge/tools.ts` |
 | AD-C08 no runtime router/memory DB/auto reset/new upload API | **pass (diff review)** | Package diff contains docs/examples only |
 
@@ -62,9 +62,12 @@ this package deliberately leaves the comparative series `not_run`:
 - **Fixtures.** Identical small bug-fix fixtures, independently reset from
   the same base commit for each mode; modes never share workspaces or
   ready-made fixes; run order rotated between series.
-- **Fixed variables.** Same route/model/effort, identical task text, goal,
-  acceptance criteria and deadline default, same review scope (one reviewer
-  pass with the same binding shape per mode), coordinator fixed.
+- **Fixed variables.** Same worker/reviewer routes, model/effort, task goals,
+  acceptance criteria and deadline default, coordinator fixed. Use the same
+  `implement → review → fix → review` chain, baseline/target semantics and
+  review scope; only history reuse and the explicitly defined handoff/context
+  delivery vary. Specify fresh reviewer sessions for F/H and one persistent
+  reviewer for P before running. Count every additional fix/review attempt.
 - **Counted.** Accepted chains (coordinator acceptance, not bare
   `SUCCEEDED`), failed attempts and fix cycles, turn counts, elapsed
   wall-clock per chain, broker-reported usage fields where available
