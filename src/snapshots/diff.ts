@@ -57,7 +57,10 @@ function splitLines(text: string): string[] {
  * instead of OOM-ing the daemon or omitting changed files. */
 const LCS_CELL_BUDGET = 4 * 1024 * 1024;
 
-/** Compute LCS-based line differences for modified files; falls back to compact complete hunks / deterministic linear remove/add when DP exceeds budget. */
+/** Unchanged lines kept before and after each change. Overlapping windows merge. */
+const DIFF_CONTEXT_LINES = 3;
+
+/** Compute LCS-based line differences for modified files; falls back to deterministic linear remove/add when DP exceeds budget. Unchanged context is compacted when the file hunk is formatted. */
 function diffLines(
   oldLines: string[],
   newLines: string[],
@@ -146,10 +149,135 @@ function diffLines(
   return [...prefix, ...midResult, ...suffix];
 }
 
-/** Format file unified-diff text given body lines. */
+interface ClassifiedContent {
+  rowIndex: number;
+  tag: " " | "-" | "+";
+  text: string;
+  oldLine: number;
+  newLine: number;
+  /** Old-file lines strictly before this row. Used when a hunk deletes nothing. */
+  oldBefore: number;
+  /** New-file lines strictly before this row. Used when a hunk adds nothing. */
+  newBefore: number;
+}
+
+/** Classify a content row or its attached no-newline marker. */
+function classifyDiffRow(line: string): { tag: " " | "-" | "+" | "\\"; text: string } {
+  if (line.startsWith("\\")) return { tag: "\\", text: line };
+  const tag = line[0];
+  if (tag === " " || tag === "-" || tag === "+") return { tag, text: line.slice(1) };
+  return { tag: " ", text: line };
+}
+
+/**
+ * Turn a complete classified body into deterministic unified hunks.
+ * Every added and deleted line is kept. Unchanged lines are limited to
+ * DIFF_CONTEXT_LINES around each change; overlapping or touching windows merge.
+ * No-newline markers stay attached to their lines and are not counted.
+ */
+function compactDiffHunks(body: string[], contextLines: number): string[] {
+  const rows = body.map(classifyDiffRow);
+
+  const content: ClassifiedContent[] = [];
+  let oldLine = 1;
+  let newLine = 1;
+  let oldBefore = 0;
+  let newBefore = 0;
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex]!;
+    if (row.tag === "\\") continue;
+    const item: ClassifiedContent = {
+      rowIndex,
+      tag: row.tag,
+      text: row.text,
+      oldLine: 0,
+      newLine: 0,
+      oldBefore,
+      newBefore,
+    };
+    if (row.tag === " " || row.tag === "-") {
+      item.oldLine = oldLine++;
+      oldBefore++;
+    }
+    if (row.tag === " " || row.tag === "+") {
+      item.newLine = newLine++;
+      newBefore++;
+    }
+    content.push(item);
+  }
+
+  const groups: Array<{ start: number; end: number }> = [];
+  for (let i = 0; i < content.length; i++) {
+    if (content[i]!.tag === " ") continue;
+    const last = groups[groups.length - 1];
+    if (last && last.end + 1 === i) last.end = i;
+    else groups.push({ start: i, end: i });
+  }
+  if (groups.length === 0) return [];
+
+  const expandBack = (start: number): number => {
+    let pos = start;
+    let seen = 0;
+    while (pos > 0 && seen < contextLines) {
+      if (content[pos - 1]!.tag !== " ") break;
+      pos--;
+      seen++;
+    }
+    return pos;
+  };
+  const expandForward = (end: number): number => {
+    let pos = end;
+    let seen = 0;
+    while (pos < content.length - 1 && seen < contextLines) {
+      if (content[pos + 1]!.tag !== " ") break;
+      pos++;
+      seen++;
+    }
+    return pos;
+  };
+
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const group of groups) {
+    const start = expandBack(group.start);
+    const end = expandForward(group.end);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last.end + 1) last.end = Math.max(last.end, end);
+    else ranges.push({ start, end });
+  }
+
+  const out: string[] = [];
+  for (const range of ranges) {
+    const slice = content.slice(range.start, range.end + 1);
+    let oldStart = 0;
+    let newStart = 0;
+    let oldCount = 0;
+    let newCount = 0;
+    for (const line of slice) {
+      if (line.tag === " " || line.tag === "-") {
+        if (oldCount === 0) oldStart = line.oldLine;
+        oldCount++;
+      }
+      if (line.tag === " " || line.tag === "+") {
+        if (newCount === 0) newStart = line.newLine;
+        newCount++;
+      }
+    }
+    if (oldCount === 0) oldStart = slice[0]?.oldBefore ?? 0;
+    if (newCount === 0) newStart = slice[0]?.newBefore ?? 0;
+    out.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
+    for (const line of slice) {
+      out.push(`${line.tag}${line.text}`);
+      const marker = rows[line.rowIndex + 1];
+      if (marker?.tag === "\\") out.push(marker.text);
+    }
+  }
+  return out;
+}
+
+/** Format file unified-diff text. Changed lines stay complete; unchanged context is windowed. */
 function formatUnifiedDiff(path: string, body: string[]): string {
-  const header = [`--- a/${path}`, `+++ b/${path}`, `@@ ${path} @@`];
-  return [...header, ...body].join("\n");
+  const header = [`--- a/${path}`, `+++ b/${path}`];
+  return [...header, ...compactDiffHunks(body, DIFF_CONTEXT_LINES)].join("\n");
 }
 
 /** Compute file-level differences + a textual patch. readBlob returns file bytes by content hash or null. Identical coverage binding is the caller's responsibility (§9.5). */
@@ -280,9 +408,11 @@ export function diffSnapshots(
 
 /**
  * Render complete diff document without truncation (§7.1.1, §9.4).
- * Every changed file must have complete diff text; if any file cannot be diffed
- * (missing blob, invalid UTF-8, binary) or total size exceeds maxBytes, throws
- * explicit BrokerError so inference never starts with a partial diff.
+ * Every changed line is included in compact hunks. Unchanged lines outside the
+ * fixed context window are omitted; full source remains in the snapshots.
+ * If any file cannot be diffed (missing blob, invalid UTF-8, binary) or the
+ * compact document exceeds maxBytes, throws explicit BrokerError so inference
+ * never starts with a partial diff.
  */
 export function renderCompleteDiffDocument(
   diff: { files: ManifestFileDiff[]; summary: string },

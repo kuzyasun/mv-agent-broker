@@ -95,4 +95,7 @@ review between an already reviewed target and a new target is a deliberate
 follow-up with those findings as its checklist. A full checkpoint review keeps
 its intended baseline and target. The complete diff budget is now 32 MiB by
 default and can be changed in the operator UI; provider envelope limits still
-apply. Complete byte delivery does not establish review acceptance.
+apply. Compact hunks omit unchanged lines beyond three lines of context and
+still contain every changed line for that original binding. Full source stays
+in the baseline and target snapshots. The reduction is UTF-8 bytes, not tokens
+or cost. Complete byte delivery does not establish review acceptance.

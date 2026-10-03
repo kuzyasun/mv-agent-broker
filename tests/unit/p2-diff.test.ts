@@ -416,4 +416,241 @@ describe("snapshot diff (§7.1.1, §9.4)", () => {
     expect(result.files).toEqual([]);
     expect(result.summary).toBe("0 files changed: 0 added, 0 modified, 0 deleted");
   });
+
+  it("tiny edit in a large file keeps bounded context, every changed line, and the same baseline/target", () => {
+    const blobs = new Map<string, Uint8Array>();
+    const registerBlob = (content: string): string => {
+      const bytes = Buffer.from(content, "utf8");
+      const hash = createHash("sha256").update(bytes).digest("hex");
+      blobs.set(hash, bytes);
+      return hash;
+    };
+    const lineOf = (i: number) => `L${String(i).padStart(4, "0")} ${"p".repeat(20)}`;
+    const oldLines = Array.from({ length: 400 }, (_, i) => lineOf(i));
+    const changed = `CHANGED ${"c".repeat(18)}`;
+    const newLines = [...oldLines];
+    newLines[200] = changed;
+    const oldText = oldLines.join("\n") + "\n";
+    const newText = newLines.join("\n") + "\n";
+    const hashOld = registerBlob(oldText);
+    const hashNew = registerBlob(newText);
+    const baseline = makeManifest([
+      { path: "wide.txt", type: "file", content_hash: hashOld, executable: false, size: Buffer.byteLength(oldText) },
+    ]);
+    const target = makeManifest([
+      { path: "wide.txt", type: "file", content_hash: hashNew, executable: false, size: Buffer.byteLength(newText) },
+    ]);
+
+    const result = diffSnapshots(baseline, target, (hash) => blobs.get(hash) ?? null);
+    const doc = renderCompleteDiffDocument(result);
+    const legacyBody: string[] = [];
+    for (let i = 0; i < oldLines.length; i++) {
+      if (oldLines[i] === newLines[i]) legacyBody.push(` ${oldLines[i]}`);
+      else {
+        legacyBody.push(`-${oldLines[i]}`);
+        legacyBody.push(`+${newLines[i]}`);
+      }
+    }
+    const legacyDoc = [
+      "1 files changed: 0 added, 1 modified, 0 deleted",
+      ["--- a/wide.txt", "+++ b/wide.txt", "@@ wide.txt @@", ...legacyBody].join("\n"),
+    ].join("\n\n");
+    // UTF-8 bytes of this deterministic fixture. Not tokens, cost, or native savings.
+    const beforeBytes = Buffer.byteLength(legacyDoc, "utf8");
+    const afterBytes = Buffer.byteLength(doc, "utf8");
+    expect(beforeBytes).toBe(11321);
+    expect(afterBytes).toBe(322);
+    expect(afterBytes).toBeLessThan(beforeBytes);
+
+    expect(doc).toBe([
+      "1 files changed: 0 added, 1 modified, 0 deleted",
+      [
+        "--- a/wide.txt",
+        "+++ b/wide.txt",
+        "@@ -198,7 +198,7 @@",
+        ` ${lineOf(197)}`,
+        ` ${lineOf(198)}`,
+        ` ${lineOf(199)}`,
+        `-${lineOf(200)}`,
+        `+${changed}`,
+        ` ${lineOf(201)}`,
+        ` ${lineOf(202)}`,
+        ` ${lineOf(203)}`,
+      ].join("\n"),
+    ].join("\n\n"));
+    expect(doc).not.toContain(lineOf(0));
+    expect(doc).not.toContain(lineOf(399));
+    expect(result.files[0]?.old_hash).toBe(hashOld);
+    expect(result.files[0]?.new_hash).toBe(hashNew);
+    expect(baseline.entries[0]?.content_hash).toBe(hashOld);
+    expect(target.entries[0]?.content_hash).toBe(hashNew);
+
+    expect(renderCompleteDiffDocument(result, afterBytes)).toBe(doc);
+    expect(() => renderCompleteDiffDocument(result, afterBytes - 1)).toThrowError(BrokerError);
+    try {
+      renderCompleteDiffDocument(result, afterBytes - 1);
+    } catch (e) {
+      expect((e as BrokerError).code).toBe("INPUT_LIMIT");
+    }
+  });
+
+  it("keeps separated changes and merges adjacent or overlapping context windows", () => {
+    const blobs = new Map<string, Uint8Array>();
+    const registerBlob = (content: string): string => {
+      const bytes = Buffer.from(content, "utf8");
+      const hash = createHash("sha256").update(bytes).digest("hex");
+      blobs.set(hash, bytes);
+      return hash;
+    };
+    const oldLine = (i: number) => `S${String(i).padStart(2, "0")}`;
+    const newLine = (i: number) => `T${String(i).padStart(2, "0")}`;
+    const oldLines = Array.from({ length: 40 }, (_, i) => oldLine(i));
+    const newLines = [...oldLines];
+    for (const i of [0, 2, 10, 20, 24, 39]) newLines[i] = newLine(i);
+    const hashOld = registerBlob(oldLines.join("\n") + "\n");
+    const hashNew = registerBlob(newLines.join("\n") + "\n");
+    const entry = (hash: string) => ({ path: "hunks.txt", type: "file" as const, content_hash: hash, executable: false, size: 1 });
+    const doc = renderCompleteDiffDocument(diffSnapshots(
+      makeManifest([entry(hashOld)]),
+      makeManifest([entry(hashNew)]),
+      (hash) => blobs.get(hash) ?? null,
+    ));
+    const file = [
+      "--- a/hunks.txt",
+      "+++ b/hunks.txt",
+      "@@ -1,6 +1,6 @@",
+      `-${oldLine(0)}`,
+      `+${newLine(0)}`,
+      ` ${oldLine(1)}`,
+      `-${oldLine(2)}`,
+      `+${newLine(2)}`,
+      ` ${oldLine(3)}`,
+      ` ${oldLine(4)}`,
+      ` ${oldLine(5)}`,
+      "@@ -8,7 +8,7 @@",
+      ` ${oldLine(7)}`,
+      ` ${oldLine(8)}`,
+      ` ${oldLine(9)}`,
+      `-${oldLine(10)}`,
+      `+${newLine(10)}`,
+      ` ${oldLine(11)}`,
+      ` ${oldLine(12)}`,
+      ` ${oldLine(13)}`,
+      "@@ -18,11 +18,11 @@",
+      ` ${oldLine(17)}`,
+      ` ${oldLine(18)}`,
+      ` ${oldLine(19)}`,
+      `-${oldLine(20)}`,
+      `+${newLine(20)}`,
+      ` ${oldLine(21)}`,
+      ` ${oldLine(22)}`,
+      ` ${oldLine(23)}`,
+      `-${oldLine(24)}`,
+      `+${newLine(24)}`,
+      ` ${oldLine(25)}`,
+      ` ${oldLine(26)}`,
+      ` ${oldLine(27)}`,
+      "@@ -37,4 +37,4 @@",
+      ` ${oldLine(36)}`,
+      ` ${oldLine(37)}`,
+      ` ${oldLine(38)}`,
+      `-${oldLine(39)}`,
+      `+${newLine(39)}`,
+    ].join("\n");
+    expect(doc).toBe(`1 files changed: 0 added, 1 modified, 0 deleted\n\n${file}`);
+    for (const omitted of [6, 14, 16, 28, 35]) expect(doc).not.toContain(oldLine(omitted));
+  });
+
+  it("added and deleted files keep every line with numbered hunks", () => {
+    const blobs = new Map<string, Uint8Array>();
+    const registerBlob = (content: string): string => {
+      const bytes = Buffer.from(content, "utf8");
+      const hash = createHash("sha256").update(bytes).digest("hex");
+      blobs.set(hash, bytes);
+      return hash;
+    };
+    const hashAdded = registerBlob("line 1\nline 2\n");
+    const hashDeleted = registerBlob("old line\n");
+    const diff = diffSnapshots(
+      makeManifest([{ path: "deleted.txt", type: "file", content_hash: hashDeleted, executable: false, size: 9 }]),
+      makeManifest([{ path: "added.txt", type: "file", content_hash: hashAdded, executable: false, size: 14 }]),
+      (hash) => blobs.get(hash) ?? null,
+    );
+    expect(diff.files.find((f) => f.path === "added.txt")?.text).toBe(
+      ["--- a/added.txt", "+++ b/added.txt", "@@ -0,0 +1,2 @@", "+line 1", "+line 2"].join("\n"),
+    );
+    expect(diff.files.find((f) => f.path === "deleted.txt")?.text).toBe(
+      ["--- a/deleted.txt", "+++ b/deleted.txt", "@@ -1,1 +0,0 @@", "-old line"].join("\n"),
+    );
+  });
+
+  it("trailing newline changes keep full side text and no-newline markers", () => {
+    const pair = (before: string, after: string) => {
+      const oldHash = createHash("sha256").update(before).digest("hex");
+      const newHash = createHash("sha256").update(after).digest("hex");
+      const blobs = new Map([[oldHash, Buffer.from(before)], [newHash, Buffer.from(after)]]);
+      const entry = (hash: string) => ({ path: "nl.txt", type: "file" as const, content_hash: hash, executable: false, size: blobs.get(hash)!.length });
+      return renderCompleteDiffDocument(diffSnapshots(
+        makeManifest([entry(oldHash)]),
+        makeManifest([entry(newHash)]),
+        (hash) => blobs.get(hash) ?? null,
+      ));
+    };
+    const removed = pair("alpha\nbeta\n", "alpha\nbeta");
+    expect(removed).toContain([
+      "@@ -1,2 +1,2 @@",
+      "-alpha",
+      "-beta",
+      "+alpha",
+      "+beta",
+      "\\ No newline at end of file",
+    ].join("\n"));
+    expect(removed.match(/No newline at end of file/g)).toHaveLength(1);
+
+    const added = pair("alpha\nbeta", "alpha\nbeta\n");
+    expect(added).toContain("-beta\n\\ No newline at end of file\n+alpha\n+beta");
+    expect(added.match(/No newline at end of file/g)).toHaveLength(1);
+    expect(added).toContain("-alpha");
+    expect(added).toContain("+beta");
+  });
+
+  it("large LCS fallback keeps every changed line and only the context window", () => {
+    const blobs = new Map<string, Uint8Array>();
+    const registerBlob = (content: string): string => {
+      const bytes = Buffer.from(content, "utf8");
+      const hash = createHash("sha256").update(bytes).digest("hex");
+      blobs.set(hash, bytes);
+      return hash;
+    };
+    const prefix = Array.from({ length: 5000 }, (_, i) => `P${String(i).padStart(4, "0")}`);
+    const suffix = Array.from({ length: 5000 }, (_, i) => `U${String(i).padStart(4, "0")}`);
+    const oldMid = Array.from({ length: 2500 }, (_, i) => `O${String(i).padStart(4, "0")}`);
+    const newMid = Array.from({ length: 2500 }, (_, i) => `N${String(i).padStart(4, "0")}`);
+    const hashOld = registerBlob([...prefix, ...oldMid, ...suffix].join("\n") + "\n");
+    const hashNew = registerBlob([...prefix, ...newMid, ...suffix].join("\n") + "\n");
+    const entry = (hash: string) => ({ path: "fallback.txt", type: "file" as const, content_hash: hash, executable: false, size: 1 });
+    const diff = diffSnapshots(
+      makeManifest([entry(hashOld)]),
+      makeManifest([entry(hashNew)]),
+      (hash) => blobs.get(hash) ?? null,
+    );
+    const doc = renderCompleteDiffDocument(diff);
+    expect(doc).toContain("@@ -4998,2506 +4998,2506 @@");
+    expect(doc).toContain(` ${prefix[4997]}`);
+    expect(doc).toContain(` ${prefix[4999]}`);
+    expect(doc).toContain(`-${oldMid[0]}`);
+    expect(doc).toContain(`-${oldMid[2499]}`);
+    expect(doc).toContain(`+${newMid[0]}`);
+    expect(doc).toContain(`+${newMid[2499]}`);
+    expect(doc).toContain(` ${suffix[0]}`);
+    expect(doc).toContain(` ${suffix[2]}`);
+    expect(doc).not.toContain(prefix[0]);
+    expect(doc).not.toContain(prefix[4996]);
+    expect(doc).not.toContain(suffix[3]);
+    expect(doc).not.toContain(suffix[4999]);
+    const contextLines = doc.split("\n").filter((line) => line.startsWith(" "));
+    expect(contextLines).toHaveLength(6);
+    expect(diff.files[0]?.old_hash).toBe(hashOld);
+    expect(diff.files[0]?.new_hash).toBe(hashNew);
+  });
 });
