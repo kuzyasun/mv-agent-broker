@@ -281,6 +281,14 @@ was cumulative: do not sum consecutive result counters as independent turns.
 
 ## Cursor
 
+Metadata readiness and UI catalogue refresh retry once only when a pinned
+metadata subprocess exits with Windows fail-fast status `0xC0000409` (unsigned
+3221226505 or its signed equivalent). A fresh successful response is required;
+after two failures admission still refuses before inference, with argv, exit
+code and attempt count. Other failures and timeouts are not retried, paid turns
+are never replayed by this mechanism, and previous failed output never stands
+in for a current catalogue. The original crash cause remains unestablished.
+
 Adapter 0.2.4 prepares a unique private `CURSOR_CONFIG_DIR` for each reviewer
 turn, retaining Ask mode and denying `Write(**)`, `Shell(*)`, `WebFetch(*)`
 and `Mcp(*:*)`. Preparation precedes dispatch permission; cleanup covers

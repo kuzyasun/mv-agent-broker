@@ -288,6 +288,32 @@ export interface MetadataProbeResult {
   detail: string;
 }
 
+export interface RetriedMetadataProbeResult extends MetadataProbeResult {
+  attempts: 1 | 2;
+}
+
+/**
+ * One retry of an observed Windows fail-fast exit for a pinned metadata-only
+ * command. A fresh successful response is required; failure never borrows a
+ * previous catalog. No prompt, inference or general provider retry is allowed.
+ */
+export function runMetadataProbeWithFailFastRetry(
+  spec: MetadataProbeSpec,
+  probe: (spec: MetadataProbeSpec) => MetadataProbeResult = runMetadataProbe,
+): RetriedMetadataProbeResult {
+  assertProbeArgvSafe(spec.argv);
+  const first = probe(spec);
+  if (first.ok || (first.exitCode !== 3221226505 && first.exitCode !== -1073740791)) {
+    return { ...first, attempts: 1 };
+  }
+  const second = probe(spec);
+  return {
+    ...second,
+    attempts: 2,
+    detail: second.ok ? second.detail : `${second.detail}; initial probe exited with Windows fail-fast status 0xC0000409; one metadata retry also failed`,
+  };
+}
+
 /** Structural OS entries only; everything else must be explicitly allowlisted. */
 function scrubProbeEnv(allowlist: readonly string[], inheritEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
