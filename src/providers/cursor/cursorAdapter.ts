@@ -22,7 +22,7 @@ import {
   fingerprintBinaryTarget,
   fingerprintReadinessObservation,
   resolveBinaryPath,
-  runMetadataProbe,
+  runMetadataProbeWithFailFastRetry,
   sha256Canonical,
   ReadinessObservationCache,
   type ProviderReadinessObservation,
@@ -301,14 +301,14 @@ export class CursorAdapter implements ProviderAdapter {
       }
       return cached;
     }
-    const probe = (argv: readonly string[]): ReturnType<typeof runMetadataProbe> =>
-      runMetadataProbe({ binary: resolvedBinary, argv, cwd: process.cwd(), envAllowlist: CURSOR_ENV_ALLOWLIST });
+    const probe = (argv: readonly string[]) =>
+      runMetadataProbeWithFailFastRetry({ binary: resolvedBinary, argv, cwd: process.cwd(), envAllowlist: CURSOR_ENV_ALLOWLIST });
     const versionProbe = probe(["--version"]);
     if (!versionProbe.ok) {
       throw new BrokerError(
         "PROVIDER_INCOMPATIBLE",
         `Cursor CLI --version probe failed: ${versionProbe.detail || "no output"}`,
-        { executionStarted: false },
+        { executionStarted: false, details: { probe_argv: ["--version"], exit_code: versionProbe.exitCode, probe_attempts: versionProbe.attempts } },
       );
     }
     const cliVersion = versionProbe.stdout.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? "";
@@ -318,7 +318,7 @@ export class CursorAdapter implements ProviderAdapter {
       throw new BrokerError(
         "PROVIDER_INCOMPATIBLE",
         `Cursor CLI --list-models probe failed: ${modelsProbe.detail || "no output"}`,
-        { executionStarted: false },
+        { executionStarted: false, details: { probe_argv: ["--list-models"], exit_code: modelsProbe.exitCode, probe_attempts: modelsProbe.attempts } },
       );
     }
     const catalog = parseCursorModelCatalog(modelsProbe.stdout);

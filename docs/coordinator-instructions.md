@@ -47,6 +47,8 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    acceptance check; broaden checks for a concrete integration risk.
 5. For substantive changes, use a separate reviewer route with `review_slot` and
    the worker's original baseline/final target snapshot in `review_binding`.
+   Omit `workspace_precondition` on this reviewer send; the API requires exactly
+   one of the two bindings. `workspace_precondition` belongs to physical worker turns.
    Request findings first with file/line, impact and reason. Deliver actual findings
    artifacts to follow-up worker tasks. The original coordinator verifies confirmed
    findings and reviews the final diff. Do not repeat vendor reviews for unchanged

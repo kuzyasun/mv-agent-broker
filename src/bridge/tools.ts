@@ -145,7 +145,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_send",
-      description: "Submit a task turn: atomic admission with required input pins; returns turn_id without waiting for inference (§7.2).",
+      description: "Submit a task turn: atomic admission; returns turn_id without waiting for inference. Supply exactly one binding: workspace_precondition for physical worker turns, or review_binding for review_slot turns. Never send both (§7.2).",
       inputSchema: {
         type: "object",
         properties: {
@@ -165,12 +165,14 @@ export function bridgeToolDefs(): McpToolDef[] {
           },
           workspace_precondition: {
             type: "object",
+            description: "Physical worker workspace only. Omit when supplying review_binding.",
             properties: { expected_snapshot_id: str },
             required: ["expected_snapshot_id"],
             additionalProperties: false,
           },
           review_binding: {
             type: "object",
+            description: "Exact baseline and target for a review_slot turn. Omit workspace_precondition.",
             properties: { baseline_snapshot_id: str, target_snapshot_id: str },
             required: ["baseline_snapshot_id", "target_snapshot_id"],
             additionalProperties: false,
@@ -450,7 +452,12 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
       const hasPrecond = rawArgs.workspace_precondition !== undefined;
       const hasReview = rawArgs.review_binding !== undefined;
       if (hasPrecond === hasReview) {
-        throw new BrokerError("INVALID_REQUEST", "Exactly one of workspace_precondition / review_binding is required.");
+        throw new BrokerError("INVALID_REQUEST", "Exactly one of workspace_precondition / review_binding is required. For review_slot send review_binding only; for a physical worker workspace send workspace_precondition only.");
+      }
+      const bindingName = hasPrecond ? "workspace_precondition" : "review_binding";
+      const binding = rawArgs[bindingName];
+      if (binding === null || typeof binding !== "object" || Array.isArray(binding)) {
+        throw new BrokerError("INVALID_REQUEST", `${bindingName} must be an object. For review_slot send review_binding only; for a physical worker workspace send workspace_precondition only.`);
       }
       return core.send(ctx.coordinatorId, {
         session_id: requireString(rawArgs, "session_id"),

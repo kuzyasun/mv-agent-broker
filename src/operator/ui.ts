@@ -9,7 +9,7 @@ import { validateOperatorConfig, type OperatorConfig } from "./config.ts";
 import { clearQuotaPauseOperator, readRuntimeRecord, restartOperator, statusOperator, turnErrorOperator } from "./operations.ts";
 import { parseAntigravityModelCatalog } from "../providers/antigravity/antigravityAdapter.ts";
 import { parseCursorModelCatalog, resolveCursorModel } from "../providers/cursor/cursorAdapter.ts";
-import { boundedSanitizedDetail, resolveBinaryPath, runMetadataProbe } from "../providers/common/readiness.ts";
+import { boundedSanitizedDetail, resolveBinaryPath, runMetadataProbe, runMetadataProbeWithFailFastRetry } from "../providers/common/readiness.ts";
 import { createZcodePersonalConfig, readZcodeInstalledCatalog, resolveZcodeBuiltinPath } from "../providers/zcode/nativeConfig.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -292,8 +292,8 @@ export async function defaultCatalogReader(provider: string, config: OperatorCon
     if (!binary) return metadataFailure(provider, "provider binary is not pinned");
     const resolved = resolveBinaryPath(binary);
     if (!resolved) return metadataFailure(provider);
-    const models = runMetadataProbe({ binary: resolved, argv: ["--list-models"], cwd: process.cwd(), envAllowlist: ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"] });
-    if (!models.ok) return metadataFailure(provider);
+    const models = runMetadataProbeWithFailFastRetry({ binary: resolved, argv: ["--list-models"], cwd: process.cwd(), envAllowlist: ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"] });
+    if (!models.ok) return metadataFailure(provider, models.detail);
     return observation(provider, parseCursorModelCatalog(models.stdout), "cli_metadata_probe");
   }
   if (provider === "antigravity") {

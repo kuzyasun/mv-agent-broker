@@ -9,6 +9,31 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-03: Cursor catalogue probe exited with Windows fail-fast status
+
+Beehive reported `PROVIDER_INCOMPATIBLE`, `Cursor CLI --list-models probe failed:
+exit 3221226505`, `execution_started: false`. No turn/artifact was returned and
+the existing reviewer session remained IDLE. The integer corresponds to
+`0xC0000409`, a Windows fail-fast status; it does not identify the root cause
+([Microsoft](https://learn.microsoft.com/en-us/cpp/intrinsics/fastfail)). The
+reported response supplied no stderr or additional diagnosis.
+
+Two direct pinned catalogue probes subsequently passed, returning 246 models
+including the selected `grok-4.7-high`. A paid one-response Cursor control through
+frozen broker `700449a` also succeeded, with execution started and no source
+changes. These observations establish current success, not the crash's cause.
+Private control evidence: dogfood `2026-10-03T00-44-16-860Z-863ee7fc`.
+
+The bounded repair retries that specific exit once for metadata only; repeated
+failure remains a pre-inference refusal with safe context. No paid retry, model
+substitution, raw stderr disclosure or stale catalogue fallback is added.
+
+The preceding Beehive request sent both `review_binding` and
+`workspace_precondition` and was correctly rejected as `INVALID_REQUEST` before
+inference. MCP tool descriptions and the coordinator guide now state explicitly
+that reviewer sends use `review_binding` only. The earlier successful review
+still applies to its prior target, not the later active-member test snapshot.
+
 ## 2026-10-03: Beehive full review diff exceeded the delivery budget
 
 The coordinator reported a complete 9,649,425-byte review diff rejected against

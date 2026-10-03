@@ -4,7 +4,7 @@
  */
 
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   JSONRPC_ERROR,
   MCP_PROTOCOL_VERSION,
@@ -303,6 +303,26 @@ describe("runStdioBridge transport loop", () => {
 });
 
 // ─── §8.3 additive spawn workspace fields at the bridge boundary ────────────
+
+describe("agent_session_send binding guidance", () => {
+  it.each(["review_binding", "workspace_precondition"])("rejects null %s before admission with actionable guidance", async (bindingName) => {
+    const send = vi.fn();
+    await expect(callBridgeTool({ coordinatorId: "coord", core: { send } as unknown as BrokerCore }, "agent_session_send", {
+      session_id: "s", idempotency_key: "k", task: { goal: "review", artifact_refs: [] }, [bindingName]: null,
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringContaining("must be an object. For review_slot") });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("rejects contradictory review/worker bindings before admission and explains the correction", async () => {
+    const send = vi.fn();
+    await expect(callBridgeTool({ coordinatorId: "coord", core: { send } as unknown as BrokerCore }, "agent_session_send", {
+      session_id: "s", idempotency_key: "k", task: { goal: "review", checks: [], artifact_refs: [] },
+      review_binding: { baseline_snapshot_id: "base", target_snapshot_id: "target" },
+      workspace_precondition: { expected_snapshot_id: "target" },
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringContaining("For review_slot send review_binding only") });
+    expect(send).not.toHaveBeenCalled();
+  });
+});
 
 describe("agent_session_spawn additive worktree workspace fields (§8.3)", () => {
   function recordingCore() {
