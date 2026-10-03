@@ -606,6 +606,9 @@
   const MULTI_AGENT_TAG = "multi-agent";
   const MAX_STORED_TAGS = 12;
   const TAG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+  // Role pools render as native collapsed disclosures; this map keeps the
+  // operator's expansion across renderRoutes calls (edits, filters, reloads).
+  const openPools = new Map();
   const derivedMultiAgent = (route) => ["prefer", "auto"].includes(route.native_subagents && route.native_subagents.mode);
   const effectiveTags = (route) => [...(route.tags || []), ...(derivedMultiAgent(route) ? [MULTI_AGENT_TAG] : [])];
   const allTags = () => [...new Set((state.routes || []).filter(route => !projectFilter || route.project_id === projectFilter).flatMap(effectiveTags))].sort((a, b) => a.localeCompare(b));
@@ -748,6 +751,8 @@
     });
     const filtered = Boolean(tagFilter);
     tagFilter = "";
+    // Show the new card even if the destination pool was collapsed.
+    openPools.set(role, true);
     markDirty();
     renderRoutes();
     status(`Added ${role} profile.${filtered ? " Cleared the tag filter to show it." : ""} Configure its model and policy, then save.`, "success");
@@ -828,9 +833,12 @@
     titleWrap.className = "route-title";
     const profileTitle = make("h3", route.display_name || route.route_id);
     titleWrap.append(profileTitle);
-    const badge = make("span", route.enabled === false ? "Disabled" : "Enabled");
-    badge.className = `pill ${route.enabled === false ? "pill-off" : "pill-on"}`;
-    titleWrap.append(badge);
+    // Only the disabled state is badged; an enabled profile needs no label.
+    if (route.enabled === false) {
+      const badge = make("span", "Disabled");
+      badge.className = "pill pill-off";
+      titleWrap.append(badge);
+    }
     header.append(titleWrap);
     const actions = make("div");
     actions.className = "route-actions";
@@ -913,6 +921,8 @@
     fields.append(selectField("Role (move pool)", route.role, ROLES.map((value) => ({ value, label: value })), (value) => {
       setField(route, "role", value);
       adaptPolicyToRole(route);
+      // Follow the card into its new pool even when that pool is collapsed.
+      openPools.set(value, true);
       renderRoutes();
     }));
     const policyChoices = policyChoicesFor(route.role).map((policy) => ({ value: policy.policy_profile_id, label: `${policy.policy_profile_id} · ${policy.config && policy.config.access || "access not set"}` }));
@@ -1053,22 +1063,29 @@
     const container = $("routes");
     container.replaceChildren();
     for (const role of ROLES) {
-      const pool = make("section");
+      const routes = visibleRoutes(role);
+      const pool = make("details");
       pool.className = "pool";
       pool.setAttribute("aria-label", ROLE_LABELS[role]);
-      const head = make("header");
-      head.className = "pool-header";
-      const routes = visibleRoutes(role);
-      head.append(make("h3", `${ROLE_LABELS[role]} (${routes.length})`));
+      // Pools start collapsed on a fresh load; the map preserves operator
+      // expansion. Setting .open before insertion fires no toggle event.
+      pool.open = openPools.get(role) === true;
+      pool.addEventListener("toggle", () => { openPools.set(role, pool.open); });
+      const summary = make("summary");
+      summary.className = "pool-summary";
+      summary.append(make("h3", `${ROLE_LABELS[role]} (${routes.length})`));
+      pool.append(summary);
+      const body = make("div");
+      body.className = "pool-body";
+      const toolbar = make("div");
+      toolbar.className = "pool-toolbar";
+      const explain = make("p", ROLE_EXPLAIN[role]);
+      explain.className = "pool-help";
       const add = make("button", "Add profile");
       add.className = "button secondary";
       add.type = "button";
       add.addEventListener("click", () => action(() => addProfile(role)));
-      head.append(add);
-      pool.append(head);
-      const explain = make("p", ROLE_EXPLAIN[role]);
-      explain.className = "pool-help";
-      pool.append(explain);
+      toolbar.append(explain, add);
       const grid = make("div");
       grid.className = "route-grid";
       routes.forEach((route) => {
@@ -1079,7 +1096,8 @@
           : projectFilter ? "No profiles for this project in this pool yet."
           : "No profiles in this pool yet."));
       }
-      pool.append(grid);
+      body.append(toolbar, grid);
+      pool.append(body);
       container.append(pool);
     }
   }

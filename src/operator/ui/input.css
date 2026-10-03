@@ -1,0 +1,259 @@
+/*
+ * Operator UI stylesheet SOURCE.
+ *
+ * `styles.css` next to this file is GENERATED from it with Tailwind CLI:
+ *
+ *     npm run build:ui
+ *
+ * Never edit styles.css by hand; edit this file and rebuild. The generated
+ * file stays committed because the frozen runtime serves the UI without
+ * build dependencies.
+ */
+@import "tailwindcss" source(none);
+@source "./app.js";
+@source "./index.html";
+
+@theme {
+  --color-ink: #18212b;
+  --color-muted: #637083;
+  --color-line: #d8dee8;
+  --color-panel: #ffffff;
+  --color-wash: #f4f7fb;
+  --color-blue: #2457c5;
+  --color-blue-dark: #173c8c;
+  --color-blue-soft: #e9f0ff;
+  --color-blue-mist: #e8eef8;
+  --color-blue-steel: #d8e3f5;
+  --color-blue-frost: #f7faff;
+  --color-blue-edge: #c9d8f2;
+  --color-blue-ghost: #fcfdff;
+  --color-blue-sel: #9eb8ed;
+  --color-green: #176b4d;
+  --color-green-deep: #11533b;
+  --color-green-mist: #e8f5ef;
+  --color-red: #a23a3a;
+  --color-red-mist: #f9e8e8;
+  --color-red-soft: #fcecec;
+  --color-red-deep: #f3d7d7;
+  --color-amber: #d4a72c;
+  --color-amber-mist: #fff9e6;
+  --color-amber-ink: #624d11;
+  --color-night: #12233d;
+  --color-night-soft: #c5d1e4;
+  --color-steel: #6980a1;
+  --color-slate-ink: #435167;
+  --color-slate-field: #c9d2df;
+  --color-slate-input: #eef2f7;
+  --color-slate-note: #f1f3f6;
+  --color-focus: #91b5ff;
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+@layer base {
+  :root { color-scheme: light; }
+
+  body {
+    @apply bg-wash font-sans text-ink text-sm;
+  }
+
+  /* Preflight strips heading and paragraph spacing; restore compact rhythm. */
+  p { @apply my-1; }
+  h1 { @apply text-xl font-bold tracking-tight; }
+  h2 { @apply text-lg font-bold tracking-tight; }
+  h3 { @apply text-sm font-bold; }
+
+  summary {
+    @apply cursor-pointer font-bold;
+  }
+  summary:focus-visible {
+    outline: 3px solid var(--color-focus);
+    outline-offset: 1px;
+  }
+
+  input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 3px solid var(--color-focus);
+    outline-offset: 1px;
+  }
+}
+
+@layer components {
+  .topbar {
+    @apply flex flex-wrap items-start justify-between gap-4 bg-night px-[max(1rem,calc((100vw-72rem)/2+.75rem))] py-3 text-white max-sm:block;
+  }
+  .topbar h1 { @apply mb-1 mt-0.5 text-2xl; }
+  .topbar .muted { @apply text-night-soft; }
+
+  .top-actions { @apply flex flex-wrap gap-2 max-sm:mt-2; }
+  .page { @apply mx-auto w-full max-w-6xl p-3; }
+
+  /* Square, compact cards. */
+  .card { @apply mb-3 border border-line bg-panel p-4; }
+  .intro { @apply flex flex-wrap items-center justify-between gap-3 max-sm:block; }
+
+  .section-heading { @apply mb-2 flex flex-wrap items-start justify-between gap-2; }
+  .eyebrow { @apply m-0 text-[.68rem] font-extrabold tracking-[.13em] text-steel; }
+  .muted { @apply leading-snug text-muted; }
+  .notice { @apply my-2 border-l-4 border-amber bg-amber-mist px-3 py-2 leading-snug text-amber-ink; }
+  .profile-help { @apply my-2 border border-blue-steel bg-blue-frost p-2.5 leading-snug text-slate-ink; }
+  .profile-help p { @apply mt-2; }
+  .profile-help code { @apply text-blue-dark; }
+
+  .button {
+    @apply cursor-pointer border-0 px-3 py-1.5 text-sm font-bold;
+    transition: background-color .15s ease, box-shadow .15s ease, filter .15s ease, transform .05s ease;
+  }
+  .button.primary { @apply bg-green text-white; }
+  .button.primary:hover:not(:disabled) { @apply bg-green-deep; }
+  .button.secondary { @apply bg-blue-mist text-blue-dark; }
+  .button.secondary:hover:not(:disabled) { @apply bg-blue-steel; }
+  .button.danger { @apply bg-red-mist text-red; }
+  .button.danger:hover:not(:disabled) { @apply bg-red-deep; }
+  .button:active:not(:disabled),
+  .button.is-clicked {
+    transform: translateY(1px);
+    box-shadow: inset 0 2px 4px rgb(24 33 43 / .2);
+    filter: brightness(.9);
+  }
+  .button:disabled { @apply cursor-wait opacity-80; }
+  .button-spinner {
+    @apply me-1 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-r-transparent align-[-.1em];
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .button { transition: none; }
+    .button-spinner { animation: none; }
+  }
+
+  .status { @apply mb-2 min-h-8 px-2.5 py-1.5; }
+  .status:empty { display: none; }
+  .status.success { @apply bg-green-mist text-green; }
+  .status.error { @apply bg-red-soft text-red; }
+
+  .settings-state { @apply mt-2 bg-slate-note px-2.5 py-1 text-xs font-bold text-muted; }
+  .settings-state.success { @apply bg-green-mist text-green; }
+  .settings-state.warning { @apply bg-amber-mist text-amber-ink; }
+
+  .live-card { @apply border-blue-edge; }
+  .live-runtime { @apply my-2 mb-3 grid grid-cols-1 gap-1.5 sm:grid-cols-3; }
+  .live-runtime-item { @apply border border-blue-steel bg-blue-frost p-2; }
+  .live-runtime-item strong {
+    @apply block text-[.7rem] font-bold uppercase tracking-wide text-slate-ink;
+  }
+  .live-runtime-item span { @apply mt-0.5 block text-[.82rem] break-words; }
+
+  .overview-grid { @apply grid grid-cols-1 gap-2 sm:grid-cols-2; }
+  .overview-panel { @apply min-w-0 border border-line bg-blue-ghost p-2.5; }
+  .overview-panel h3 { @apply m-0; }
+  .overview-panel > .small-note { @apply mb-2 mt-1; }
+  .live-list { @apply grid gap-1.5; }
+  .live-row {
+    @apply grid gap-0.5 border-l-4 border-blue-sel bg-blue-frost p-2 text-xs leading-snug;
+  }
+  .live-row strong { @apply break-words; }
+  .live-row span, .turn-error-detail p { @apply break-words text-muted; }
+  .turn-error-detail { @apply mt-1; }
+  .turn-error-detail summary { @apply font-semibold text-blue; }
+  .turn-error-detail dl { @apply grid grid-cols-[minmax(100px,1fr)_minmax(0,2fr)] gap-1 gap-x-3; }
+  .turn-error-detail dt { @apply font-semibold; }
+  .turn-error-detail dd { @apply m-0 break-words; }
+  .detail-toggle { @apply justify-self-start px-2 py-1; }
+
+  .route-grid { @apply grid grid-cols-[repeat(auto-fit,minmax(min(100%,270px),1fr))] gap-2; }
+  .route-card, .project-card { @apply border border-line bg-blue-ghost p-3; }
+  .route-card header, .project-card header { @apply mb-2 flex items-center justify-between gap-2; }
+  .route-card header { @apply flex-col items-start; }
+  .route-actions { @apply flex flex-wrap gap-1; }
+
+  details[open] > summary { @apply mb-1.5; }
+  .route-card h3, .project-card h3 { @apply m-0 break-words; }
+  .route-summary { @apply -mt-1 mb-1.5 text-xs leading-snug text-muted; }
+
+  /* Field grids align at the start so one tall cell never stretches its
+     neighbors (this is what made the children-count input grow). */
+  .field-grid, .advanced-grid { @apply grid grid-cols-1 items-start gap-2 sm:grid-cols-2; }
+  label { @apply grid content-start gap-1 text-xs font-bold text-slate-ink; }
+  .field-help { @apply text-[.7rem] font-normal leading-snug text-muted; }
+
+  input, select {
+    @apply h-8 w-full border border-slate-field bg-white px-2 py-0 text-sm font-normal text-ink;
+  }
+  input:disabled { @apply cursor-not-allowed bg-slate-input text-muted; }
+  input[type="checkbox"] { @apply h-4 w-4 p-0; }
+  textarea {
+    @apply min-h-24 w-full resize-y border border-slate-field bg-white px-2 py-1 text-sm font-normal text-ink;
+  }
+  .code { @apply min-h-40 font-mono text-xs leading-snug; }
+
+  .catalogue-summary, .catalogue-message, .catalogue-help, .manual-model { @apply col-span-full; }
+  .catalogue-summary, .catalogue-help { @apply m-0 text-xs font-normal leading-snug text-muted; }
+  .catalogue-message { @apply m-0 bg-amber-mist px-2 py-1 text-xs font-normal leading-snug text-amber-ink; }
+
+  .project-list { @apply grid gap-2; }
+  .project-card .project-fields { @apply grid grid-cols-1 gap-2 sm:grid-cols-3; }
+  .project-card .wide { @apply col-span-full; }
+  .project-card .actions { @apply mt-2 flex flex-wrap gap-2; }
+
+  .wizard { @apply mt-2 border border-dashed border-[#a8b8cf] bg-[#f8fbff] p-3; }
+  .wizard h3 { @apply mt-0; }
+  .wizard .actions { @apply mt-2 flex gap-2; }
+  .wizard-status { @apply my-2; }
+  .folder-picker { @apply my-2 border border-blue-steel bg-white p-2; }
+  .folder-picker-current { @apply mb-1 mt-0 break-words text-muted; }
+  .folder-picker-controls { @apply grid gap-2; }
+  .folder-children { @apply flex flex-wrap gap-1; }
+  .code-folder-choices {
+    @apply col-span-full flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-normal text-slate-ink;
+  }
+  .code-folder-choices strong { @apply basis-full font-bold; }
+  .code-folder-choices label { @apply flex items-center gap-1 font-normal; }
+  .code-folder-choices input { @apply w-auto; }
+  .wizard-advanced { @apply col-span-full mt-2; }
+  .manual-folder { @apply mt-2 flex items-end gap-2 max-sm:grid max-sm:items-stretch; }
+  .manual-folder label { @apply flex-1; }
+
+  .hidden { display: none; }
+  .small-note { @apply text-xs leading-snug text-muted; }
+
+  /* Square tags; the only pill still rendered is the Disabled badge. */
+  .pill { @apply inline-flex bg-blue-soft px-1.5 py-0.5 text-[.7rem] font-bold text-blue; }
+  .pill-on { @apply bg-green-mist text-green; }
+  .pill-off { @apply bg-red-mist text-red; }
+
+  /* Role pools: native details/summary, collapsed until expanded. */
+  .pools { @apply grid gap-2; }
+  .pool { @apply border border-line bg-white p-2.5; }
+  .pool > summary {
+    @apply flex items-center gap-1.5;
+  }
+  .pool > summary h3 { @apply m-0; }
+  .pool > summary::before {
+    content: "▸";
+    @apply text-muted;
+  }
+  .pool[open] > summary::before { content: "▾"; }
+  .pool > summary:hover { @apply bg-blue-frost; }
+  .pool-toolbar { @apply mb-2 flex flex-wrap items-center justify-between gap-2; }
+  .pool-help { @apply m-0 min-w-48 flex-1 text-xs leading-snug text-muted; }
+
+  .filter-row { @apply mb-2 flex flex-wrap gap-2; }
+  .filter-row label { @apply min-w-48; }
+  .route-title { @apply flex flex-wrap items-center gap-1.5; }
+  .route-card.is-disabled { @apply border-dashed bg-[#fdfbf7]; }
+  .enabled-toggle { @apply flex items-center gap-1.5; }
+  .enabled-toggle input { @apply size-4; }
+
+  .tag-chips { @apply col-span-full flex flex-wrap items-center gap-1 text-xs font-bold text-slate-ink; }
+  .tag-chip {
+    @apply cursor-pointer border border-slate-field bg-white px-2 py-0.5 text-[.7rem] font-bold text-slate-ink;
+  }
+  .tag-chip.active { @apply border-blue-sel bg-blue-soft text-blue; }
+  .tag-chip.derived { @apply cursor-help border-dashed; }
+  .tag-input { @apply col-span-full; }
+  .route-advanced { @apply col-span-full; }
+  .route-advanced summary { @apply mb-1; }
+
+  .snippet-grid { @apply grid grid-cols-1 gap-2 sm:grid-cols-2; }
+
+  .storage-controls { @apply mb-2 flex flex-wrap items-end gap-2; }
+  .storage-controls label { @apply min-w-44 flex-1; }
+}

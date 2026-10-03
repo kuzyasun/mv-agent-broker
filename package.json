@@ -9,12 +9,15 @@
   },
   "scripts": {
     "broker": "node --experimental-transform-types src/operator/main.ts",
+    "build:ui": "tailwindcss -i src/operator/ui/input.css -o src/operator/ui/styles.css --minify",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
     "@types/node": "^24.0.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
   }

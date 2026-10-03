@@ -203,15 +203,15 @@ export class StubDocument {
   }
 }
 
-/** Find the pool section whose aria-label matches the role pool name. */
+/** Find the pool disclosure whose aria-label matches the role pool name. */
 export function findPool(routesContainer: StubElement, poolName: string): StubElement | null {
   return routesContainer.children.find((pool) => pool.getAttribute("aria-label") === poolName) ?? null;
 }
 
-/** Cards are articles inside a pool's route grid. */
+/** Cards are articles inside a pool's route grid, nested under the pool body. */
 export function poolCards(pool: StubElement): StubElement[] {
-  return pool.children.filter((child) => child.classList.contains("route-grid"))
-    .flatMap((grid) => grid.children.filter((card) => card.classList.contains("route-card")));
+  return pool.querySelectorAll(".route-grid").flatMap((grid) =>
+    grid.children.filter((card) => card.classList.contains("route-card")));
 }
 
 export async function waitFor(predicate: () => boolean, what: string): Promise<void> {

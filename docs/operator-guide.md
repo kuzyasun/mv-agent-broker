@@ -173,7 +173,10 @@ foreground `ui` command remains available whenever direct console logging or
 ephemeral execution is desired.
 
 The Profiles page shows three pools — Workers, Reviewers, Researchers — holding
-this project's agent profiles. Each profile card has a readable name, an
+this project's agent profiles. Pools start collapsed; click their headings to expand.
+Expansion stays intact while editing or filtering, and adding or moving a
+profile opens its destination pool. Enabled profiles have no title badge;
+only disabled profiles are badged. Each profile card has a readable name, an
 enabled switch, provider/account/model/effort, an explicit policy, tags, and
 advisory native-subagent settings. Add profiles per pool; duplicate, delete,
 move a profile to another role, or change its project at any time — a

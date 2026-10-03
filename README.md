@@ -85,7 +85,14 @@ reload the daemon.
 npm install
 npm run typecheck   # tsc --noEmit
 npm test            # vitest run (mock-level, no inference)
+npm run build:ui    # regenerate src/operator/ui/styles.css with Tailwind CLI
 ```
+
+The operator page stylesheet is compiled locally from
+`src/operator/ui/input.css` (Tailwind CSS v4 CLI, no CDN). `styles.css` is a
+generated, committed asset so the frozen runtime can serve it without build
+dependencies — edit `input.css` and run `npm run build:ui`; never edit
+`styles.css` by hand.
 
 For a submitted turn, keep the last consumed event cursor as a number and use
 the bounded wait instead of repeatedly fetching a full transcript:

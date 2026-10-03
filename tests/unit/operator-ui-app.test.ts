@@ -1,11 +1,13 @@
 /**
- * Offline pool-UI behavior for src/operator/ui/app.js: three pools with
- * counts and per-pool Add, readable names, enabled toggle with disabled card
- * visibility, default/large chips plus the derived multi-agent chip, tag
- * filter including the derived tag, read-only policy handling on role moves,
- * and duplicate preserving metadata with a new route ID. A minimal DOM stub
- * (tests/helpers/uiDom.ts) replaces the browser; interactions dispatch the
- * same listeners the page registers.
+ * Offline pool-UI behavior for src/operator/ui/app.js: three pools rendered
+ * as native collapsed disclosures (expandable, expansion retained across
+ * re-renders, auto-opened when an add or role move targets them) with counts
+ * and per-pool Add, readable names, no badge while enabled plus a Disabled
+ * badge and disabled card visibility, default/large chips plus the derived
+ * multi-agent chip, tag filter including the derived tag, read-only policy
+ * handling on role moves, and duplicate preserving metadata with a new route
+ * ID. A minimal DOM stub (tests/helpers/uiDom.ts) replaces the browser;
+ * interactions dispatch the same listeners the page registers.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -107,25 +109,68 @@ beforeEach(async () => {
 });
 
 describe("operator pools UI", () => {
-  it("renders three labeled pools with counts, explanations, and per-pool Add", () => {
+  it("renders three collapsed pool disclosures with counts, explanations, and per-pool Add", () => {
     const routes = document.getElementById("routes");
     for (const pool of ["Workers", "Reviewers", "Researchers"] as const) {
       const section = findPool(routes, pool);
       expect(section, pool).not.toBeNull();
-      const header = section!.children.find((child) => child.className === "pool-header")!;
-      expect(header.children[0]!.textContent).toBe(pool === "Workers" ? "Workers (1)" : `${pool} (0)`);
-      expect(header.children.some((child) => child.textContent === "Add profile")).toBe(true);
+      // Native disclosure: collapsed on a fresh load, keyboard operable.
+      expect(section!.tagName).toBe("details");
+      expect(section!.open).toBe(false);
+      const summary = section!.children.find((child) => child.tagName === "summary")!;
+      expect(summary.querySelector("h3")!.textContent).toBe(pool === "Workers" ? "Workers (1)" : `${pool} (0)`);
+      const toolbar = section!.querySelector(".pool-toolbar")!;
+      expect(toolbar.children.some((child) => child.textContent === "Add profile")).toBe(true);
+      expect(section!.textContent).toContain(pool === "Workers" ? "Implement bounded tasks"
+        : pool === "Reviewers" ? "Independent review sessions" : "Read-only investigation");
       expect(poolCards(section!)).toHaveLength(pool === "Workers" ? 1 : 0);
     }
   });
 
-  it("shows the readable name, enabled state, and the derived multi-agent chip", () => {
+  it("preserves operator pool expansion across re-renders", () => {
+    const routes = document.getElementById("routes");
+    const workers = findPool(routes, "Workers")!;
+    workers.open = true;
+    workers.dispatch("toggle");
+    // A chip click rerenders every pool; expansion must survive, others stay collapsed.
+    const card = poolCards(workers)[0]!;
+    card.querySelector(".tag-chips")!.children.find((chip) => chip.textContent === "large")!.dispatch("click");
+    expect(findPool(routes, "Workers")!.open).toBe(true);
+    expect(findPool(routes, "Reviewers")!.open).toBe(false);
+    expect(findPool(routes, "Researchers")!.open).toBe(false);
+  });
+
+  it("auto-opens a collapsed destination pool when adding a profile", () => {
+    const routes = document.getElementById("routes");
+    const workers = findPool(routes, "Workers")!;
+    workers.open = false;
+    workers.dispatch("toggle");
+    workers.querySelector(".pool-toolbar")!.children.find((child) => child.textContent === "Add profile")!.dispatch("click");
+    const rendered = findPool(routes, "Workers")!;
+    expect(rendered).not.toBe(workers);
+    expect(rendered.open).toBe(true);
+    expect(poolCards(rendered)).toHaveLength(2);
+  });
+
+  it("auto-opens the destination pool when moving a profile between pools", () => {
+    const routes = document.getElementById("routes");
+    const workers = findPool(routes, "Workers")!;
+    workers.open = true;
+    workers.dispatch("toggle");
+    const card = poolCards(workers)[0]!;
+    const roleSelect = fieldInput(card, "Role (move pool)");
+    roleSelect.value = "researcher";
+    roleSelect.dispatch("change");
+    expect(findPool(routes, "Researchers")!.open).toBe(true);
+    expect(findPool(routes, "Workers")!.open).toBe(true);
+  });
+
+  it("shows the readable name without an enabled badge, and the derived multi-agent chip", () => {
     const card = poolCards(findPool(document.getElementById("routes"), "Workers")!)[0]!;
     const title = card.querySelector(".route-title")!;
     expect(title.querySelector("h3")!.textContent).toBe("Economical worker");
-    const pills = title.children.filter((child) => child.classList.contains("pill"));
-    expect(pills).toHaveLength(1);
-    expect(pills[0]!.textContent).toBe("Enabled");
+    // An enabled profile carries no badge; only the disabled state is badged.
+    expect(title.children.filter((child) => child.classList.contains("pill"))).toHaveLength(0);
     // Derived chip is a non-button span next to the default/large chip buttons.
     const chipsRow = card.querySelector(".tag-chips")!;
     const chips = chipsRow.children.slice(1);
@@ -156,6 +201,7 @@ describe("operator pools UI", () => {
     checkbox.dispatch("change");
     const disabledCard = poolCards(findPool(document.getElementById("routes"), "Workers")!)[0]!;
     expect(disabledCard.classList.contains("is-disabled")).toBe(true);
+    expect(disabledCard.querySelector(".route-title")!.querySelector(".pill")!.textContent).toBe("Disabled");
     expect(fieldInput(disabledCard, "Profile name").value).toBe("Economical worker");
     // The disabled card stays editable and its draft keeps enabled: false.
     const nameInput = fieldInput(disabledCard, "Profile name");
@@ -246,7 +292,7 @@ describe("operator pools UI", () => {
     filter.value = "multi-agent";
     filter.dispatch("change");
     const pool = findPool(document.getElementById("routes"), "Workers")!;
-    pool.querySelector(".pool-header")!.children.find(child => child.textContent === "Add profile")!.dispatch("click");
+    pool.querySelector(".pool-toolbar")!.children.find(child => child.textContent === "Add profile")!.dispatch("click");
     expect(poolCards(findPool(document.getElementById("routes"), "Workers"))).toHaveLength(2);
     expect(document.getElementById("tag-filter").children[0]!.selected).toBe(true);
     expect(draftRoutes[1]).toMatchObject({ role: "worker", policy_profile_id: "policy-write" });
