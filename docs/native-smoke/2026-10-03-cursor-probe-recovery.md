@@ -31,6 +31,14 @@ not reproduce or explain the earlier fail-fast crash.
 
 Private control evidence: dogfood `2026-10-03T00-44-16-860Z-863ee7fc`.
 
+A second paid control used the accepted repaired runtime `ffe10e5`, the same
+requested model/effort and an explicit five-minute smoke deadline. Turn
+`turn-dba8fb3e305c5642630a93ec` succeeded with execution started and the same
+exact response, without source edits. Private evidence: dogfood
+`2026-10-03T01-07-22-145Z-6e819b06`; private session/daemon cleanup succeeded.
+The specific fail-fast retry branch is covered by offline fault injection;
+the real control did not reproduce that crash.
+
 Coordinator typecheck and 36 focused tests passed across metadata retry,
 operator UI and bridge protocol. The existing fake-native readiness suite
 passed 40 tests before the final UI/description changes. Tests cover both
