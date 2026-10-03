@@ -62,15 +62,27 @@ preserved configuration bytes, backed up the registry, and launched no inference
 Both project route lists were complete, and the real UI catalogue refresh
 returned 246 Cursor entries without changing the selected model.
 
-This whole-project portion is committed only in the isolated development
-worktree; it is not yet applied to the shared runtime or its project policies.
-Resume by integrating primary `master` (`7f82390`) into this development branch,
-checking the combined Cursor changes, and applying the prepared project policy
-candidate only during a guarded idle update. Recheck its source config hash
-first so intervening operator model edits are preserved. New policy/coverage/
-workspace IDs preserve existing session evidence; coordinators must select the
-new root-covered workspaces when starting sessions with these new grants.
+The operator subsequently authorized an idle shared upgrade of this portion.
+Primary `master` (`7f82390`) was merged into `e35ff5d` without conflicts,
+preserving the accepted Cursor probe repair. Combined verification passed:
+typecheck and 96 metadata-probe, bridge, UI, policy and snapshot tests.
+The saved configuration hash still matches the prepared candidate's source.
+Deployment uses a guarded idle stop, an online registry backup and the validated
+project policy candidate; private acceptance evidence records the running
+commit and applied configuration fingerprint.
 
-The operator requested a pause for restarting Codex after the current agents
-finished. There are no remaining native runs owned by this portion. Private
-runtime evidence and the configuration candidate remain outside Git.
+New policy/coverage/workspace IDs retain existing session evidence. For new
+sessions, coordinators must use these active root-covered workspaces, rather
+than earlier discovery entries retained for historical sessions:
+
+| Project | Worker/current workspace | Reviewer workspace | Worker policy |
+| --- | --- | --- | --- |
+| Agent Broker | `broker-current-project` | `broker-review-project` | `worker-project` |
+| Beehive-Monitoring | `workspace-2f01ffa7-project` | `workspace-ef44ca6a-project` | `worker-policy-c65cdc85-project` |
+| DMP protocol | `dmp-current-project` | `dmp-review-project` | `dmp-worker-project` |
+
+Route IDs, providers, models, efforts and native subagent choices stay unchanged.
+Re-run live `broker_status` and paginated `agents_list` before delegating, and
+start a fresh session for the new grants. Reviewer policies remain read-only.
+There are no remaining native runs owned by this portion. Private runtime
+evidence and configuration backups remain outside Git.

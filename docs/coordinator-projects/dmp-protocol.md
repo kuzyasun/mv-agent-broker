@@ -24,8 +24,11 @@ bindings with saved config. Reading JSON is not live proof. If MCP, project
 or routes are absent, report the exact blocker and stop before paid inference;
 never silently replace the broker with Codex subagents or another MCP server.
 
-Registered workspaces: `dmp-current` (this repository), `dmp-review` (sealed
-review slot). Policies: `dmp-worker` and read-only `dmp-reviewer`.
+Use the active configured workspaces: `dmp-current-project` (this repository),
+`dmp-review-project` (sealed review slot). Policies: `dmp-worker-project` and
+read-only `dmp-reviewer`. Discovery can also list earlier workspace IDs retained
+for historical sessions; select the IDs in the active saved configuration for
+new sessions. Start a fresh session to use the new project-wide worker grant.
 Discover and use these exact routes with their live configured models/efforts:
 
 | Worker routes | Reviewer routes |
@@ -39,7 +42,8 @@ preferences/counts/models are advisory. DMP permits at most two implementation
 workers; also respect shared broker/provider quotas and admission limits.
 
 For later authorized packages, give one worker a coherent bounded outcome,
-exact owned paths, inputs, baseline, checks and deadline. Use isolated worktrees
+relevant paths, inputs, baseline, checks and deadline. Task paths guide the
+worker; they do not impose a file permission allowlist. Use isolated worktrees
 for parallel writes. Spawn using project_id, route_id, instructions, workspace
 and unique idempotency key; omit raw provider/model/account/role/policy fields.
 Send with the initial/latest sealed snapshot as workspace precondition. Read
@@ -47,7 +51,7 @@ bounded event deltas with the last consumed numeric cursor and waits/backoff;
 retrieve result once after terminal status. SUCCEEDED proves execution, not
 quality. Do not replace UNKNOWN turns or replay lost responses with new keys.
 
-Use a separate reviewer in `dmp-review` with the author's original baseline
+Use a separate reviewer in `dmp-review-project` with the author's original baseline
 and sealed final target in review_binding. Inspect actual diffs and run relevant
 acceptance checks yourself. Follow DMP ownership boundaries for public
 interfaces, shared build files, profiles and normative documents.
@@ -66,7 +70,8 @@ Do not run paid agents, edit files or begin implementation yet.
 
 Saved DMP configuration leaves Beehive routes/accounts unchanged. Snapshots
 exclude root build cache and Git metadata, including the Noise submodule's
-`.git` indirection. New top-level source paths need adding to coverage/scope.
-The project is usable only after the daemon applies registration and live
-discovery returns DMP. Current runtime requires an idle guarded restart;
-reconnecting the bridge alone is insufficient.
+`.git` indirection. Source coverage includes the whole project root and future
+files; configured output/cache exclusions remain outside snapshots. Ordinary
+workers can edit project source, including related tests and documentation.
+The project is usable only after the daemon applies the saved configuration and
+live discovery confirms its route and workspace bindings.
