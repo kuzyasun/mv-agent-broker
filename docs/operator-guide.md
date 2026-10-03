@@ -42,13 +42,14 @@ The snippet uses absolute node, script, and config paths:
 npm run broker -- validate --config docs/examples/operator.mock.json
 ```
 
-The optional `limits` block controls concurrency and the default turn deadline:
+The optional `limits` block controls concurrency, turn deadline and review delivery:
 
 ```json
 "limits": {
   "globalUnfinishedTurns": 6,
   "quotaScopeUnfinishedTurns": 2,
-  "hardTurnDeadlineMs": 3600000
+  "hardTurnDeadlineMs": 3600000,
+  "maxReviewDiffBytes": 33554432
 }
 ```
 
@@ -82,6 +83,42 @@ On a failed background refresh, open error details stay mounted and are labeled
 as last observed data. Cursor, Antigravity and ZCode output timers have a 65-second
 reserve beyond the deadline so the daemon's maximum 60-second scan interval can
 cancel first. This reserve does not extend the accepted turn deadline.
+
+**Complete review diff budget (MiB)** defaults to 32 MiB. The saved
+`limits.maxReviewDiffBytes` accepts positive safe integer bytes up to 256 MiB.
+Save and restart the idle daemon to apply it. This is the complete rendered
+baseline-to-target diff budget, separate from snapshot size and each provider's
+full input envelope limit. Over-budget delivery fails before inference; the
+broker never truncates the required diff or changes the review binding.
+Large inputs use the existing read-only file transport. Delivery establishes
+the bytes supplied, not that a reviewer read or accepted every byte.
+
+Dates throughout the UI use the broker host's regional locale, local timezone
+and hour cycle, independent of the browser's interface language. With the
+observed Ukrainian Windows regional settings this is `02.10.2026, 18:40:18`.
+Display preferences are read-only metadata, never saved into operator config.
+
+### Shared quota pauses
+
+A definitive `QUOTA_EXHAUSTED` after native execution starts creates a persistent
+pause for that account's quota scope across projects. New sends and the final
+dispatch gate refuse with `execution_started: false`, scope, `blocked_until`,
+remaining `retry_after_ms` and source. Other scopes keep working; existing paid
+jobs are not cancelled. Successfully recorded operations still replay by their
+original keys. Expiry admits an explicit new task; it never retries a failed turn.
+
+A validated Antigravity diagnostic suffix such as `Resets in 54m59s.` supplies
+the pause duration (positive, at most 24 hours). Without a usable suffix the
+broker uses a **15-minute conservative policy**, explicitly labeled as policy
+rather than a confirmed vendor reset. Timeouts, silence, cancellation and unknown
+execution do not establish exhausted quota and never backfill a pause.
+
+Runtime overview shows **Quota pauses** and their local end times. If you know
+quota has recovered, **Clear quota pause** removes only that scope's active
+pause through an authenticated, operator-only audited action. It runs no
+inference, cancels no jobs, and changes no saved settings. A new provider error
+can establish a new pause. This is observed failure handling, not a subscription
+or remaining-token meter.
 
 ## Local settings UI
 

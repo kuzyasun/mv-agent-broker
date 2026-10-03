@@ -31,6 +31,7 @@ describe("operator concurrency limits", () => {
       globalUnfinishedTurns: 6,
       quotaScopeUnfinishedTurns: 2,
       hardTurnDeadlineMs: 3_600_000,
+      maxReviewDiffBytes: 33_554_432,
     });
     expect(daemonEnvFromProcess({}).limits).toBeUndefined();
     expect(daemonEnvFromProcess({ AB_TURN_DEADLINE_MS: "7200000" }).limits?.hardTurnDeadlineMs).toBe(7_200_000);

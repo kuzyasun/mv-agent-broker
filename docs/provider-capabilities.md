@@ -151,8 +151,13 @@ that development scenario, not a full native worker security profile.
 Quota-error classification is **limited / documented**: an explicit `FAILED`
 `result.error` beginning `Individual quota reached.` becomes `QUOTA_EXHAUSTED`.
 The original native incident is retained; the new mapping is tested offline,
-without a new live quota replay or inferred reset telemetry. Other quota/error
-formats remain unclassified. [Checkpoint](native-smoke/2026-10-03-antigravity-quota.md).
+without a new live quota replay. The pilot operations follow-up learns a shared
+scope pause from executed quota failures: a strictly validated vendor reset
+suffix or a labeled 15-minute policy. Admission, dispatch recheck, persistence,
+expiry and operator clearing are tested offline. Other quota/error formats and
+live quota telemetry remain unverified.
+[Classification checkpoint](native-smoke/2026-10-03-antigravity-quota.md),
+[operations checkpoint](native-smoke/2026-10-03-pilot-operations.md).
 
 ## Platforms
 

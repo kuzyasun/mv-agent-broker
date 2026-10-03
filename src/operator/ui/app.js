@@ -12,7 +12,38 @@
   let projectFilter = "";
   let dirty = false;
   const advancedDirty = new Set();
-  const defaultLimits = { globalUnfinishedTurns: 3, quotaScopeUnfinishedTurns: 1, hardTurnDeadlineMs: 3_600_000 };
+  const defaultLimits = { globalUnfinishedTurns: 3, quotaScopeUnfinishedTurns: 1, hardTurnDeadlineMs: 3_600_000, maxReviewDiffBytes: 33_554_432 };
+
+  // One shared formatter for EVERY date this page shows. It uses the BROKER
+  // HOST's regional locale and local timezone (sent read-only by the server in
+  // the bootstrap/config API), independent of the browser UI language.
+  let displayFormatter = null;
+  function applyDisplayPreferences(prefs) {
+    const p = prefs && typeof prefs === "object" ? prefs : {};
+    try {
+      displayFormatter = new Intl.DateTimeFormat(p.locale || undefined, {
+        timeZone: p.timeZone || undefined,
+        ...(p.hourCycle ? { hourCycle: p.hourCycle } : {}),
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+    } catch {
+      displayFormatter = null;
+    }
+  }
+  applyDisplayPreferences(bootstrap.display);
+  /** Local "dd.MM.yyyy, HH:mm:ss"-style text per host preferences; null stays unknown. */
+  const displayTimestamp = (value) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return null;
+    return displayFormatter ? displayFormatter.format(date) : date.toLocaleString();
+  };
+  const minutesLabel = (ms) => `${Math.max(0, Math.floor(ms / 60_000))} min`;
   const $ = (id) => document.getElementById(id);
   const make = (tag, text) => {
     const node = document.createElement(tag);
@@ -139,9 +170,7 @@
     const observation = catalogue.observation;
     if (!observation) return "No model catalogue has been refreshed yet.";
     const rawCount = Array.isArray(observation.models) ? observation.models.length : 0;
-    const refreshed = Number.isFinite(observation.observed_at)
-      ? new Date(observation.observed_at).toLocaleString()
-      : "unknown";
+    const refreshed = displayTimestamp(observation.observed_at) ?? "unknown";
     return `Observed raw entries: ${rawCount} · selectable models: ${catalogue.options.length} · last refresh: ${refreshed} · source: ${observation.source}`;
   };
   const catalogueMessage = (provider) => {
@@ -174,10 +203,7 @@
     node.textContent = message;
     node.className = `status ${kind}`;
   };
-  const liveTimestamp = (value) => {
-    const timestamp = Number(value);
-    return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : "Unknown time";
-  };
+  const liveTimestamp = (value) => displayTimestamp(value) ?? "Unknown time";
   const liveRuntimeItem = (label, value) => {
     const item = make("div");
     item.className = "live-runtime-item";
@@ -333,6 +359,54 @@
     });
   };
   let errorRowsKey;
+  function renderQuotaPauses(rows) {
+    const container = $("quota-pauses");
+    const count = $("quota-pauses-count");
+    container.replaceChildren();
+    count.textContent = "";
+    if (!Array.isArray(rows)) {
+      container.append(make("p", "Quota pause data unavailable."));
+      return;
+    }
+    if (!rows.length) {
+      container.append(make("p", "No shared quota pauses."));
+      return;
+    }
+    count.textContent = `${rows.length} active.`;
+    const now = Date.now();
+    for (const pause of rows) {
+      const row = make("div");
+      row.className = "live-row";
+      row.setAttribute("role", "listitem");
+      const until = typeof pause.until_ms === "number" ? displayTimestamp(pause.until_ms) : null;
+      const remaining = typeof pause.until_ms === "number" ? ` · ${minutesLabel(pause.until_ms - now)} remaining` : "";
+      row.append(
+        make("strong", `Quota scope ${pause.quota_scope_id || "unknown"} · ${pause.provider || "unknown provider"}`),
+        make("span", `New work in this scope is blocked until ${until ?? "an unknown time"}${remaining}`),
+        make("span", pause.source === "vendor_reset_suffix"
+          ? "Learned from the vendor's reported reset time."
+          : "Learned without a vendor reset time; a 15-minute conservative pause applies."),
+      );
+      const clear = make("button", "Clear quota pause");
+      clear.className = "button secondary";
+      clear.type = "button";
+      clear.addEventListener("click", () => {
+        void withButtonBusy(clear, async () => {
+          try {
+            const result = await api("/api/quota-pause/clear", { method: "POST", body: JSON.stringify({ quota_scope_id: pause.quota_scope_id }) });
+            status(result.cleared
+              ? `Quota pause cleared for scope ${pause.quota_scope_id}. New work is admitted immediately.`
+              : `Quota pause for scope ${pause.quota_scope_id} had already expired; nothing was cleared.`, "success");
+            await refreshLiveStatus();
+          } catch (error) {
+            status(`Clear quota pause failed: ${error.message}`, "error");
+          }
+        });
+      });
+      row.append(clear);
+      container.append(row);
+    }
+  }
   const renderLiveStatus = (payload, background = false) => {
     livePayload = payload;
     renderSettingsState(payload);
@@ -362,6 +436,7 @@
     }
     $("active-count").textContent = liveCount(payload || {}, "active_turn_count", "active_turns", "active_turns_truncated");
     $("error-count").textContent = liveCount(payload || {}, "error_turn_count", "error_turns", "error_turns_truncated");
+    renderQuotaPauses(live ? payload.quota_pauses : null);
     renderLiveRows($("active-jobs"), live ? payload.active_turns : null);
     const nextErrorKey = JSON.stringify(live ? payload.error_turns : null);
     if (background && !live && errorRowsKey !== undefined && errorRowsKey !== "null") {
@@ -481,7 +556,7 @@
             const body = await api("/api/models/refresh", { method: "POST", body: JSON.stringify({ provider: route.provider }) });
             const observed = body.observation || { models: [], source: "unknown", observed_at: NaN, detail: null };
             catalogues.set(route.provider, { options: Array.isArray(body.options) ? body.options : [], observation: observed });
-            status(`${observed.models.length} ${route.provider} entries · ${observed.source} · ${Number.isFinite(observed.observed_at) ? new Date(observed.observed_at).toLocaleString() : "unknown"}. ${observed.detail || "Catalogue only; authentication and quota are unknown."}`, observed.models.length ? "success" : "error");
+            status(`${observed.models.length} ${route.provider} entries · ${observed.source} · ${displayTimestamp(observed.observed_at) ?? "unknown"}. ${observed.detail || "Catalogue only; authentication and quota are unknown."}`, observed.models.length ? "success" : "error");
             renderRoutes();
           } catch (error) {
             status(error.message, "error");
@@ -691,6 +766,7 @@
     $("global-unfinished-turns").value = String(limits.globalUnfinishedTurns ?? defaultLimits.globalUnfinishedTurns);
     $("quota-scope-unfinished-turns").value = String(limits.quotaScopeUnfinishedTurns ?? defaultLimits.quotaScopeUnfinishedTurns);
     $("turn-deadline-minutes").value = String((limits.hardTurnDeadlineMs ?? defaultLimits.hardTurnDeadlineMs) / 60_000);
+    $("review-diff-mib").value = String((limits.maxReviewDiffBytes ?? defaultLimits.maxReviewDiffBytes) / 1_048_576);
   }
 
   function render() {
@@ -1120,6 +1196,7 @@
     try {
       const body = await api("/api/config");
       bootstrap.snippets = body.snippets;
+      if (body.display) applyDisplayPreferences(body.display);
       state = body.config;
       revision = body.revision;
       dirty = false;
@@ -1198,6 +1275,10 @@
   });
   $("turn-deadline-minutes").addEventListener("input", () => {
     state.limits = { ...(state.limits || {}), hardTurnDeadlineMs: Number($("turn-deadline-minutes").value) * 60_000 };
+    markDirty();
+  });
+  $("review-diff-mib").addEventListener("input", () => {
+    state.limits = { ...(state.limits || {}), maxReviewDiffBytes: Number($("review-diff-mib").value) * 1_048_576 };
     markDirty();
   });
   for (const id of ["accounts-json", "pins-json", "coverage-json", "state-dir"]) {

@@ -104,6 +104,7 @@ describe("operator configuration", () => {
       globalUnfinishedTurns: 3,
       quotaScopeUnfinishedTurns: 1,
       hardTurnDeadlineMs: 3_600_000,
+      maxReviewDiffBytes: 33_554_432,
     });
 
     for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
@@ -120,6 +121,25 @@ describe("operator configuration", () => {
       ...validConfig(),
       limits: { globalUnfinishedTurns: 6, unexpected: 2 },
     })).toThrow(/unknown limits key/);
+  });
+
+  it("validates the configurable review diff budget within positive bounded bytes", () => {
+    const configured = loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      limits: { maxReviewDiffBytes: 9 * 1024 * 1024 + 7 },
+    }));
+    expect(configured.limits?.maxReviewDiffBytes).toBe(9 * 1024 * 1024 + 7);
+    expect(operatorConfigFingerprint(configured)).not.toBe(operatorConfigFingerprint(loadOperatorConfig(JSON.stringify(validConfig()))));
+
+    const maximum = loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      limits: { maxReviewDiffBytes: 256 * 1024 * 1024 },
+    }));
+    expect(maximum.limits?.maxReviewDiffBytes).toBe(256 * 1024 * 1024);
+
+    for (const value of [0, -1, 1.5, NaN, Infinity, 256 * 1024 * 1024 + 1]) {
+      expect(() => validateOperatorConfig({ ...validConfig(), limits: { maxReviewDiffBytes: value } })).toThrow();
+    }
   });
 
   it("validates the configurable turn deadline and includes it in applied settings", () => {

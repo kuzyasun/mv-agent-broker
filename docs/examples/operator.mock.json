@@ -5,7 +5,8 @@
   "limits": {
     "globalUnfinishedTurns": 6,
     "quotaScopeUnfinishedTurns": 2,
-    "hardTurnDeadlineMs": 3600000
+    "hardTurnDeadlineMs": 3600000,
+    "maxReviewDiffBytes": 33554432
   },
   "projects": [
     { "project_id": "demo", "display_name": "Clean-state mock demo" }

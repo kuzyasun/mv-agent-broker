@@ -289,6 +289,20 @@ CREATE TABLE IF NOT EXISTS turn_outcome_evidence (
 );
 `;
 
+const MIGRATION_V5_SQL = `
+-- Shared quota-scope cooldown learned from definitive provider quota
+-- exhaustion (one row per scope; an active pause blocks new dispatch).
+CREATE TABLE IF NOT EXISTS quota_scope_cooldowns (
+  quota_scope_id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  until_ms INTEGER NOT NULL,
+  retry_after_ms INTEGER NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('vendor_reset_suffix','conservative_policy')),
+  recorded_at INTEGER NOT NULL,
+  recorded_by_turn_id TEXT NOT NULL
+);
+`;
+
 export type Migration = { version: number; sql: string };
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -296,6 +310,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 2, sql: MIGRATION_V2_SQL },
   { version: 3, sql: MIGRATION_V3_SQL },
   { version: 4, sql: MIGRATION_V4_SQL },
+  { version: 5, sql: MIGRATION_V5_SQL },
 ];
 
 export class RegistryDb {

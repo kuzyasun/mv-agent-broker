@@ -11,8 +11,11 @@ export interface ManifestFileDiff {
   error?: "missing_blob" | "invalid_utf8" | "binary";
 }
 
-/** Documented finite complete-diff budget: default 8 MiB. */
-export const DEFAULT_MAX_DIFF_BYTES = 8 * 1024 * 1024;
+/** Documented finite complete-diff budget: default 32 MiB, configurable via limits.maxReviewDiffBytes. */
+export const DEFAULT_MAX_DIFF_BYTES = 32 * 1024 * 1024;
+
+/** Hard upper bound for the configured complete-diff budget. */
+export const MAX_REVIEW_DIFF_BYTES = 256 * 1024 * 1024;
 
 /** Safely decode UTF-8 bytes and check for binary / invalid UTF-8. */
 function safeDecodeBlob(bytes: Uint8Array | null): {

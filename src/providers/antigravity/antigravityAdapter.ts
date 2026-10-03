@@ -26,6 +26,7 @@ import {
   type ProviderReadinessObservation,
 } from "../common/readiness.ts";
 import { BrokerError } from "../../shared/errors.ts";
+import { parseVendorResetMs } from "../../core/quotaCooldown.ts";
 import {
   parseAntigravityStreamLine,
   summarizeAntigravityTurn,
@@ -365,8 +366,14 @@ export class AntigravityAdapter implements ProviderAdapter {
 
         if (summary.status === "FAILED") {
           if (summary.error !== null && ANTIGRAVITY_INDIVIDUAL_QUOTA_PREFIX.test(summary.error)) {
-            throw new BrokerError("QUOTA_EXHAUSTED", boundedSanitizedDetail(summary.error), {
+            const detail = boundedSanitizedDetail(summary.error);
+            // Optional vendor reset suffix ("Resets in 54m59s.") is validated
+            // and surfaced as bounded retry_after_ms metadata; absence keeps
+            // the cooldown policy decision with the broker, not the vendor.
+            const vendorResetMs = parseVendorResetMs(detail);
+            throw new BrokerError("QUOTA_EXHAUSTED", detail, {
               executionStarted: true,
+              ...(vendorResetMs !== null ? { details: { retry_after_ms: vendorResetMs } } : {}),
             });
           }
           const msg = summary.error || summary.response || "antigravity execution failed";

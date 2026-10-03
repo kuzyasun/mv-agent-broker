@@ -12,6 +12,11 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    exhausted/failed routes; record an observed failure before explicitly
    choosing an allowed alternative. Do not silently escalate models, effort,
    or the number of agents.
+   Account entries may carry an active `quota_pause` with scope, end time and
+   source. Respect the shared pause across projects. A rejected send returns
+   remaining wait metadata; after expiry explicitly submit the task, reusing
+   the rejected operation's unchanged arguments/key if no turn was created.
+   Only choose alternative routes already authorized by the operator.
    The ready project example is
    [DMP protocol](coordinator-projects/dmp-protocol.md).
 2. Give one worker a complete bounded outcome, owned paths, required context,
@@ -66,3 +71,22 @@ running an older version need one client reload to load the new reconnect code.
 See [operator setup](operator-guide.md), [native child evidence](native-subagents.md),
 and [the current pilot issue log](pilot-issues.md). These instructions can be copied
 into a coordinator project's local guidance without changing the broker API.
+
+## Resuming a checkpoint
+
+Record session and turn IDs, original spawn/send idempotency keys, exact
+baseline/target snapshots, findings artifacts and selected route fields.
+After a pause, check live readiness and paginate discovery. A changed config
+revision alone does not require replacement: compare the actual route and
+bound session. Repeat a lost operation only with its original key and unchanged
+arguments. `replayed_request: false` means no successful operation for that key
+was retained; it does not prove there are no historical sessions or reviews.
+Resolve known IDs and inspect the actual review binding instead of relying on
+a stale pause note. A prior review applies to its exact target.
+
+Do not silently change a baseline to bypass an input limit. A findings-closure
+review between an already reviewed target and a new target is a deliberate
+follow-up with those findings as its checklist. A full checkpoint review keeps
+its intended baseline and target. The complete diff budget is now 32 MiB by
+default and can be changed in the operator UI; provider envelope limits still
+apply. Complete byte delivery does not establish review acceptance.

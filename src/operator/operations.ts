@@ -282,6 +282,32 @@ function projectStatusRows(value: unknown, limit: number, includeErrorCode: bool
   return projected;
 }
 
+function projectQuotaPauseRows(value: unknown): Array<Record<string, unknown>> | null {
+  if (!Array.isArray(value)) return null;
+  const projected: Array<Record<string, unknown>> = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+    const item = row as Record<string, unknown>;
+    if (
+      typeof item.quota_scope_id !== "string" ||
+      typeof item.provider !== "string" ||
+      typeof item.until_ms !== "number" ||
+      typeof item.retry_after_ms !== "number" ||
+      typeof item.source !== "string" ||
+      typeof item.recorded_at !== "number"
+    ) return null;
+    projected.push({
+      quota_scope_id: item.quota_scope_id,
+      provider: item.provider,
+      until_ms: item.until_ms,
+      retry_after_ms: item.retry_after_ms,
+      source: item.source,
+      recorded_at: item.recorded_at,
+    });
+  }
+  return projected;
+}
+
 async function waitForReady(config: OperatorConfig): Promise<Record<string, unknown>> {
   const deadline = Date.now() + READY_TIMEOUT_MS;
   let lastError: unknown;
@@ -381,6 +407,7 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
         error_turns: typeof status.error_turn_count === "number" ? projectStatusRows(status.error_turns, 10, true) : null,
         error_turns_truncated: typeof status.error_turns_truncated === "boolean" ? status.error_turns_truncated : null,
         pending_intents: Array.isArray(status.pending_intents) ? status.pending_intents : null,
+        quota_pauses: projectQuotaPauseRows(status.quota_pauses),
         state_dir: config.state_dir,
       };
     }
@@ -571,6 +598,14 @@ export async function turnErrorOperator(config: OperatorConfig, turnId: string):
   const value = await requestDaemon(config, "operator/turn-error", { turn_id: turnId });
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Turn error detail is unavailable.");
+  }
+  return value as Record<string, unknown>;
+}
+
+export async function clearQuotaPauseOperator(config: OperatorConfig, quotaScopeId: string): Promise<Record<string, unknown>> {
+  const value = await requestDaemon(config, "operator/clear-quota-pause", { quota_scope_id: quotaScopeId });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Quota pause clear is unavailable.");
   }
   return value as Record<string, unknown>;
 }

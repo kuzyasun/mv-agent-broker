@@ -1,6 +1,8 @@
 import { BrokerError } from "../shared/errors.ts";
 import { boundedSanitizedDetail } from "../providers/common/readiness.ts";
 import type { RegistryDb } from "../storage/db.ts";
+import { appendEvent } from "../storage/repo.ts";
+import { clearQuotaCooldown, listActiveQuotaCooldowns } from "../core/quotaCooldown.ts";
 
 const ACTIVE_TURN_STATES = "'ACCEPTED','STARTING','RUNNING','CANCELLING','FINALIZING','UNKNOWN'";
 const ACTIVE_TURN_LIMIT = 30;
@@ -374,4 +376,51 @@ export function operatorTurnErrorResult(db: RegistryDb, params: Record<string, u
   const detail = projectOperatorTurnError(db, turnId);
   if (!detail) throw new BrokerError("INVALID_REQUEST", "Turn error detail is unavailable.");
   return { ...detail };
+}
+
+// ─── shared quota-scope pauses (operator status + clear action) ─────────────
+
+export interface OperatorQuotaPause {
+  quota_scope_id: string;
+  provider: string;
+  until_ms: number;
+  retry_after_ms: number;
+  source: string;
+  recorded_at: number;
+}
+
+/** Safe scope/until metadata for operator status — never provider output. */
+export function projectOperatorQuotaPauses(db: RegistryDb, now: number): OperatorQuotaPause[] {
+  return listActiveQuotaCooldowns(db, now).map(row => ({
+    quota_scope_id: row.quota_scope_id,
+    provider: row.provider,
+    until_ms: row.until_ms,
+    retry_after_ms: Math.max(0, row.until_ms - now),
+    source: row.source,
+    recorded_at: row.recorded_at,
+  }));
+}
+
+/**
+ * Operator-only clear of one scope's learned quota pause. No inference, no
+ * cancellation, no config writes; the action is audited as a registry event.
+ */
+export function clearQuotaPauseResult(db: RegistryDb, params: Record<string, unknown>): Record<string, unknown> {
+  const quotaScopeId = params.quota_scope_id;
+  if (typeof quotaScopeId !== "string" || quotaScopeId.trim().length === 0 || quotaScopeId.length > 256) {
+    throw new BrokerError("INVALID_REQUEST", "quota_scope_id is required");
+  }
+  const now = Date.now();
+  const cleared = db.tx(() => {
+    const removed = clearQuotaCooldown(db, quotaScopeId, now);
+    appendEvent(db, {
+      turn_id: null,
+      session_id: null,
+      type: "quota_pause_cleared",
+      payload: { quota_scope_id: quotaScopeId, cleared: removed },
+      created_at: now,
+    });
+    return removed;
+  });
+  return { cleared, quota_scope_id: quotaScopeId };
 }

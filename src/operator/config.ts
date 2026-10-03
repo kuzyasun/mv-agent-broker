@@ -28,6 +28,7 @@ import {
   type Limits,
 } from "../shared/api-types.ts";
 import { coverageContractHash, validateCoverageConfig, type CoverageConfig } from "../workspaces/coverage.ts";
+import { MAX_REVIEW_DIFF_BYTES } from "../snapshots/diff.ts";
 
 export interface OperatorProject {
   project_id: string;
@@ -77,7 +78,7 @@ export type NativeSubagents =
   | { mode: "off" | "prefer"; max_agents: number }
   | { mode: "auto" };
 
-export type OperatorLimits = Pick<Limits, "globalUnfinishedTurns" | "quotaScopeUnfinishedTurns" | "hardTurnDeadlineMs">;
+export type OperatorLimits = Pick<Limits, "globalUnfinishedTurns" | "quotaScopeUnfinishedTurns" | "hardTurnDeadlineMs" | "maxReviewDiffBytes">;
 
 export interface OperatorRoute {
   route_id: string;
@@ -134,7 +135,7 @@ export function validateOperatorLimits(value: unknown): OperatorLimits {
   }
   const raw = (value ?? {}) as Record<string, unknown>;
   for (const key of Object.keys(raw)) {
-    if (key !== "globalUnfinishedTurns" && key !== "quotaScopeUnfinishedTurns" && key !== "hardTurnDeadlineMs") {
+    if (key !== "globalUnfinishedTurns" && key !== "quotaScopeUnfinishedTurns" && key !== "hardTurnDeadlineMs" && key !== "maxReviewDiffBytes") {
       fail(`unknown limits key '${key}'`);
     }
   }
@@ -142,6 +143,12 @@ export function validateOperatorLimits(value: unknown): OperatorLimits {
     ? DEFAULT_LIMITS.hardTurnDeadlineMs
     : positiveSafeInteger(raw.hardTurnDeadlineMs, "limits.hardTurnDeadlineMs");
   if (deadline < 1_000 || deadline > 86_400_000) fail("limits.hardTurnDeadlineMs must be between 1000 and 86400000");
+  const maxReviewDiffBytes = raw.maxReviewDiffBytes === undefined
+    ? DEFAULT_LIMITS.maxReviewDiffBytes
+    : positiveSafeInteger(raw.maxReviewDiffBytes, "limits.maxReviewDiffBytes");
+  if (maxReviewDiffBytes > MAX_REVIEW_DIFF_BYTES) {
+    fail(`limits.maxReviewDiffBytes must not exceed ${MAX_REVIEW_DIFF_BYTES} bytes (256 MiB)`);
+  }
   return {
     globalUnfinishedTurns: raw.globalUnfinishedTurns === undefined
       ? DEFAULT_LIMITS.globalUnfinishedTurns
@@ -150,6 +157,7 @@ export function validateOperatorLimits(value: unknown): OperatorLimits {
       ? DEFAULT_LIMITS.quotaScopeUnfinishedTurns
       : positiveSafeInteger(raw.quotaScopeUnfinishedTurns, "limits.quotaScopeUnfinishedTurns"),
     hardTurnDeadlineMs: deadline,
+    maxReviewDiffBytes,
   };
 }
 

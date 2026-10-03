@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DaemonRpcError } from "../bridge/rpcClient.ts";
 import { validateOperatorConfig, type OperatorConfig } from "./config.ts";
-import { readRuntimeRecord, restartOperator, statusOperator, turnErrorOperator } from "./operations.ts";
+import { clearQuotaPauseOperator, readRuntimeRecord, restartOperator, statusOperator, turnErrorOperator } from "./operations.ts";
 import { parseAntigravityModelCatalog } from "../providers/antigravity/antigravityAdapter.ts";
 import { parseCursorModelCatalog, resolveCursorModel } from "../providers/cursor/cursorAdapter.ts";
 import { boundedSanitizedDetail, resolveBinaryPath, runMetadataProbe } from "../providers/common/readiness.ts";
@@ -254,6 +254,28 @@ function configuredModels(config: OperatorConfig, provider: string): string[] {
   return [...new Set(config.routes.filter(route => route.provider === provider).map(route => route.model))];
 }
 
+export interface HostDisplayPreferences {
+  locale: string;
+  timeZone: string;
+  hourCycle: string | null;
+}
+
+/**
+ * Read-only display preferences from the BROKER HOST's regional settings
+ * (Node Intl defaults), never from the browser: the operator UI formats every
+ * date with the host locale and local timezone regardless of the browser UI
+ * language. Computed per request; never read from or written to the saved
+ * configuration.
+ */
+export function hostDisplayPreferences(): HostDisplayPreferences {
+  const resolved = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).resolvedOptions();
+  return {
+    locale: resolved.locale || "en-US",
+    timeZone: resolved.timeZone || "UTC",
+    hourCycle: resolved.hourCycle ?? null,
+  };
+}
+
 function observation(provider: string, models: string[], source: CatalogObservation["source"], detail: string | null = null): CatalogObservation {
   return { provider, models: [...new Set(models)].slice(0, 4096), observed_at: Date.now(), source, detail };
 }
@@ -381,6 +403,7 @@ function bootstrapHtml(token: string, port: number, configPath: string, scriptPa
     port,
     configPath: path.resolve(configPath),
     snippets: buildConnectionSnippets(scriptPath, config),
+    display: hostDisplayPreferences(),
   }).replace(/</g, "\\u003c");
   const html = readFileSync(path.join(UI_DIR, "index.html"), "utf8");
   return html.replace("/*OPERATOR_BOOTSTRAP_JSON*/", () => bootstrap);
@@ -517,7 +540,7 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
         try {
           const current = readRawConfig(configPath);
           const currentConfig = validateRawConfig(configPath, current.value);
-          sendJson(response, 200, { config: current.value, revision: sha256(current.bytes), snippets: buildConnectionSnippets(scriptPath, currentConfig) });
+          sendJson(response, 200, { config: current.value, revision: sha256(current.bytes), snippets: buildConnectionSnippets(scriptPath, currentConfig), display: hostDisplayPreferences() });
         } catch (error) {
           sendJson(response, 409, { error: safeError(error) });
         }
@@ -619,6 +642,25 @@ export async function startOperatorUi(options: OperatorUiOptions): Promise<Opera
         } catch (error) {
           const mapped = operatorHttpError(error);
           sendJson(response, mapped.status, mapped.body);
+        }
+        return;
+      }
+      if (request.method === "POST" && pathName === "/api/quota-pause/clear") {
+        try {
+          const body = parseJsonBody(await readBody(request));
+          if (!isRecord(body) || typeof body.quota_scope_id !== "string" || body.quota_scope_id.trim().length === 0) {
+            throw new OperatorUiHttpError(400, { error: "request must contain quota_scope_id" });
+          }
+          const current = readRawConfig(configPath);
+          const currentConfig = validateRawConfig(configPath, current.value);
+          sendJson(response, 200, await clearQuotaPauseOperator(currentConfig, body.quota_scope_id));
+        } catch (error) {
+          if (error instanceof OperatorUiHttpError || error instanceof DaemonRpcError) {
+            const mapped = operatorHttpError(error);
+            sendJson(response, mapped.status, mapped.body);
+          } else {
+            sendJson(response, error instanceof Error && /exceeds 1 MiB/.test(error.message) ? 413 : 400, { error: safeError(error) });
+          }
         }
         return;
       }

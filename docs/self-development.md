@@ -318,3 +318,11 @@ during background refresh failures. The
 [Antigravity quota checkpoint](native-smoke/2026-10-03-antigravity-quota.md)
 records the narrow explicit-error classification and its offline regressions;
 other vendor failure formats and live quota telemetry remain unverified.
+
+The [pilot operations checkpoint](native-smoke/2026-10-03-pilot-operations.md)
+tracks regional UI dates, configurable complete review delivery and persisted
+quota pauses. The original native author remains a retained scope failure;
+acceptance uses an explicit current-source capture and separate review.
+Keep the shared daemon on its accepted runtime until an idle update is agreed.
+The next practical token-economy improvement is compact unchanged review
+context; do not infer a need for broad edge-case certification from this pilot.

@@ -9,6 +9,46 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-03: Beehive full review diff exceeded the delivery budget
+
+The coordinator reported a complete 9,649,425-byte review diff rejected against
+the former 8,388,608-byte budget before inference. It then deliberately used
+the previous reviewed target as the follow-up baseline to check findings
+closure. That is a different review scope, not a full checkpoint review.
+
+The operations follow-up sets a configurable 32 MiB default (maximum 256 MiB),
+passes it to actual complete-diff rendering, and tests delivery of the full
+head/tail through read-only transport without replacing the original binding.
+The coordinator guide now explains checkpoint IDs/keys, route-revision drift
+and deliberate follow-up review scope. Compact unchanged diff context remains
+a separate token-economy improvement. See the
+[checkpoint](native-smoke/2026-10-03-pilot-operations.md).
+
+## 2026-10-03: Gemini timeout is not confirmed quota exhaustion
+
+The supplied Gemini turn `turn-5dda87e9d5291ff38aaa0042` used a 900000 ms
+deadline and ended `TIMED_OUT`, execution started, termination reason `deadline`.
+Its retained terminal detail reported the root waiting for two background
+tasks. No explicit quota error was present. The historical timeout stays a
+deadline failure; the one-hour default applies to future turns.
+
+Confirmed executed quota failures now create a persisted shared scope pause,
+shown in operator status and clearable through the authenticated operator UI.
+A validated vendor duration is used when supplied; otherwise a labeled
+15-minute conservative policy applies. This does not retroactively block the
+recovered Gemini account on the basis of that timeout. Verification is offline
+and mock UI evidence; no deliberate live quota exhaustion was run.
+
+## 2026-10-03: Related test outside native author's declared paths
+
+The isolated GLM-5.3-Flash/max author completed but its final capture failed
+`SCOPE_VIOLATION`: `tests/integration/operator-operations.test.ts` was omitted
+from the initial write scope. Its only change updates the expected default
+limits for the new review budget. The coordinator retained the failed turn,
+inspected that related expectation and captured the integrated source with
+mock for a separate Cursor review; no replacement paid author was launched.
+This was a task-scope omission, not a broker enforcement defect.
+
 ## 2026-10-02: Stale failed worktree quarantine required explicit offline release
 
 The observed Beehive worktree provisioning failure was durably recorded as

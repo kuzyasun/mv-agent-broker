@@ -260,13 +260,18 @@ enforce reviewer read-only behavior.
 
 An explicit `FAILED` result whose `error` starts with the observed diagnostic
 `Individual quota reached.` maps to `QUOTA_EXHAUSTED`. The bounded, sanitized
-diagnostic remains available, including any vendor-provided reset wording;
-the broker does not turn that wording into a reset timer or subscription state.
+diagnostic remains available. A strict final `Resets in 54m59s.`-style suffix
+provides bounded retry duration (positive and at most 24 hours). An executed
+`QUOTA_EXHAUSTED` establishes a persisted shared quota-scope pause; without a
+valid duration the broker applies a labeled 15-minute conservative policy.
+This is not a subscription-state query. The same shared pause also applies to
+ZCode's already classified explicit quota errors.
 Successful responses, response-only failures, stderr prose and other errors
 are not quota evidence. No automatic retry or provider/account fallback occurs.
 This classification is tested with fake native processes; a new live quota
 failure has not been exercised. See the
-[quota checkpoint](native-smoke/2026-10-03-antigravity-quota.md).
+[quota checkpoint](native-smoke/2026-10-03-antigravity-quota.md) and
+[pilot operations checkpoint](native-smoke/2026-10-03-pilot-operations.md).
 
 The parser handles step updates/results and captures observed conversation
 IDs without inventing them. A missing ID stays empty; resume is only possible

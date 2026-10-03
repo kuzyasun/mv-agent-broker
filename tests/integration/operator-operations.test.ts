@@ -74,6 +74,7 @@ describe("operator runtime RPC", () => {
           quotaScopeUnfinishedTurns: 2,
           openSessionsPerProject: 20,
           hardTurnDeadlineMs: 7_200_000,
+          maxReviewDiffBytes: 33_554_432,
         });
       } finally { client.close(); }
       expect(() => cli("start")).toThrow(/DAEMON_ALREADY_RUNNING/);

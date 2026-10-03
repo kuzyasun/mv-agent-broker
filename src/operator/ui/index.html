@@ -42,6 +42,11 @@
       </div>
       <p id="live-message" class="status" role="status" aria-live="polite">Loading live status…</p>
       <div id="live-runtime" class="live-runtime"></div>
+      <section class="overview-panel" aria-labelledby="quota-pauses-heading">
+        <h3 id="quota-pauses-heading">Quota pauses</h3>
+        <p id="quota-pauses-count" class="small-note"></p>
+        <div id="quota-pauses" class="live-list" role="list"></div>
+      </section>
       <div class="overview-grid">
         <section class="overview-panel" aria-labelledby="active-heading">
           <h3 id="active-heading">Active jobs</h3>
@@ -79,6 +84,11 @@
           <span>Default turn deadline (minutes)</span>
           <span class="field-help">60 minutes by default. Applies to new turns after Save and Restart daemon. A coordinator can override it per turn with deadline_ms.</span>
           <input id="turn-deadline-minutes" type="number" min="1" max="1440" step="1">
+        </label>
+        <label>
+          <span>Complete review diff budget (MiB)</span>
+          <span class="field-help">Largest complete baseline→target diff a reviewer turn may receive. 32 MiB by default; the whole diff is delivered or the turn fails before any model runs — it is never truncated. Maximum 256 MiB. Applies after Save and Restart daemon.</span>
+          <input id="review-diff-mib" type="number" min="1" max="256" step="1">
         </label>
       </div>
     </section>

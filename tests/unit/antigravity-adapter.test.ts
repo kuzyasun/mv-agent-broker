@@ -372,6 +372,7 @@ describe("Antigravity adapter", () => {
         executionStarted: true,
         message:
           "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 54m59s.",
+        details: { retry_after_ms: 54 * 60_000 + 59_000 },
       });
     });
 

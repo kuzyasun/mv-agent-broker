@@ -376,6 +376,8 @@ export interface Limits {
   // turn per session) is enforced by the state machine + idx_turns_one_unfinished.
   openSessionsPerProject: number;
   hardTurnDeadlineMs: number;
+  /** Complete review-diff delivery budget in bytes (default 32 MiB, max 256 MiB). */
+  maxReviewDiffBytes: number;
 }
 
 export const DEFAULT_LIMITS: Limits = {
@@ -383,4 +385,5 @@ export const DEFAULT_LIMITS: Limits = {
   quotaScopeUnfinishedTurns: 1,
   openSessionsPerProject: 20,
   hardTurnDeadlineMs: 3_600_000,
+  maxReviewDiffBytes: 32 * 1024 * 1024,
 };

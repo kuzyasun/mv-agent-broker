@@ -75,7 +75,8 @@ import type {
   TurnExecutionRequest,
   TurnExecutionResult,
 } from "../runtime/adapter.ts";
-import { readSessionProviderBinding } from "./broker.ts";
+import { assertQuotaScopeSendable, readSessionProviderBinding, quotaScopeForSession } from "./broker.ts";
+import { recordQuotaCooldown } from "./quotaCooldown.ts";
 import {
   fingerprintReadinessObservation,
   readReadinessObservation,
@@ -579,6 +580,14 @@ export class TurnExecutor {
           if (leaseDrift) {
             throw new BrokerError("WORKSPACE_CHANGED", leaseDrift, { executionStarted: false });
           }
+
+          // Shared quota-scope pause recheck immediately before dispatch
+          // (§7.2 step 7): work accepted before the pause was learned cannot
+          // bypass it. Same quotaScopeFor semantics as admission; refusal
+          // keeps execution_started=false because the boundary has not yet
+          // recorded any dispatch for this turn.
+          assertQuotaScopeSendable(this.db, quotaScopeForSession(this.db, session), now);
+
           updateTurnFields(this.db, turnId, { execution_started: true }, t.state_version, now);
           appendEvent(this.db, {
             turn_id: turnId,
@@ -1447,7 +1456,10 @@ export class TurnExecutor {
           return null;
         }
       });
-      const diffDoc = renderCompleteDiffDocument(diff);
+      // Configured complete-diff budget (limits.maxReviewDiffBytes): the diff
+      // is delivered in full or the turn fails closed before dispatch — never
+      // truncated, never silently substituted.
+      const diffDoc = renderCompleteDiffDocument(diff, this.limits.maxReviewDiffBytes);
 
       const now2 = this.clock.now();
       // Plan from exact bytes without publishing provisional artifacts or
@@ -2151,6 +2163,14 @@ export class TurnExecutor {
     // §14.6: a durably recorded deadline reason survives finalization — the
     // final status may be TIMED_OUT, not CANCELLED, and the reason is kept.
     const deadlineInterrupt = cancelReason !== null && turn.termination_reason === "deadline";
+    // A shared quota-scope pause is learned ONLY from a definitive native
+    // QUOTA_EXHAUSTED report: execution actually started, no cancellation or
+    // deadline supervision decided the outcome, and the failure is not a
+    // pre-dispatch startup refusal. Timeouts, silence and UNKNOWN never
+    // record a pause (no backfill, no retroactive blocking).
+    const quotaExhausted = error.code === "QUOTA_EXHAUSTED"
+      && cancelReason === null
+      && !preDispatchStartup;
     this.commitTerminal(turn, session, {
       candidate: deadlineInterrupt ? "TIMED_OUT" : cancelReason !== null ? "CANCELLED" : "FAILED",
       native_outcome: "failed",
@@ -2159,6 +2179,7 @@ export class TurnExecutor {
       finalization_error: null,
       error_code: cancelReason !== null ? null : error.code,
       detail: { message: error.message, cancel_reason: cancelReason },
+      ...(quotaExhausted ? { quotaCooldown: { detail: error.message } } : {}),
     }, continuation);
   }
 
@@ -2390,6 +2411,8 @@ export class TurnExecutor {
       finalization_error: string | null;
       error_code: string | null;
       detail: Record<string, unknown>;
+      /** Set only for a definitive native QUOTA_EXHAUSTED (see finalizeWithFailure). */
+      quotaCooldown?: { detail: string };
     },
     continuation?: "new_native_conversation" | "native_resume",
     nativeRef?: string,
@@ -2461,6 +2484,33 @@ export class TurnExecutor {
         native_conversation_ref: nativeRef ?? t.native_conversation_ref,
         final_snapshot_id: finalSnapshotId ?? null,
       }, t.state_version, now);
+
+      // Learn the shared quota-scope pause in the SAME transaction as the
+      // terminal commit: only a definitive native QUOTA_EXHAUSTED reaches
+      // here (finalizeWithFailure sets quotaCooldown; journaled-evidence
+      // reconciliation never does, so timeout history is never backfilled).
+      if (outcome.quotaCooldown && outcome.candidate === "FAILED" &&
+          outcome.error_code === "QUOTA_EXHAUSTED" && outcome.execution_started) {
+        const pause = recordQuotaCooldown(this.db, {
+          quotaScopeId: quotaScopeForSession(this.db, session),
+          provider: session.provider,
+          turnId: turn.turn_id,
+          detail: outcome.quotaCooldown.detail,
+          now,
+        });
+        appendEvent(this.db, {
+          turn_id: turn.turn_id,
+          session_id: session.session_id,
+          type: "quota_pause_recorded",
+          payload: {
+            quota_scope_id: pause.quota_scope_id,
+            until_ms: pause.until_ms,
+            retry_after_ms: pause.retry_after_ms,
+            source: pause.source,
+          },
+          created_at: now,
+        });
+      }
 
       // Latest-anchor pin transfer (§15.3.1): the initial baseline stays
       // pinned until close; the previous "latest" pin is atomically replaced

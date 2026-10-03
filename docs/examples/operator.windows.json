@@ -5,7 +5,8 @@
   "limits": {
     "globalUnfinishedTurns": 6,
     "quotaScopeUnfinishedTurns": 2,
-    "hardTurnDeadlineMs": 3600000
+    "hardTurnDeadlineMs": 3600000,
+    "maxReviewDiffBytes": 33554432
   },
   "native_binary_pins": {
     "cursor": "C:\\Users\\<user>\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",

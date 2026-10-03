@@ -88,6 +88,7 @@ import {
   isNonterminalTurnState,
 } from "./transitions.ts";
 import type { TurnExecutor } from "./execution.ts";
+import { activeQuotaCooldown, listActiveQuotaCooldowns } from "./quotaCooldown.ts";
 import { computeEffectiveWritePolicy, loadSessionWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
 import {
   cloneFrozenPolicy,
@@ -1993,6 +1994,11 @@ export class BrokerCore {
         const now = this.now();
         const turnId = newId(ID_PREFIX.turn);
         const quotaScope = this.quotaScopeFor(session);
+        // A learned shared quota-scope pause blocks new sends across projects
+        // (QUOTA_EXHAUSTED, executionStarted:false) AFTER ownership/state
+        // priorities; an existing accepted operation already replayed above
+        // keeps its successful outcome regardless of a later pause.
+        assertQuotaScopeSendable(this.db, quotaScope, now);
         const workspaceId = session.workspace_id; // writer lease target (INV-02)
 
         checkTurnCapacity(this.db, this.limits, quotaScope);
@@ -2487,16 +2493,7 @@ export class BrokerCore {
   }
 
   private quotaScopeFor(session: SessionRecord): string {
-    // §13.3: the DURABLE account tuple bound at spawn decides quota scope — a
-    // later live account-row change must never retarget an existing grant
-    // (quota alias drift refuses at admission instead).
-    const lookup = readSessionProviderBinding(this.db, session.session_id);
-    if (lookup.kind === "bound") {
-      return lookup.binding.account.quota_scope_id ?? `shared:${lookup.binding.account.provider}`;
-    }
-    // Quota scope resolution from account profiles; conservative shared
-    // default per provider when unconfirmed (§12.3).
-    return getAccount(this.db, session.account_profile_id)?.quota_scope_id ?? `shared:${session.provider}`;
+    return quotaScopeForSession(this.db, session);
   }
 
   // ─── cancel (§14.6) ───────────────────────────────────────────────────────
@@ -3183,12 +3180,21 @@ export class BrokerCore {
       });
     }
     const accounts = this.db.raw.prepare("SELECT account_profile_id FROM account_profiles").all() as Array<{ account_profile_id: string }>;
+    const pauses = new Map(listActiveQuotaCooldowns(this.db, this.now()).map(row => [row.quota_scope_id, row]));
     for (const { account_profile_id } of accounts) {
       const acct = getAccount(this.db, account_profile_id);
       if (!acct) continue;
+      const pause = pauses.get(acct.quota_scope_id);
       entries.push({
         kind: "account_profile", id: acct.account_profile_id, display_name: acct.account_profile_id,
         provider: acct.provider, auth_mode: acct.auth_mode, quota_scope_id: acct.quota_scope_id,
+        ...(pause ? {
+          quota_pause: {
+            quota_scope_id: pause.quota_scope_id,
+            until_ms: pause.until_ms,
+            source: pause.source,
+          },
+        } : {}),
       });
     }
     const workspaces = this.db.raw
@@ -3567,6 +3573,40 @@ function assertTurnTransitionSafe(from: TurnState, trigger: string): void {
     throw new BrokerError("INVALID_REQUEST", `Cancel is not a legal transition from ${from} (§6.5.2).`);
   }
   void trigger;
+}
+
+/**
+ * Quota scope for a session, shared by admission and the executor's
+ * pre-dispatch recheck so both decide cooldowns with the SAME semantics:
+ * §13.3 — the DURABLE account tuple bound at spawn decides quota scope (a
+ * later live account-row change must never retarget an existing grant);
+ * conservative shared default per provider when unconfirmed (§12.3).
+ */
+export function quotaScopeForSession(db: RegistryDb, session: SessionRecord): string {
+  const lookup = readSessionProviderBinding(db, session.session_id);
+  if (lookup.kind === "bound") {
+    return lookup.binding.account.quota_scope_id ?? `shared:${lookup.binding.account.provider}`;
+  }
+  return getAccount(db, session.account_profile_id)?.quota_scope_id ?? `shared:${session.provider}`;
+}
+
+/**
+ * A learned quota-scope pause blocks NEW work for the scope: shared across
+ * projects and accounts bound to the same scope, with QUOTA_EXHAUSTED and
+ * executionStarted:false (nothing was dispatched for THIS request).
+ */
+export function assertQuotaScopeSendable(db: RegistryDb, quotaScopeId: string, now: number): void {
+  const pause = activeQuotaCooldown(db, quotaScopeId, now);
+  if (!pause) return;
+  throw new BrokerError("QUOTA_EXHAUSTED", "Quota scope is cooling down after a definitive provider quota exhaustion; no new work is admitted until the pause expires.", {
+    executionStarted: false,
+    details: {
+      quota_scope_id: pause.quota_scope_id,
+      blocked_until: pause.until_ms,
+      retry_after_ms: Math.max(0, pause.until_ms - now),
+      source: pause.source,
+    },
+  });
 }
 
 export { getSession as _getSession, getTurn as _getTurn };

@@ -9,7 +9,7 @@ import { listNonterminalTurns, listPendingIntents } from "../storage/repo.ts";
 import { BrokerError } from "../shared/errors.ts";
 import { applyOperatorConfig, loadOperatorConfig, operatorConfigFingerprint, type OperatorConfig } from "./config.ts";
 import { readRuntimeRecord, startOperator, statusOperator, stopOperator } from "./operations.ts";
-import { operatorTurnErrorResult, projectOperatorOverview } from "./overview.ts";
+import { operatorTurnErrorResult, projectOperatorOverview, projectOperatorQuotaPauses, clearQuotaPauseResult } from "./overview.ts";
 import { inspectQuarantine, reconcileWorkspace } from "./recovery.ts";
 import { startOperatorUi } from "./ui.ts";
 
@@ -147,6 +147,7 @@ export function daemonOperatorStatus(
     runtime_commit: manifest?.commit ?? null,
     runtime_path: manifest ? runtimePath : null,
     ...overview,
+    quota_pauses: projectOperatorQuotaPauses(daemon.db, Date.now()),
     pending_intents: listPendingIntents(daemon.db).map(intent => ({
       intent_id: intent.intent_id,
       kind: intent.kind,
@@ -167,6 +168,7 @@ async function runDaemon(config: OperatorConfig): Promise<void> {
     coordinatorId: config.coordinator_id,
     status: () => daemonOperatorStatus(daemon, appliedConfigFingerprint),
     turnError: (params: Record<string, unknown>) => operatorTurnErrorResult(daemon.db, params),
+    clearQuotaPause: (params: Record<string, unknown>) => clearQuotaPauseResult(daemon.db, params),
     stop: (): OperatorStopPlan => {
       const activeTurns = listNonterminalTurns(daemon.db);
       const pendingIntents = listPendingIntents(daemon.db);

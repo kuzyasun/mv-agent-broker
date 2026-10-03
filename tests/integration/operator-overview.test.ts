@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openRegistryDb, type RegistryDb } from "../../src/storage/db.ts";
 import { appendEvent, insertProject, insertSession, insertTurn } from "../../src/storage/repo.ts";
 import type { SessionRecord, TurnRecord } from "../../src/shared/api-types.ts";
-import { projectOperatorOverview, projectOperatorTurnError } from "../../src/operator/overview.ts";
+import { BrokerError } from "../../src/shared/errors.ts";
+import {
+  clearQuotaPauseResult,
+  projectOperatorOverview,
+  projectOperatorQuotaPauses,
+  projectOperatorTurnError,
+} from "../../src/operator/overview.ts";
+import { recordQuotaCooldown } from "../../src/core/quotaCooldown.ts";
 
 let db: RegistryDb | undefined;
 
@@ -179,5 +186,44 @@ describe("operator overview projection", () => {
     expect(projectOperatorOverview(db)).toMatchObject({ active_turn_count: 0, error_turn_count: 1,
       error_turns: [{ turn_id: "timeout", state: "TIMED_OUT", error_code: null }] });
     expect(projectOperatorTurnError(db, "timeout")?.guidance.explanation).toBe("The turn reached its deadline.");
+  });
+
+  it("projects safe quota pause metadata and clears one scope with an audit event", () => {
+    db = openRegistryDb(":memory:");
+    const now = Date.now();
+    recordQuotaCooldown(db, {
+      quotaScopeId: "qs-shared", provider: "antigravity", turnId: "turn-quota",
+      detail: "Individual quota reached. Resets in 54m59s.", now,
+    });
+    recordQuotaCooldown(db, {
+      quotaScopeId: "qs-expired", provider: "mock", turnId: "turn-old",
+      detail: null, now: now - 16 * 60_000,
+    });
+
+    expect(projectOperatorQuotaPauses(db, now + 500)).toEqual([{
+      quota_scope_id: "qs-shared",
+      provider: "antigravity",
+      until_ms: now + 3_299_000,
+      retry_after_ms: 3_299_000 - 500,
+      source: "vendor_reset_suffix",
+      recorded_at: now,
+    }]);
+
+    const result = clearQuotaPauseResult(db, { quota_scope_id: "qs-shared" });
+    expect(result).toEqual({ cleared: true, quota_scope_id: "qs-shared" });
+    expect(projectOperatorQuotaPauses(db, now + 500)).toEqual([]);
+    const audit = db.raw
+      .prepare("SELECT type, payload FROM events WHERE type = 'quota_pause_cleared' ORDER BY seq DESC")
+      .all() as Array<{ type: string; payload: string }>;
+    expect(audit).toHaveLength(1);
+    expect(JSON.parse(audit[0]!.payload)).toMatchObject({ quota_scope_id: "qs-shared", cleared: true });
+
+    // Clearing an already-expired scope reports honestly and still audits.
+    expect(clearQuotaPauseResult(db, { quota_scope_id: "qs-expired" })).toEqual({ cleared: false, quota_scope_id: "qs-expired" });
+
+    let invalid: unknown;
+    try { clearQuotaPauseResult(db, {}); } catch (error) { invalid = error; }
+    expect(invalid).toBeInstanceOf(BrokerError);
+    expect((invalid as BrokerError).code).toBe("INVALID_REQUEST");
   });
 });
