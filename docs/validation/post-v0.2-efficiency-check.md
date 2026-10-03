@@ -91,7 +91,10 @@ this package deliberately leaves the comparative series `not_run`:
 - Targeted vitest (docs package; full suite not rerun): `bridge-protocol` (19),
   `task-contract` (5), `p2-input-delivery` (3), `required-input-integrity`
   (12) — **39/39 passed**.
-- `git diff --check`: clean (no whitespace errors).
+- Authored documentation/examples pass `git diff --check`. The preserved source
+  addendum has five intentional Markdown hard-break lines flagged as trailing
+  whitespace when checking the entire baseline-to-final diff; its bytes were
+  not rewritten to remove those operator-authored line breaks.
 - The coordinator independently reran the four-file gate: 39/39 passed. Final
   review corrected the example README link, required terminal result AND managed
   quiescence for handoff, and distinguished the paid author call from benchmarks.

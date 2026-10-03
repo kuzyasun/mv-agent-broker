@@ -93,6 +93,16 @@ templates and the fresh-session recipe are in the
 AD-C01–08 verification status and the deferred benchmark protocol are in the
 [post-v0.2 efficiency check](validation/post-v0.2-efficiency-check.md).
 
+The separate accepted runtime portion keeps every actual review change while
+compacting unchanged context; see the
+[compact review-diff checkpoint](native-smoke/2026-10-03-compact-review-diff.md).
+The [independent Windows UI checkpoint](native-smoke/2026-10-03-independent-ui.md)
+records the tracked launcher, independent GLM review and owned-process/HTTP
+verification. These portions are integrated in `codex/coordinator-efficiency`;
+the shared daemon/UI remains on `e1ef4e6` until a guarded idle update.
+The [integration checkpoint](native-smoke/2026-10-03-coordinator-efficiency.md)
+records the final full offline gate and the accepted/deferred boundary.
+
 ### Deferred work and native subagents
 
 Complete A01–A53 closure, exhaustive provider/role/platform certification, total
