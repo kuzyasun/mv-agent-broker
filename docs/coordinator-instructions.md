@@ -23,6 +23,10 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    acceptance checks, and a deadline. Prefer separate worktrees for independent
    writes. Pass `route_id` with project, instructions, workspace and a unique
    idempotency key; omit raw provider/model/account/role/policy binding fields.
+   Worker access defaults to the whole covered project. Treat assigned paths
+   and `relevant_paths` as task guidance, never as an inferred edit allowlist.
+   Supply narrower `policy_restrictions.write_scope` only when the operator
+   explicitly requests that restriction; reviewers remain read-only.
    Omit `deadline_ms` to use the operator's configured default (one hour unless
    changed), or supply an explicit duration for this task. Do not hardcode the
    old 15-minute default. Quiet output alone is not evidence of a hung agent;

@@ -813,7 +813,7 @@
     writeScope.placeholder = "Write scope, one per line";
     const access = document.createElement("select");
     access.append(
-      option("workspace_write", "Allow workers to edit selected files (recommended)", true),
+      option("workspace_write", "Allow workers to edit the covered project (recommended)", true),
       option("read_only", "Read only", false),
     );
     const copy = document.createElement("select");
@@ -870,8 +870,8 @@
     );
     const scopeGrid = make("div");
     scopeGrid.className = "field-grid";
-    scopeGrid.append(field("Scope preset", scopeSelect, "Presets skip common output folders at the project root. For nested caches such as web/node_modules, use Advanced scope to select source folders such as web/src separately. Add new root files or folders later."));
-    const scopeHelp = make("p", "Project files includes every scanned top-level file and folder except ignored generated folders. Code folders and root files lets you choose existing common code folders.");
+    scopeGrid.append(field("Scope preset", scopeSelect, "Project files covers the whole project folder except common output folders, including files and folders added later. For nested caches such as web/node_modules, use Advanced scope to exclude web/node_modules or pick source folders such as web/src separately."));
+    const scopeHelp = make("p", "Project files covers the whole project with '.' — new root files and folders are included automatically. Code folders and root files is a deliberate restriction to existing scanned names.");
     scopeHelp.className = "small-note";
     scopeGrid.append(scopeHelp);
     const scopeSummary = make("p");
@@ -883,10 +883,10 @@
     const advancedScopeGrid = make("div");
     advancedScopeGrid.className = "field-grid";
     advancedScopeGrid.append(
-      field("Source prefixes", source, "Editable relative top-level names; do not use '.' or '*'."),
-      field("Excluded prefixes", excluded, "Ignored existing top-level names are excluded by the presets."),
+      field("Source prefixes", source, "Use '.' for the whole project (the recommended preset) or concrete relative top-level names; '*' is not allowed."),
+      field("Excluded prefixes", excluded, "Known output folders are excluded even before they exist; exclusions override the whole-project source."),
       field("Non-source prefixes", nonSource, "Optional generated or non-source areas not covered as source."),
-      field("Write scope", writeScope, "Workers can write only these source-covered prefixes."),
+      field("Write scope", writeScope, "Optional restriction to source-covered prefixes; the recommended preset omits it so workers may write the whole covered project."),
     );
     wizard.append(scopeGrid);
 
@@ -980,10 +980,12 @@
       if (!selectedListing) return;
       const entries = Array.isArray(selectedListing.entries) ? selectedListing.entries : [];
       const names = entries.map((entry) => entry.name).filter(Boolean);
-      setList(excluded, names.filter((name) => ignoredNames.has(name)));
+      // Also exclude caches created after registration, before they can enter snapshots.
+      setList(excluded, [...ignoredNames]);
       setList(nonSource, []);
       if (kind === "project") {
-        setList(source, names.filter((name) => !ignoredNames.has(name)));
+        // Whole-project source: future root files and folders stay covered.
+        setList(source, ["."]);
       } else if (kind === "code") {
         if (enteringCodePreset) {
           entries.filter((entry) => entry.kind === "directory" && commonCodeDirectories.has(entry.name) && !ignoredNames.has(entry.name))
@@ -1003,10 +1005,12 @@
 
     function updateCreateState() {
       const sources = currentSourceList();
-      const invalid = sources.some((value) => value === "." || value === "*");
+      const invalid = sources.some((value) => value === "*");
       create.disabled = pickerLoading || !selectedFolder || sources.length === 0 || invalid;
       scopeSummary.textContent = selectedFolder
-        ? `Included (${sources.length}): ${sources.slice(0, 12).join(", ") || "none"}${sources.length > 12 ? ", …" : ""}. Excluded (${listValue(excluded).length}): ${listValue(excluded).slice(0, 12).join(", ") || "none"}.`
+        ? sources.length === 1 && sources[0] === "."
+          ? `Included: the whole project folder (future files and folders included). Excluded (${listValue(excluded).length}): ${listValue(excluded).slice(0, 12).join(", ") || "none"}.`
+          : `Included (${sources.length}): ${sources.slice(0, 12).join(", ") || "none"}${sources.length > 12 ? ", …" : ""}. Excluded (${listValue(excluded).length}): ${listValue(excluded).slice(0, 12).join(", ") || "none"}.`
         : "Choose a project folder to populate this preset.";
     }
 
@@ -1141,8 +1145,8 @@
         wizardMessage("Choose a project folder, enter a display name, and select at least one source prefix.", "error");
         return;
       }
-      if (sourcePrefixes.some((value) => value === "." || value === "*")) {
-        wizardMessage("Source prefixes must name concrete relative top-level entries; '.' and '*' are not allowed.", "error");
+      if (sourcePrefixes.some((value) => value === "*")) {
+        wizardMessage("The '*' wildcard is not allowed; use '.' for the whole project or concrete relative top-level names.", "error");
         return;
       }
       try {
@@ -1167,11 +1171,15 @@
           excluded_prefixes: listValue(excluded),
         },
       });
-      state.policy_profiles.push({ policy_profile_id: policyId, version: "1", config: {
-        access: access.value,
-        write_scope: access.value === "read_only" ? [] : listValue(writeScope),
-      } });
-      state.policy_profiles.push({ policy_profile_id: reviewerPolicyId, version: "1", config: { access: "read_only", write_scope: [] } });
+      // Operator rule: the default worker policy carries NO write_scope —
+      // workspace_write then grants the whole covered project. Write-scope
+      // lists belong only to the explicit restricted/custom presets.
+      const workerConfig = { access: access.value };
+      if (access.value === "workspace_write" && scopeMode !== "project") {
+        workerConfig.write_scope = listValue(writeScope);
+      }
+      state.policy_profiles.push({ policy_profile_id: policyId, version: "1", config: workerConfig });
+      state.policy_profiles.push({ policy_profile_id: reviewerPolicyId, version: "1", config: { access: "read_only" } });
       const coordinator = find(state.coordinators, "coordinator_id", state.coordinator_id);
       if (coordinator && !coordinator.allowed_project_ids.includes(projectId)) coordinator.allowed_project_ids.push(projectId);
       (state.routes || []).filter((route) => route.project_id === copy.value).forEach((sourceRoute) => {

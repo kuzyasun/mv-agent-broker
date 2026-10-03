@@ -30,14 +30,14 @@
     ,{ "workspace_id": "repo-a-review", "project_id": "repo-a", "mode": "review_slot", "canonical_path": null, "coverage_profile_id": "repo-a-coverage" }
   ],
   "policy_profiles": [
-    { "policy_profile_id": "repo-a-worker", "version": "1", "config": { "access": "workspace_write", "write_scope": ["src", "tests"] } },
+    { "policy_profile_id": "repo-a-worker", "version": "1", "config": { "access": "workspace_write" } },
     { "policy_profile_id": "repo-a-reviewer", "version": "1", "config": { "access": "read_only" } }
   ],
   "coverage_profiles": [
     {
       "coverage_profile_id": "repo-a-coverage",
       "version": "1",
-      "config": { "source_prefixes": ["src", "tests"], "non_source_prefixes": [], "excluded_prefixes": [".git", "node_modules"] }
+      "config": { "source_prefixes": ["."], "non_source_prefixes": [], "excluded_prefixes": [".git", "node_modules"] }
     }
   ],
   "routes": [

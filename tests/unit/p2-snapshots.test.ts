@@ -19,6 +19,8 @@ import {
   classifyPath,
   coverageContractHash,
   matchesPrefix,
+  normalizePolicyPrefix,
+  normalizeRelPath,
   uncoveredWriteScope,
   validateCoverageConfig,
   CoverageError,
@@ -140,6 +142,63 @@ describe("coverage classification", () => {
   });
 });
 
+// ─── whole-project root prefix (operator default coverage) ──────────────────
+
+const ROOT_COVERAGE_CONFIG = {
+  source_prefixes: ["."],
+  non_source_prefixes: [],
+  excluded_prefixes: [".git", "node_modules"],
+};
+
+describe("coverage with the project-root prefix", () => {
+  it("prefix normalization is separate from real relative-file normalization", () => {
+    expect(normalizePolicyPrefix(".")).toBe(".");
+    expect(normalizePolicyPrefix("./")).toBe(".");
+    expect(normalizePolicyPrefix(".\\")).toBe(".");
+    expect(normalizePolicyPrefix("src\\parser")).toBe("src/parser");
+    expect(() => normalizeRelPath(".")).toThrow(CoverageError); // a real path can never be the root
+    expect(() => normalizePolicyPrefix("/abs")).toThrow(CoverageError);
+    expect(() => normalizePolicyPrefix("C:\\temp")).toThrow(CoverageError);
+    expect(() => normalizePolicyPrefix("../escape")).toThrow(CoverageError);
+    expect(() => normalizePolicyPrefix("src/./x")).toThrow(CoverageError);
+    expect(() => normalizePolicyPrefix("a/../b")).toThrow(CoverageError);
+  });
+
+  it("the root prefix matches every real relative path by component semantics", () => {
+    expect(matchesPrefix("src/a.c", ".")).toBe(true);
+    expect(matchesPrefix("docs/new.md", ".")).toBe(true);
+    expect(matchesPrefix("README.md", ".")).toBe(true);
+    expect(matchesPrefix("src/parser/x.c", "src/parser")).toBe(true);
+    expect(matchesPrefix("src/parser-old/x.c", "src/parser")).toBe(false);
+  });
+
+  it("root exclusions intentionally override whole-project source; other overlaps stay rejected", () => {
+    expect(() => validateCoverageConfig(ROOT_COVERAGE_CONFIG)).not.toThrow();
+    expect(() =>
+      validateCoverageConfig({ source_prefixes: ["."], non_source_prefixes: [], excluded_prefixes: ["."] }),
+    ).toThrow(CoverageError);
+    expect(() =>
+      validateCoverageConfig({ source_prefixes: ["."], non_source_prefixes: ["dist"], excluded_prefixes: [] }),
+    ).toThrow(CoverageError);
+    expect(() =>
+      validateCoverageConfig({ source_prefixes: [], non_source_prefixes: ["."], excluded_prefixes: ["node_modules"] }),
+    ).toThrow(CoverageError);
+    expect(() =>
+      validateCoverageConfig({ source_prefixes: ["src"], non_source_prefixes: [], excluded_prefixes: ["src/util"] }),
+    ).toThrow(CoverageError);
+    expect(classifyPath("src/a.c", ROOT_COVERAGE_CONFIG)).toBe("source");
+    expect(classifyPath("NEW_ROOT.md", ROOT_COVERAGE_CONFIG)).toBe("source");
+    expect(classifyPath("test-docs/note.md", ROOT_COVERAGE_CONFIG)).toBe("source");
+    expect(classifyPath("node_modules/pkg/index.js", ROOT_COVERAGE_CONFIG)).toBe("excluded");
+  });
+
+  it("uncoveredWriteScope agrees with root coverage", () => {
+    expect(uncoveredWriteScope(["."], ROOT_COVERAGE_CONFIG)).toEqual([]);
+    expect(uncoveredWriteScope(["src", "docs"], ROOT_COVERAGE_CONFIG)).toEqual([]);
+    expect(uncoveredWriteScope(["."], COVERAGE_CONFIG)).toEqual(["."]);
+  });
+});
+
 // ─── inventory unit checks (§8.7, §9.1) ──────────────────────────────────────
 
 describe("independent inventory", () => {
@@ -164,6 +223,24 @@ describe("independent inventory", () => {
       expect(paths).not.toContain("ROOT.txt");
       expect(inv.nonSourceObserved).toContain("dist/out.js");
       expect(inv.protectedObserved).toContain("ROOT.txt");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("root coverage admits undeclared root entries and keeps exclusions", () => {
+    const h = createHarness();
+    try {
+      h.writeWorkspaceFile("NEW_ROOT.md", "root");
+      h.writeWorkspaceFile("test-docs/note.md", "doc");
+      h.writeWorkspaceFile("node_modules/pkg/index.js", "cached");
+      const inv = takeInventory(h.workspaceRoot, ROOT_COVERAGE_CONFIG);
+      const paths = inv.entries.filter((e) => e.type === "file").map((e) => e.path);
+      expect(paths).toContain("src/main.c");
+      expect(paths).toContain("NEW_ROOT.md");
+      expect(paths).toContain("test-docs/note.md");
+      expect(paths).not.toContain("node_modules/pkg/index.js");
+      expect(inv.protectedObserved).toEqual([]);
     } finally {
       h.cleanup();
     }

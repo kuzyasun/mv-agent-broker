@@ -140,7 +140,9 @@ node --experimental-transform-types scripts/dogfood.mjs .state/tasks/package.jso
 ```
 
 Task JSON contains `name`, `provider`, `model`, optional `effort`,
-`write_scope`, `goal`, optional `checks`, and `deadline_ms` (default 3600000).
+optional `write_scope` (an explicit opt-in restriction; without it the worker
+grant covers the whole project, per the operator rule in AGENTS.md), `goal`,
+optional `checks`, and `deadline_ms` (default 3600000).
 Optional `runtime_ref` pins the accepted broker commit independently of the
 working tree being implemented and reviewed.
 The isolation rehearsal on 2026-10-01 used commit `d7d01b3`: a mock MCP turn

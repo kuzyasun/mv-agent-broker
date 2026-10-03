@@ -4,7 +4,10 @@
  *
  * Covered here:
  * - prefix narrowing/normalization (component semantics; src must not allow
- *   src-other; read_only implies []; [] denies all writes),
+ *   src-other; read_only implies []; [] denies all writes; "." is the
+ *   whole-project prefix),
+ * - the operator default grant: workspace_write without write_scope covers
+ *   the WHOLE project including new root entries,
  * - denial of access/scope widening,
  * - unknown/malformed restrictions with zero dispatch and no accepted state,
  * - replay vs different-payload conflict,
@@ -27,7 +30,8 @@ import {
 } from "../../src/core/policy.ts";
 import { BrokerCore } from "../../src/core/broker.ts";
 import { TurnExecutor } from "../../src/core/execution.ts";
-import { insertPolicyProfile, insertWorkspace } from "../../src/storage/repo.ts";
+import { insertCoverageProfile, insertPolicyProfile, insertWorkspace } from "../../src/storage/repo.ts";
+import { coverageContractHash } from "../../src/workspaces/coverage.ts";
 import { openBlobStore } from "../../src/snapshots/blobs.ts";
 
 const WRITER_PROFILE = JSON.stringify({ access: "workspace_write", write_scope: ["src", "tests"] });
@@ -170,6 +174,18 @@ describe("requested restriction validation", () => {
     expect(parsed.kind).toBe("ok");
     if (parsed.kind === "ok") expect(parsed.value.write_scope).toEqual(["src", "src/parser"]);
   });
+
+  it("the project-root prefix '.' is a valid restriction; real file paths are not", () => {
+    const root = parseRequestedPolicyRestrictions({ write_scope: ["."] });
+    expect(root.kind).toBe("ok");
+    if (root.kind === "ok") expect(root.value.write_scope).toEqual(["."]);
+
+    for (const bad of [["/abs"], ["../escape"], ["src/../.."], ["a/./b"], [""]]) {
+      const parsed = parseRequestedPolicyRestrictions({ write_scope: bad });
+      expect(parsed.kind).toBe("error");
+      if (parsed.kind === "error") expect(parsed.code).toBe("INVALID_REQUEST");
+    }
+  });
 });
 
 describe("effective policy narrowing", () => {
@@ -222,14 +238,42 @@ describe("effective policy narrowing", () => {
     }
   });
 
-  it("profile defaults: absent access is workspace_write, absent write_scope permits nothing", () => {
+  it("profile defaults: absent access is workspace_write; absent write_scope grants the whole project", () => {
     const noAccess = narrow({ profileConfigJson: JSON.stringify({ write_scope: ["src"] }), requestedRestrictions: undefined });
     expect(noAccess.ok).toBe(true);
     if (noAccess.ok) expect(noAccess.policy.access).toBe("workspace_write");
 
     const noScope = narrow({ profileConfigJson: JSON.stringify({ access: "workspace_write" }), requestedRestrictions: undefined });
     expect(noScope.ok).toBe(true);
-    if (noScope.ok) expect(noScope.policy.write_scope).toEqual([]);
+    if (noScope.ok) {
+      expect(noScope.policy.access).toBe("workspace_write");
+      expect(noScope.policy.write_scope).toEqual(["."]);
+    }
+
+    // read_only without write_scope still permits no writes.
+    const readOnly = narrow({ profileConfigJson: JSON.stringify({ access: "read_only" }), requestedRestrictions: undefined });
+    expect(readOnly.ok).toBe(true);
+    if (readOnly.ok) expect(readOnly.policy.write_scope).toEqual([]);
+  });
+
+  it("an explicit scope array stays a deliberate restriction; [] denies writes; '.' narrows only whole-project profiles", () => {
+    const explicit = narrow({ requestedRestrictions: undefined });
+    expect(explicit.ok).toBe(true);
+    if (explicit.ok) expect(explicit.policy.write_scope).toEqual(["src", "tests"]);
+
+    const denyAll = narrow({ profileConfigJson: JSON.stringify({ access: "workspace_write" }), requestedRestrictions: { write_scope: [] } });
+    expect(denyAll.ok).toBe(true);
+    if (denyAll.ok) expect(denyAll.policy.write_scope).toEqual([]);
+
+    // "." covers src/tests, so it is a valid narrowing of the default grant…
+    const rootNarrow = narrow({ profileConfigJson: JSON.stringify({ access: "workspace_write" }), requestedRestrictions: { write_scope: ["."] } });
+    expect(rootNarrow.ok).toBe(true);
+    if (rootNarrow.ok) expect(rootNarrow.policy.write_scope).toEqual(["."]);
+
+    // …but a widening sibling against an explicitly enumerated profile.
+    const rootWiden = narrow({ requestedRestrictions: { write_scope: ["."] } });
+    expect(rootWiden.ok).toBe(false);
+    if (!rootWiden.ok) expect(rootWiden.code).toBe("INVALID_REQUEST");
   });
 
   it("unreadable profile config fails closed with POLICY_UNSUPPORTED", () => {
@@ -426,6 +470,135 @@ describe("effective scope enforcement", () => {
       const s4 = h.core.sessionStatus(h.seed.coordinatorId, malformed.session_id);
       const scope = sessionWriteScope(h.db, s4);
       expect(scope.kind).toBe("invalid");
+    } finally {
+      h.cleanup();
+    }
+  });
+});
+
+// ─── whole-project default grant (operator rule) ────────────────────────────
+
+const ROOT_COVERAGE = { source_prefixes: ["."], non_source_prefixes: [], excluded_prefixes: [".git", "node_modules", ".state"] };
+
+/** Seed a root coverage profile, a scope-less worker policy and its workspace. */
+function seedRootGrant(h: Harness): void {
+  insertCoverageProfile(h.db, {
+    coverage_profile_id: "cov-root",
+    version: "1",
+    config: JSON.stringify(ROOT_COVERAGE),
+    contract_hash: coverageContractHash(ROOT_COVERAGE),
+  });
+  insertPolicyProfile(h.db, {
+    policy_profile_id: "pol-root",
+    version: "1",
+    config: JSON.stringify({ access: "workspace_write" }),
+  });
+  insertWorkspace(h.db, {
+    workspace_id: "ws-root",
+    project_id: h.seed.projectId,
+    mode: "current",
+    canonical_path: h.workspaceRoot,
+    quarantined: false,
+    quarantine_reason: null,
+    coverage_profile_id: "cov-root",
+  });
+}
+
+describe("whole-project default grant", () => {
+  it("end-to-end: a scope-less worker creates a previously undeclared root test/doc directory and root file", async () => {
+    const h = createHarness();
+    try {
+      seedRootGrant(h);
+      const spawn = await h.spawnWorkerSession({
+        policy_profile_id: "pol-root",
+        workspace: { mode: "current", workspace_id: "ws-root" },
+      });
+      const binding = provisionPayload(h, spawn.session_id).effective_policy as Record<string, unknown>;
+      expect(binding.binding_version).toBe(1);
+      expect(binding.access).toBe("workspace_write");
+      expect(binding.write_scope).toEqual(["."]); // whole project, no explicit list
+
+      const turn = await runWriteTurn(h, spawn.session_id, "t-root-new", [
+        { path: "test-docs/new-root-note.md", content: "# new root directory\n" },
+        { path: "NEW_ROOT.md", content: "root file created by the worker\n" },
+      ]);
+      expect(turn.state).toBe("SUCCEEDED");
+      expect(turn.error_code).toBeNull();
+      expect(turn.final_snapshot_id).toBeTruthy();
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("excluded subtrees stay protected under the whole-project grant", async () => {
+    const h = createHarness();
+    try {
+      seedRootGrant(h);
+      const spawn = await h.spawnWorkerSession({
+        policy_profile_id: "pol-root",
+        workspace: { mode: "current", workspace_id: "ws-root" },
+      });
+      const turn = await runWriteTurn(h, spawn.session_id, "t-root-excluded", [
+        { path: "node_modules/loose-cache.js", content: "cached\n" },
+      ]);
+      expect(turn.state).toBe("FAILED");
+      expect(turn.error_code).toBe("SCOPE_VIOLATION");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("a read_only worker write is still refused", async () => {
+    const h = createHarness();
+    try {
+      seedRootGrant(h);
+      const spawn = await h.spawnWorkerSession({
+        policy_profile_id: "pol-root",
+        workspace: { mode: "current", workspace_id: "ws-root" },
+        policy_restrictions: { access: "read_only" },
+      });
+      const binding = provisionPayload(h, spawn.session_id).effective_policy as Record<string, unknown>;
+      expect(binding.write_scope).toEqual([]);
+      const turn = await runWriteTurn(h, spawn.session_id, "t-root-readonly", [
+        { path: "test-docs/forbidden.md", content: "denied\n" },
+      ]);
+      expect(turn.state).toBe("FAILED");
+      expect(turn.error_code).toBe("SCOPE_VIOLATION");
+      expect(turn.final_snapshot_id).toBeNull();
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("whole-project scope requires root coverage admission (narrowing and coverage agree)", async () => {
+    const h = createHarness();
+    try {
+      insertPolicyProfile(h.db, {
+        policy_profile_id: "pol-root",
+        version: "1",
+        config: JSON.stringify({ access: "workspace_write" }),
+      });
+      // Seeded workspace coverage covers src/tests only — the default grant
+      // is not admissible there, before any turn is accepted.
+      const spawn = await h.spawnWorkerSession({ policy_profile_id: "pol-root" });
+      const before = brokerCounts(h);
+      expectBrokerError(() => h.sendTask(spawn.session_id, "t-uncovered"), "SNAPSHOT_COVERAGE_MISMATCH");
+      expect(brokerCounts(h)).toEqual(before);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("an unsupported binding schema fails closed", async () => {
+    const h = createHarness();
+    try {
+      const session = await h.spawnWorkerSession();
+      rewriteProvisionPayload(h, session.session_id, (p) => {
+        (p.effective_policy as Record<string, unknown>).binding_version = 99;
+      });
+      const before = brokerCounts(h);
+      expectBrokerError(() => h.sendTask(session.session_id, "t-v1-binding"), "POLICY_UNSUPPORTED");
+      expect(brokerCounts(h)).toEqual(before);
     } finally {
       h.cleanup();
     }

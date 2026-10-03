@@ -4,6 +4,10 @@
  * The operator profile defines the MAXIMUM capabilities. The coordinator MAY
  * narrow it via SpawnRequest.policy_restrictions (`access`, `write_scope`) —
  * it can never widen privileges, network access or account permissions.
+ * By operator rule, a workspace_write profile without an explicit write_scope
+ * grants the WHOLE project ('.'), including files and folders created later;
+ * an explicit scope array is a deliberate restriction and `[]` denies writes.
+ * Task descriptions never imply a narrower file allowlist.
  *
  * The effective normalized policy is computed once inside authoritative spawn
  * admission and bound immutably to the session: it is stored in the existing
@@ -22,13 +26,13 @@ import type { RegistryDb } from "../storage/db.ts";
 import type { ErrorCode } from "../shared/errors.ts";
 import { sha256Hex } from "../shared/ids.ts";
 import {
+  PROJECT_ROOT_PREFIX,
   matchesPrefix,
-  normalizeRelPath,
+  normalizePolicyPrefix,
   parsePolicyWriteScope,
-  type PolicyWriteScope,
 } from "../workspaces/coverage.ts";
 
-/** Binding schema version; the session profile version convention stays "1". */
+/** Binding shape is unchanged: it already records an explicit normalized scope. */
 export const EFFECTIVE_POLICY_BINDING_VERSION = 1;
 
 export type PolicyAccess = "read_only" | "workspace_write";
@@ -66,8 +70,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 /**
  * Validate the requested restrictions (§12.1): unknown mandatory keys are
  * POLICY_UNSUPPORTED (never silently ignored); malformed values are
- * INVALID_REQUEST. Prefixes are normalized with coverage component semantics;
- * duplicates are rejected fail-closed.
+ * INVALID_REQUEST. Prefixes are normalized with policy-prefix component
+ * semantics (the project-root "." is a valid restriction); duplicates are
+ * rejected fail-closed.
  */
 export function parseRequestedPolicyRestrictions(raw: unknown): RestrictionParse {
   if (raw === undefined) return { kind: "none" };
@@ -108,7 +113,7 @@ export function parseRequestedPolicyRestrictions(raw: unknown): RestrictionParse
     for (const entry of raw.write_scope as string[]) {
       let prefix: string;
       try {
-        prefix = normalizeRelPath(entry);
+        prefix = normalizePolicyPrefix(entry);
       } catch {
         return {
           kind: "error",
@@ -144,7 +149,10 @@ export function parseRequestedPolicyRestrictions(raw: unknown): RestrictionParse
 /** Profile-side policy state parsed from the operator config (§8.1). */
 export interface OperatorProfilePolicy {
   access: PolicyAccess; // absent → workspace_write (profile maximum)
-  scope: PolicyWriteScope; // absent write_scope → nothing permitted
+  // Operator rule: a workspace_write profile WITHOUT write_scope grants the
+  // whole project ('.'), including files and folders that do not exist yet.
+  // An explicit scope array (including []) remains a deliberate restriction.
+  scope: { kind: "declared"; prefixes: string[] } | { kind: "invalid"; reason: string };
 }
 
 export function parseOperatorProfilePolicy(profileConfigJson: string): OperatorProfilePolicy {
@@ -164,9 +172,17 @@ export function parseOperatorProfilePolicy(profileConfigJson: string): OperatorP
     }
     access = parsed.access as PolicyAccess;
   }
-  // Reuses the exact tri-state semantics of the profile write_scope (§8.7);
-  // access is validated above, write_scope errors surface as invalid scope.
-  const scope = parsePolicyWriteScope(profileConfigJson);
+  // Reuses the tri-state write_scope parsing (§8.7); access is validated
+  // above, write_scope errors surface as invalid scope. An absent write_scope
+  // becomes the operator default grant: whole-project for workspace_write,
+  // nothing for read_only.
+  const triState = parsePolicyWriteScope(profileConfigJson);
+  const scope: OperatorProfilePolicy["scope"] =
+    triState.kind === "declared"
+      ? { kind: "declared", prefixes: triState.prefixes }
+      : triState.kind === "invalid"
+        ? { kind: "invalid", reason: triState.reason }
+        : { kind: "declared", prefixes: access === "read_only" ? [] : [PROJECT_ROOT_PREFIX] };
   return { access, scope };
 }
 
@@ -210,13 +226,14 @@ export function computeEffectiveWritePolicy(args: {
   }
 
   // read_only implies [] (§12.1): any requested write_scope is dominated.
+  // Otherwise an explicit requested array narrows the profile scope (which is
+  // the declared default grant — whole-project for a scope-less profile).
   let writeScope: string[];
   if (access === "read_only") {
     writeScope = [];
   } else if (requested.write_scope !== undefined) {
-    const profilePrefixes = profile.scope.kind === "declared" ? profile.scope.prefixes : [];
     for (const prefix of requested.write_scope) {
-      const covered = profilePrefixes.some((p) => matchesPrefix(prefix, p));
+      const covered = profile.scope.prefixes.some((p) => matchesPrefix(prefix, p));
       if (!covered) {
         return {
           ok: false,
@@ -227,13 +244,13 @@ export function computeEffectiveWritePolicy(args: {
     }
     writeScope = requested.write_scope;
   } else {
-    writeScope = profile.scope.kind === "declared" ? profile.scope.prefixes : [];
+    writeScope = profile.scope.prefixes;
   }
 
   return {
     ok: true,
     policy: {
-      binding_version: 1,
+      binding_version: EFFECTIVE_POLICY_BINDING_VERSION,
       access,
       write_scope: writeScope,
       policy_profile_id: args.policy_profile_id,
@@ -294,7 +311,7 @@ function validateStoredBinding(
     return { kind: "malformed", reason: "effective_policy profile fingerprint mismatch" };
   }
   // The stored effective policy must still be a faithful narrowing of the
-  // captured profile config (binding_version 1 semantics); any drift in the
+  // captured profile config; any drift in the
   // payload fails closed instead of broadening silently.
   const rederived = computeEffectiveWritePolicy({
     policy_profile_id: raw.policy_profile_id,
@@ -318,7 +335,7 @@ function validateStoredBinding(
   return {
     kind: "ok",
     policy: {
-      binding_version: 1,
+      binding_version: EFFECTIVE_POLICY_BINDING_VERSION,
       access: raw.access as PolicyAccess,
       write_scope: raw.write_scope as string[],
       policy_profile_id: raw.policy_profile_id,

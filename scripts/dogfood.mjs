@@ -1,6 +1,8 @@
 // Opt-in native development through the public MCP interface. No Claude route.
 // node --experimental-transform-types scripts/dogfood.mjs <task.json>
-// Task: {name, provider, model, effort, write_scope, goal, checks?, review?}.
+// Task: {name, provider, model, effort, write_scope?, goal, checks?, review?}.
+// write_scope is an explicit opt-in restriction; without it the worker grant
+// covers the whole project.
 // review: {provider, model, effort, goal}. Results stay private in .state.
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -48,7 +50,10 @@ if (process.argv[2] === '--serve') {
   const registry = await import(pathToFileURL(path.join(runtime, 'src/storage/repo.ts')).href);
   const { coverageContractHash } = await import(pathToFileURL(path.join(runtime, 'src/workspaces/coverage.ts')).href);
   const db = openRegistryDb(path.join(state, 'registry.sqlite'));
-  const coverage = { source_prefixes: ['src', 'tests', 'scripts', 'docs', 'README.md', 'package.json', 'package-lock.json', 'tsconfig.json', 'vitest.config.ts', '.gitignore'], non_source_prefixes: [], excluded_prefixes: ['.git', '.state', 'node_modules', 'dist', 'coverage'] };
+  // Operator rule: whole-project source coverage; explicit task write_scope
+  // stays an opt-in restriction, otherwise the worker policy omits it and
+  // workspace_write grants the entire project by default.
+  const coverage = { source_prefixes: ['.'], non_source_prefixes: [], excluded_prefixes: ['.git', '.state', 'node_modules', 'dist', 'coverage'] };
   if (!reviewFrom) {
   registry.insertProject(db, { project_id: 'self', display_name: 'Agent Broker self-development', configuration_revision: 1, session_cap: 4, created_at: Date.now() });
   registry.insertCoordinator(db, { coordinator_id: 'self-coordinator', display_name: 'Native MCP development client', allowed_project_ids: ['self'], revoked: false, config_revision: 1 });
@@ -56,8 +61,8 @@ if (process.argv[2] === '--serve') {
     registry.insertAccount(db, { account_profile_id: provider, provider, quota_scope_id: `native:${provider}`, auth_mode: 'cli-owned' });
   }
   registry.insertCoverageProfile(db, { coverage_profile_id: 'source', version: '1', config: JSON.stringify(coverage), contract_hash: coverageContractHash(coverage) });
-  registry.insertPolicyProfile(db, { policy_profile_id: 'worker', version: '1', config: JSON.stringify({ access: 'workspace_write', write_scope: task.write_scope }) });
-  registry.insertPolicyProfile(db, { policy_profile_id: 'reviewer', version: '1', config: JSON.stringify({ access: 'read_only', write_scope: [] }) });
+  registry.insertPolicyProfile(db, { policy_profile_id: 'worker', version: '1', config: JSON.stringify(task.write_scope === undefined ? { access: 'workspace_write' } : { access: 'workspace_write', write_scope: task.write_scope }) });
+  registry.insertPolicyProfile(db, { policy_profile_id: 'reviewer', version: '1', config: JSON.stringify({ access: 'read_only' }) });
   registry.insertWorkspace(db, { workspace_id: 'repo', project_id: 'self', mode: 'current', canonical_path: repo, quarantined: false, quarantine_reason: null, coverage_profile_id: 'source' });
   registry.insertWorkspace(db, { workspace_id: 'review', project_id: 'self', mode: 'review_slot', canonical_path: null, quarantined: false, quarantine_reason: null, coverage_profile_id: 'source' });
   }
@@ -91,7 +96,7 @@ if (process.argv[2] === '--serve') {
     const session = await tool('agent_session_spawn', { project_id: 'self', idempotency_key: randomUUID(), provider: route.provider, account_profile_id: route.provider, model: route.model, ...(route.effort == null ? {} : { effort: route.effort }), role,
       instructions: reviewer
         ? 'Independent read-only review. Read the required diff and source in this isolated target snapshot. Do not edit files, run mutating commands, invoke other agents/MCP, commit, or access credentials. Final report MUST fit 3000 characters: findings first, relative path/line, severity and reasoning; say if none found. Omit scope recaps, absolute paths and introductions. Native permission enforcement remains unverified; obey these boundaries.'
-        : `Implement the assigned bounded package in the repository. Allowed edits ONLY: ${task.write_scope.join(', ')}. Preserve existing changes. Do not stage/commit/push, delegate, access credentials or call MCP. Read nearby source first. Run requested offline checks, fix failures, and self-review actual diff. Final report MUST fit 3000 characters: changed files, behavior, exact check results and limitations.`,
+        : `Implement the assigned bounded package in the repository. Worker authorization covers the entire project by default${task.write_scope ? `; this task is explicitly restricted to: ${task.write_scope.join(', ')}` : '; task paths never imply a file allowlist'}. Preserve existing changes. Do not stage/commit/push, delegate, access credentials or call MCP. Read nearby source first. Run requested offline checks, fix failures, and self-review actual diff. Final report MUST fit 3000 characters: changed files, behavior, exact check results and limitations.`,
       workspace: { mode: reviewer ? 'review_slot' : 'current', workspace_id: reviewer ? 'review' : 'repo' }, policy_profile_id: reviewer ? 'reviewer' : 'worker' });
     sessions.push(session.session_id);
     const deadlineMs = route.deadline_ms ?? 3600000;

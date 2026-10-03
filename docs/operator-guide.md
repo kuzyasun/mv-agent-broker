@@ -155,12 +155,15 @@ project. Models, efforts, accounts, and native-subagent preferences are copied;
 reviewers receive a separate read-only policy. You can also start without
 profiles and add them afterwards.
 
-The recommended coverage includes existing top-level files and folders, except
-generated folders and broker/Git state. The narrower code-folder preset includes
-common code folders and root files. Advanced fields allow explicit coverage
-and write scopes. Newly introduced top-level files or folders need adding to
-coverage; the presets are a snapshot of the folder, not an unrestricted wildcard.
-Folder browsing lists names only and does not run an agent or spend quota.
+The recommended coverage is the whole project folder: `source_prefixes: ["."]`
+covers every current and future top-level file and folder, except generated
+folders and broker/Git state that the preset excludes. The default worker
+policy then carries no `write_scope`: workers may write the whole covered
+project, including entries created after the project was added. The narrower
+code-folder preset and the advanced fields are deliberate restrictions that
+enumerate explicit coverage and write scopes; use them only when a project
+really must stay narrow. Folder browsing lists names only and does not run an
+agent or spend quota.
 Creation stages new project, workspace, policy, and coverage IDs locally;
 **Save** writes the configuration. In shared-daemon mode, stop the daemon only
 when there are no active turns or pending intents, then start it again to use
@@ -176,13 +179,13 @@ ignore rules do not remove files from that contract. The source byte limit is
 the limit to accommodate disposable build caches.
 
 The presets exclude known top-level output folders, including `artifacts`,
-`node_modules`, `.dart_tool`, and `.angular`. Inspect nested output folders too.
-Coverage prefixes must be disjoint: instead of source `web` plus exclusion
-`web/node_modules`, declare source `web/src` and the root files inside `web`,
-then exclude `web/node_modules`, `web/.angular`, and `web/dist`. Match the
-worker policy's `write_scope` to the resulting source prefixes. Add new source
-files or folders directly under `web` later; new files inside `web/src` are
-already covered.
+`node_modules`, `.dart_tool`, and `.angular`; these exclusions intentionally
+override the whole-project source. Inspect nested output folders too. For a
+nested cache such as `web/node_modules`, either exclude `web/node_modules`
+explicitly alongside the root source, or restrict coverage and the worker
+policy's `write_scope` to `web/src` plus the root files inside `web`. New
+files inside `web/src` are then already covered; under the whole-project
+preset every new location is covered automatically.
 
 When replacing a coverage or policy already bound to a session, use a new
 profile ID for future sessions and keep the historical evidence. After saving,
