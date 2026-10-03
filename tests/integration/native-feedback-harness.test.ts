@@ -17,11 +17,15 @@
  * - Root anti-adoption rejects arbitrary caller paths, preexisting roots, and symlink ancestors
  */
 import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHarness } from "../helpers/harness.ts";
 import { BrokerError } from "../../src/shared/errors.ts";
+import { cursorChatStorePathBudgetViolation } from "../../src/providers/cursor/cursorAdapter.ts";
 import {
   ACCEPTED_RUNTIME_SHA,
   INLINE_TOTAL_BYTE_CAP,
@@ -39,6 +43,53 @@ import {
 } from "../../scripts/native-feedback.mjs";
 
 describe("Native feedback harness integration", () => {
+  it("uses a fresh owned short temporary root that fits the installed Cursor store budget", () => {
+    const { root, approvedBase, ownerToken } = resolveAndValidateHarnessRoot({});
+    try {
+      expect(approvedBase).toBe(path.resolve(tmpdir(), "ab-feedback"));
+      expect(path.dirname(root)).toBe(approvedBase);
+      expect(() => resolveAndValidateHarnessRoot({ root })).toThrow(/preexisting root/i);
+      const configDir = path.join(root, "state", "providers", "cursor", "sessions", "a".repeat(64), "config");
+      expect(cursorChatStorePathBudgetViolation(configDir, path.join(root, "fixture-repo"), null)).toBeNull();
+      validateExclusiveRootForCleanup(root, approvedBase, ownerToken);
+    } finally {
+      validateExclusiveRootForCleanup(root, approvedBase, ownerToken);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the native serve process alive through READY and closes on stdin EOF without inference", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ab-native-serve-"));
+    const runtime = path.join(root, "runtime");
+    const state = path.join(root, "state");
+    extractRuntime(process.cwd(), runtime, ACCEPTED_RUNTIME_SHA);
+    const env: NodeJS.ProcessEnv = { ...process.env, AB_ROLE: "daemon", AB_STATE_DIR: state, AB_COORDINATOR_ID: "startup-only" };
+    delete env.AB_MOCK_FEEDBACK;
+    const child = spawn(process.execPath, ["--experimental-transform-types", path.resolve("scripts/native-feedback.mjs"), "--serve", runtime], { cwd: runtime, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    const closed = once(child, "close");
+    let ready = false;
+    child.stderr.on("data", chunk => { ready ||= String(chunk).includes("daemon listening"); });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const until = Date.now() + 10000;
+      while (!ready && child.exitCode === null && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50));
+      expect(ready).toBe(true);
+      expect(child.exitCode).toBeNull();
+      child.stdin.end();
+      const result = await Promise.race([closed, new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 5000); })]);
+      expect(result).not.toBe(false);
+      expect(child.exitCode).toBe(0);
+      const db = new DatabaseSync(path.join(state, "registry.sqlite"), {readOnly:true});
+      try { expect(db.prepare("SELECT count(*) AS n FROM turns").get()?.n).toBe(0); }
+      finally { db.close(); }
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode === null) { child.stdin.end(); child.kill(); await closed; }
+      expect(root.startsWith(path.join(tmpdir(), "ab-native-serve-"))).toBe(true);
+      rmSync(root, {recursive:true,force:true});
+    }
+  }, 20000);
+
   it("executes the normative worker -> review -> fix -> same-reviewer flow with exact artifactID chain and current snapshots via real harness entrypoint", async () => {
     const res = await runNativeFeedback({
       mock: true,

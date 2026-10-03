@@ -29,7 +29,7 @@ no runtime behavior; the full v0.2/native acceptance matrix remains open.
 | CE-01 bounded tasks | Task contract delivery and required-input admission: `src/core/broker.ts` (`sendSnapshotPreflight`, `resolveTaskArtifacts`); input planning `src/inputs/manifest.ts` (no silent truncation, `INPUT_LIMIT`/`ARTIFACT_NOT_READY`); whole-project default grant `src/core/policy.ts`; `tests/unit/task-contract.test.ts`, `tests/unit/p2-input-delivery.test.ts`, `tests/unit/required-input-integrity.test.ts` | Bounded-task template + CE-01 rule in coordinator-instructions; example 02 | Worker-side reading/coverage behavior on native models: unknown (mock evidence only) |
 | CE-02 result-first, cursors | `src/bridge/tools.ts` (`agent_turn_result` bounded DTO, `agent_turn_events` cursor/wait); README cursor snippet; `tests/integration/turn-events-wait.test.ts` | CE-02 rule (already implied by instructions rule 4, now explicit) | None documented; host polling costs are outside broker measurement |
 | CE-03 exact route, immutable session | Route discovery and pagination: instructions rules 1, 6; spawn oneOf (route_id XOR explicit bindings) `src/bridge/tools.ts`; `tests/unit/operator-routes.test.ts` | CE-03 rule (new session for any immutable change) | None beyond existing open native readiness/binding gates |
-| CE-04 continuation vs fresh | Persistent sessions, review re-binding: `agent_session_send` review_binding; `tests/integration/native-feedback-harness.test.ts`, [native feedback record](../native-feedback.md); UNKNOWN/quarantine guards `tests/unit/quota-cooldown.test.ts`, `tests/unit/zcode-quota.test.ts`, [recovery runbook](../recovery-runbook.md) | CE-04 rule + fresh-session recipe + handoff template; example 04 | Native continuity R1/S1/R2/S2 combined evidence remains open; worktree-vs-checkout caveat is coordinator discipline, not enforcement |
+| CE-04 continuation vs fresh | Persistent sessions, review re-binding: `agent_session_send` review_binding; `tests/integration/native-feedback-harness.test.ts`, [native feedback record](../native-feedback.md); UNKNOWN/quarantine guards `tests/unit/quota-cooldown.test.ts`, `tests/unit/zcode-quota.test.ts`, [recovery runbook](../recovery-runbook.md) | CE-04 rule + fresh-session recipe + handoff template; example 04 | [Combined persistent native chain accepted](../native-smoke/2026-10-03-native-feedback.md) for Windows ZCode Flash/max + Cursor grok/high; fresh handoff and worktree-vs-checkout discipline remain separate |
 | CE-05 claims vs observed | `turnResultDto` separates `agent_reported` from `broker_observed`; report bounding `tests/unit/task-contract.test.ts` | CE-05 rule | No automatic claim verification exists or is proposed |
 | CE-06 context/storage/native memory | Artifact/snapshot storage and cleanup `tests/unit/cleanup.test.ts`; input manifests are per-turn (`src/inputs/manifest.ts` lifetime `turn_until_quiescence`) | CE-06 rule (no reuse of materialized paths; retention unchanged) | Native context-size telemetry: unknown |
 
@@ -50,6 +50,13 @@ verification in this repository; native behavior is reported separately.
 | AD-C08 no runtime router/memory DB/auto reset/new upload API | **pass (diff review)** | Package diff contains docs/examples only |
 
 ## Benchmark protocol — `not_run`
+
+Subsequent continuity acceptance completed one persistent four-turn native
+chain on the exact Windows/model pair in the
+[native feedback checkpoint](../native-smoke/2026-10-03-native-feedback.md).
+It retained setup failures and verified the actual final fixture independently.
+No F/P/H comparison was performed; broker-reported usage remained unknown for
+every turn. The following comparison protocol and its `not_run` status stand.
 
 No measurements exist; **no savings or cost claim is made**. Protocol for a
 future small comparison, run only within explicitly authorized provider/profile
@@ -101,9 +108,9 @@ this package deliberately leaves the comparative series `not_run`:
 
 ## Limitations
 
-- Native/model behavior behind every rule (reading depth, quality, real
-  context sizes, quota costs) is unverified; mock/offline checks do not
-  promote any profile to tested.
+- Native reading depth, real context sizes and quota costs remain unverified.
+  The separately accepted persistent chain demonstrates continuity for its
+  exact Windows/model pair; mock/offline checks do not promote native profiles.
 - The benchmark protocol has no runs behind it; its variables and counting
   rules are commitments for a future authorized series, not results.
 - The operator addendum was preserved byte-for-byte (SHA-256

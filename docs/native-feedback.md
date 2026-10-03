@@ -19,8 +19,9 @@ The harness operates over existing public MCP tools and accepted Git runtime pat
 - **No Automatic Fallback**: Failures halt immediately with durable `failed` or `unknown` evidence. The harness never attempts fallback to another provider, model, or fresh session.
 
 ### 2. Immutable Broker Runtime & Temporary Fixture Repository
-- **Broker Runtime**: Copied from regular Git-tracked source (`src/`) and `package.json` at an accepted, immutable commit SHA (`3cf17bd5a8f3b3ce09e067521ab26e0e0839596c`). Uncommitted or untracked changes cannot enter the supervising daemon.
+- **Broker Runtime**: Copied from regular Git-tracked source (`src/`) and `package.json` at an accepted, immutable commit SHA (`0409fb173a704c8fc849bb41ba05bbb1efda967d`). Uncommitted or untracked changes cannot enter the supervising daemon.
 - **Temporary Fixture Repo**: The worker operates within an owned, temporary Git repository with a generated package and source baseline (`src/math.js`, `src/obsolete.js`, `tests/math.test.js`). The worker workspace is registered with its canonical path bound to this fixture repository. The worker edits do not touch the main coordinator repository checkout.
+- **Short Owned Root**: Each run creates a fresh `<system temp>/ab-feedback/<random-id>` directory, independent of checkout depth. This keeps Cursor's private SQLite path within the Windows budget. Evidence records the exact root; cleanup still requires its ownership marker and confirmed shutdown. Production cannot adopt a caller-supplied root.
 - **Review Slot Workspace**: The reviewer operates in a `review_slot` workspace (`mode: "review_slot"`), where the broker populates exact snapshot trees separate from the worker's mutable working tree.
 
 ### 3. Normative 4-Turn Lifecycle
@@ -57,7 +58,7 @@ The harness operates over existing public MCP tools and accepted Git runtime pat
 ### Independent Coordinator Checks
 Coordinator-owned offline checks run directly against the fixture repository:
 1. `node --test tests/math.test.js`: Validates function correctness after fix.
-2. `git status --porcelain`: Validates that only the three assigned source paths changed. Worker changes remain uncommitted; baseline tests and package hashes must match.
+2. `git status --porcelain`: Checks the expected three-path fixture outcome. This is a controlled test acceptance check, not a worker file allowlist. Worker authorization defaults to the entire project with root source coverage; only an explicit `write_scope` restricts it. Worker changes remain uncommitted; baseline tests and package hashes must match.
 
 ---
 
@@ -89,7 +90,15 @@ node --experimental-transform-types scripts/native-feedback.mjs --mock --large-f
 
 Coordinator observations verify the actual R1 findings ID receives UNAUTHORIZED through a foreign MCP bridge, and the final review slot exactly matches assigned S2 files. These checks do not prove the native reviewer read those files; native source-read receipts remain unknown.
 
-Primary integration pins the accepted readiness commit 3cf17bd5a8f3b3ce09e067521ab26e0e0839596c; the strict accepted-SHA guard remains in place. The earlier clone validation used 72ecb93 and is recorded separately.
+The current harness pins accepted runtime `0409fb1`; the strict accepted-SHA guard remains in place. Historical primary integration used `3cf17bd`, and earlier clone validation used `72ecb93`; their evidence is retained separately.
+
+The [2026-10-03 native checkpoint](native-smoke/2026-10-03-native-feedback.md)
+accepted all four turns on Windows with ZCode `GLM-5.3-Flash/max` and Cursor
+`grok-4.7-high/high`, preserving both native conversations and verifying S2 and
+findings delivery. The failed startup and long-path attempts remain recorded.
+The current focused gate passed 51 tests (17 harness, 34 policy restrictions).
+This continuity result is separate from a context-strategy benchmark and full
+native profile certification.
 
 Mock mode rejects any native worker/reviewer route before creating state or children.
 Primary acceptance: typecheck and the integrated full suite passed **649 tests**

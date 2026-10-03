@@ -38,12 +38,13 @@ function assertNoLinkAncestors(target) {
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 
 export const AUTHORIZED_PROVIDERS = Object.freeze(['zcode', 'antigravity', 'cursor', 'mock']);
 export const FORBIDDEN_PROVIDERS = Object.freeze(['claude', 'codex']);
-export const ACCEPTED_RUNTIME_SHA = '3cf17bd5a8f3b3ce09e067521ab26e0e0839596c';
+export const ACCEPTED_RUNTIME_SHA = '0409fb173a704c8fc849bb41ba05bbb1efda967d';
 export const INLINE_TOTAL_BYTE_CAP = 16 * 1024;
 export const DEFAULT_MAX_REPORT_BYTES = 8 * 1024 * 1024;
 
@@ -260,10 +261,12 @@ if (process.argv[2] === '--serve') {
         daemon.db.close();
       }
     }
+    process.exit(0);
   } else {
+    // main.ts starts asynchronously: importing it is not a daemon shutdown
+    // receipt. Keep the native server alive until its stdin-owned shutdown.
     await import(pathToFileURL(path.join(runtime, 'src/daemon/main.ts')).href);
   }
-  process.exit(0);
 }
 
 /**
@@ -439,7 +442,7 @@ export function runOfflineChecks(fixtureDir, opts = {}) {
     } catch { results.push({name:'baseline_git_unchanged',ok:false,error:'Original Git baseline unavailable'}); }
   }
 
-  // 2. Working tree file checks: only 3 allowed source files (math.js, calc.js, obsolete.js)
+  // 2. Controlled fixture outcome; this is not a worker authorization scope.
   try {
     const gitStatus = execFileSync('git', ['status', '--porcelain'], {
       cwd: fixtureDir,
@@ -450,20 +453,20 @@ export function runOfflineChecks(fixtureDir, opts = {}) {
       maxBuffer: 64 * 1024,
     });
     const lines = gitStatus.split(/\r?\n/).map(l => l.trimEnd()).filter(Boolean);
-    const allowedPaths = ['src/math.js', 'src/calc.js', 'src/obsolete.js'];
-    const invalidEdits = lines.filter(l => {
+    const expectedPaths = ['src/math.js', 'src/calc.js', 'src/obsolete.js'];
+    const unexpectedEdits = lines.filter(l => {
       const match = /^[ MADRCU?!]{1,2}\s+(.+)$/.exec(l);
       const filePath = (match ? match[1] : l.slice(2).trim()).replace(/\\/g, '/');
-      return !allowedPaths.includes(filePath);
+      return !expectedPaths.includes(filePath);
     });
-    const valid = invalidEdits.length === 0;
+    const valid = unexpectedEdits.length === 0;
     results.push({
-      name: 'working_tree_allowed_edits_only',
+      name: 'fixture_expected_changed_paths',
       ok: valid,
-      output: valid ? `Only allowed files edited:\n${gitStatus.trim()}` : `Disallowed files edited: ${invalidEdits.join(', ')}`,
+      output: valid ? `Expected fixture paths changed:\n${gitStatus.trim()}` : `Unexpected fixture changes: ${unexpectedEdits.join(', ')}`,
     });
   } catch (err) {
-    results.push({ name: 'working_tree_allowed_edits_only', ok: false, error: String(err) });
+    results.push({ name: 'fixture_expected_changed_paths', ok: false, error: String(err) });
   }
 
   // 3. Functional file checks: calc.js added, obsolete.js deleted
@@ -650,8 +653,10 @@ export function validateProductionConfig(taskConfig) {
 /**
  * Resolves and validates an exclusive owned harness root directory.
  */
-export function resolveAndValidateHarnessRoot(taskConfig, baseRepoRoot) {
-  const approvedBase = path.resolve(baseRepoRoot, '.state/native-feedback');
+export function resolveAndValidateHarnessRoot(taskConfig) {
+  // Keep native Cursor's owned SQLite store below its Windows path budget,
+  // independently of the coordinator checkout's depth.
+  const approvedBase = path.resolve(tmpdir(), 'ab-feedback');
   assertNoLinkAncestors(approvedBase);
   mkdirSync(approvedBase, { recursive: true });
 
@@ -679,8 +684,7 @@ export function resolveAndValidateHarnessRoot(taskConfig, baseRepoRoot) {
     root = candidate;
   } else {
     const token = randomUUID().slice(0, 8);
-    const dirName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${token}`;
-    root = path.join(approvedBase, dirName);
+    root = path.join(approvedBase, token);
   }
 
   assertNoLinkAncestors(root);
@@ -810,7 +814,7 @@ export async function runNativeFeedback(taskConfig = {}) {
   validateRouteConfig({ provider: task.provider, model: task.model, effort: task.effort }, 'worker', !task.mock);
   validateRouteConfig({ provider: task.reviewer_provider, model: task.reviewer_model, effort: task.reviewer_effort }, 'reviewer', !task.mock);
 
-  const { root, ownerToken, approvedBase } = resolveAndValidateHarnessRoot(task, repoRoot);
+  const { root, ownerToken, approvedBase } = resolveAndValidateHarnessRoot(task);
   const runtime = path.join(root, 'runtime');
   const state = path.join(root, 'state');
   const fixtureRepo = path.join(root, 'fixture-repo');
@@ -833,7 +837,7 @@ export async function runNativeFeedback(taskConfig = {}) {
 
   const db = openRegistryDb(path.join(state, 'registry.sqlite'));
   const coverage = {
-    source_prefixes: ['src', 'tests', 'package.json'],
+    source_prefixes: ['.'],
     non_source_prefixes: [],
     excluded_prefixes: ['.git', 'node_modules', '.state', 'dist'],
   };
@@ -872,7 +876,7 @@ export async function runNativeFeedback(taskConfig = {}) {
   registry.insertPolicyProfile(db, {
     policy_profile_id: 'worker',
     version: '1',
-    config: JSON.stringify({ access: 'workspace_write', write_scope: task.write_scope ?? ['src/math.js','src/calc.js','src/obsolete.js'] }),
+    config: JSON.stringify({ access: 'workspace_write', ...(task.write_scope === undefined ? {} : {write_scope: task.write_scope}) }),
   });
   registry.insertPolicyProfile(db, {
     policy_profile_id: 'reviewer',
@@ -1070,7 +1074,7 @@ export async function runNativeFeedback(taskConfig = {}) {
       ...(task.effort ? { effort: task.effort } : {}),
       role: 'worker',
       instructions:
-        'Implement the assigned bounded package in the fixture repository. Allowed edits ONLY: src/math.js, src/calc.js, src/obsolete.js. Delete src/obsolete.js, add src/calc.js with a helper, and introduce a benign defect in src/math.js divide function. Run node --test tests/math.test.js. Final report MUST fit 3000 characters: changed files, behavior, exact check results and limitations.',
+        'Implement the assigned bounded package in this harmless fixture repository. Worker authorization covers the entire project unless an explicit policy scope was configured; task paths never imply a file allowlist. For this controlled fixture delete src/obsolete.js, add src/calc.js with a helper, and deliberately introduce a testable defect in src/math.js divide function. Preserve package.json and tests/math.test.js as independent coordinator-owned controls; do not stage/commit/push, delegate, access credentials or invoke MCP. Run node --test tests/math.test.js and report its expected failure at this stage; the next turn will fix the defect. Final report MUST fit 3000 characters: changed files, behavior, exact check results and limitations.',
       workspace: { mode: 'current', workspace_id: 'fixture' },
       policy_profile_id: 'worker',
     });
@@ -1179,7 +1183,7 @@ export async function runNativeFeedback(taskConfig = {}) {
       ...(task.reviewer_effort ? { effort: task.reviewer_effort } : {}),
       role: 'reviewer',
       instructions:
-        'Independent read-only review. Read the required diff and source in this isolated target snapshot. Do not edit files, run mutating commands, invoke other agents/MCP, commit, or access credentials. Final report MUST fit 3000 characters: findings first, relative path/line, severity and reasoning; say if none found.',
+        'Independent read-only review. Read the required diff and source in this isolated target snapshot. Do not edit files, run mutating commands, invoke other agents/MCP, commit, or access credentials. Report in English starting with FINDINGS. Final report MUST fit 3000 characters: relative path/line, severity and reasoning; say if none found.',
       workspace: { mode: 'review_slot', workspace_id: 'review' },
       policy_profile_id: 'reviewer',
     });

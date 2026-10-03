@@ -98,8 +98,9 @@ compacting unchanged context; see the
 [compact review-diff checkpoint](native-smoke/2026-10-03-compact-review-diff.md).
 The [independent Windows UI checkpoint](native-smoke/2026-10-03-independent-ui.md)
 records the tracked launcher, independent GLM review and owned-process/HTTP
-verification. These portions are integrated in `codex/coordinator-efficiency`;
-the shared daemon/UI remains on `e1ef4e6` until a guarded idle update.
+verification. These portions were integrated and deployed as accepted
+`0409fb1` during the operator-authorized idle update; Beehive/DMP registrations
+and applied route settings were preserved. Further development remains isolated.
 The [integration checkpoint](native-smoke/2026-10-03-coordinator-efficiency.md)
 records the final full offline gate and the accepted/deferred boundary.
 
@@ -130,7 +131,7 @@ References: [Codex MCP connection](https://learn.chatgpt.com/docs/extend/mcp?sur
 | ZCode worker | `account:zai-individual-coding-plan/GLM-5.3-Flash`, effort `max` |
 | Selected ZCode reviews | `account:zai-individual-coding-plan/GLM-5.3`, effort `high` |
 | Antigravity worker/reviewer | Gemini 3.8 Flash medium/high by task complexity |
-| Cursor worker/reviewer | Explicit operator-selected model/effort (current worker: Luna/high) |
+| Cursor worker/reviewer | Explicit operator-selected model/effort from live routes (current pilot: `grok-4.7-high/high`) |
 | Final acceptance | Coordinator inspects actual diff, validates findings and runs appropriate offline gates |
 
 Start Plan is currently unavailable through the verified standalone account
@@ -204,7 +205,7 @@ Production adapters do not rely on reading Desktop chat caches for reports.
 | Runtime supervision | Local Windows ownership, descendant quiescence and guarded operator recovery are implemented; hosted execution domains and wider crash/platform certification remain open |
 | Preflight and binding | Observed native readiness and lifetime account/config binding completed; actual vendor account identity and mandatory native confinement remain unverified |
 | Workspaces/resources | Bounded output/report artifacts and broker-created Git worktrees implemented; total storage admission including staging remains |
-| Complete native feedback loop | Caller-independent four-turn harness implemented and verified offline; combined native R1/S1/R2/S2 continuity and cancellation during native tools remain open |
+| Complete native feedback loop | [Four-turn Windows native chain](native-smoke/2026-10-03-native-feedback.md) accepted for ZCode Flash/max + Cursor grok/high with both conversations retained; other native profiles and cancellation during native tools remain open |
 | Pilot operations | Setup, applied-settings visibility, project registration, idle restart and error details are implemented; fix newly observed multi-project/provider failures as they arise |
 | Acceptance closure | A01–A53 evidence by actual platform/provider/role/profile; retain unknown/failed statuses where no native proof exists |
 
