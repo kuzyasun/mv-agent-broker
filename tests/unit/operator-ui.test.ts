@@ -210,6 +210,61 @@ describe("operator settings UI service", () => {
     }
   });
 
+  it("saves route profile metadata and rejects reserved tags or write-access reviewers without backups", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "operator-ui-metadata-"));
+    roots.push(root);
+    const configPath = path.join(root, "operator.json");
+    writeFileSync(configPath, JSON.stringify(config()));
+    const service = await startOperatorUi({ configPath, port: 0 });
+    services.push(service);
+    const headers = { "x-operator-token": service.token };
+    const revision = ((await (await request(service, "GET", "/api/config", undefined, headers)).json()) as { revision: string }).revision;
+    const metadataRoute = {
+      ...config().routes[0],
+      display_name: "Economical worker",
+      enabled: false,
+      tags: ["default", "fast-track"],
+    };
+    const saved = await request(service, "PUT", "/api/config", {
+      revision,
+      config: { ...config(), routes: [metadataRoute] },
+    }, headers);
+    expect(saved.status).toBe(200);
+    const reloaded = await (await request(service, "GET", "/api/config", undefined, headers)).json() as { config: { routes: Array<Record<string, unknown>> } };
+    expect(reloaded.config.routes[0]).toMatchObject({ display_name: "Economical worker", enabled: false, tags: ["default", "fast-track"] });
+
+    const saveFailing = async (override: Record<string, unknown>) => {
+      const currentRevision = ((await (await request(service, "GET", "/api/config", undefined, headers)).json()) as { revision: string }).revision;
+      return request(service, "PUT", "/api/config", { revision: currentRevision, config: { ...config(), ...override } }, headers);
+    };
+    for (const routes of [
+      [{ ...metadataRoute, tags: ["multi-agent"] }],
+      [{ ...metadataRoute, tags: ["Big"] }],
+      [{ ...metadataRoute, tags: Array.from({ length: 13 }, (_, i) => `tag-${i}`) }],
+      [{ ...metadataRoute, enabled: "yes" }],
+      [{ ...metadataRoute, display_name: "  " }],
+    ]) {
+      const rejected = await saveFailing({ routes });
+      expect(rejected.status).toBe(400);
+    }
+    expect(readFileSync(configPath, "utf8")).toContain('"Economical worker"');
+    expect(readdirSync(root).filter(name => name.includes(".backup.")).length).toBe(1);
+
+    // The wizard bug cannot be reintroduced through JSON: a named reviewer or
+    // researcher profile needs a read-only policy; a read-only worker stays valid.
+    const withRole = (role: string, policy: string) => ({
+      policy_profiles: [...config().policy_profiles, { policy_profile_id: "policy-write", version: "1", config: { access: "workspace_write" } }],
+      routes: [{ ...config().routes[0], route_id: "route-role", role, policy_profile_id: policy }],
+    });
+    const rejectedReviewer = await saveFailing(withRole("reviewer", "policy-write"));
+    expect(rejectedReviewer.status).toBe(400);
+    expect(((await rejectedReviewer.json()) as { error: string }).error).toMatch(/role 'reviewer' requires a policy profile with access 'read_only'/);
+    const rejectedResearcher = await saveFailing(withRole("researcher", "policy-write"));
+    expect(rejectedResearcher.status).toBe(400);
+    const acceptedReadOnlyWorker = await saveFailing(withRole("worker", "policy-main"));
+    expect(acceptedReadOnlyWorker.status).toBe(200);
+  });
+
   it("rejects invalid updates without creating a backup or changing the raw file", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "operator-ui-unit-"));
     roots.push(root);

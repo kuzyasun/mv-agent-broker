@@ -50,6 +50,9 @@
       "effort": "high",
       "role": "worker",
       "policy_profile_id": "repo-a-worker",
+      "display_name": "Cursor economical worker",
+      "enabled": true,
+      "tags": ["default"],
       "native_subagents": { "mode": "off", "max_agents": 1 }
     },
     {
@@ -61,6 +64,9 @@
       "effort": "high",
       "role": "worker",
       "policy_profile_id": "repo-a-worker",
+      "display_name": "Cursor large-task worker",
+      "enabled": true,
+      "tags": ["large"],
       "native_subagents": { "mode": "prefer", "max_agents": 2 }
     },
     {
@@ -71,7 +77,10 @@
       "model": "gemini-3.8-flash",
       "effort": "medium",
       "role": "worker",
-      "policy_profile_id": "repo-a-worker"
+      "policy_profile_id": "repo-a-worker",
+      "display_name": "Antigravity medium worker",
+      "enabled": true,
+      "tags": []
     },
     {
       "route_id": "zcode-individual-worker",
@@ -81,7 +90,10 @@
       "model": "GLM-5.3-Flash",
       "effort": "max",
       "role": "worker",
-      "policy_profile_id": "repo-a-worker"
+      "policy_profile_id": "repo-a-worker",
+      "display_name": "ZCode Individual worker",
+      "enabled": true,
+      "tags": []
     },
     {
       "route_id": "zcode-individual-reviewer",
@@ -91,7 +103,10 @@
       "model": "GLM-5.3",
       "effort": "high",
       "role": "reviewer",
-      "policy_profile_id": "repo-a-reviewer"
+      "policy_profile_id": "repo-a-reviewer",
+      "display_name": "ZCode Individual reviewer",
+      "enabled": true,
+      "tags": []
     }
   ]
 }

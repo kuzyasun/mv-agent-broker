@@ -1,6 +1,7 @@
 # Project agent pools and tagged profiles
 
-Status: independently reviewed and accepted for implementation. Baseline: `7ea314c`.
+Status: implemented and accepted in the isolated development worktree. Baseline: `7ea314c`.
+Checkpoint: [agent pools acceptance](../native-smoke/2026-10-03-agent-pools.md).
 Operator direction: three role pools with tagged profiles; multiple simultaneous
 workers, including several sessions from one profile. Benchmarks are deferred.
 Disk accumulation control is the next separate portion.

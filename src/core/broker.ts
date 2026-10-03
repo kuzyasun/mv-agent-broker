@@ -133,7 +133,7 @@ import {
   type WorktreeProvisionJournal,
   type WorktreeProvisionStage,
 } from "../workspaces/worktree.ts";
-import type { OperatorRoute } from "../operator/config.ts";
+import { effectiveRouteTags, type OperatorRoute } from "../operator/config.ts";
 
 // ─── Request DTOs (API 0.2 §10) ─────────────────────────────────────────────
 
@@ -901,6 +901,26 @@ export class BrokerCore {
     }
   }
 
+  /**
+   * Named-profile enablement is a selection control for NEW named spawns,
+   * never provider/account revocation: raw explicit spawns keep their
+   * existing authorization and existing bound sessions continue. Called
+   * AFTER the committed replay lookup and BEFORE preflight/provisioning,
+   * and repeated inside the authoritative transaction after its own replay
+   * lookup — a route disabled mid-admission refuses instead of admitting.
+   */
+  private assertRouteAdmission(req: ResolvedSpawnRequest): void {
+    if (req.route_id === undefined) return;
+    const route = this.routes.get(req.route_id);
+    if (route && route.enabled === false) {
+      throw new BrokerError(
+        "INVALID_REQUEST",
+        `Route '${route.route_id}' is disabled; new sessions are refused.`,
+        { executionStarted: false },
+      );
+    }
+  }
+
   // ─── spawn (§6.1, §7.3) ───────────────────────────────────────────────────
 
   private resolveSpawnRequest(req: SpawnRequest): ResolvedSpawnRequest {
@@ -991,6 +1011,10 @@ export class BrokerCore {
     // accepted same-key replay NEVER re-runs readiness (§7.2 ordering).
     const fast = getIdempotencyRecord(this.db, namespace);
     if (fast) return this.replaySpawn(fast, payloadHash);
+    // Named-profile disablement gates NEW spawns only — AFTER the committed
+    // same-key replay above (an accepted IDLE/PROVISIONING spawn survives
+    // metadata edits and disablement), BEFORE fresh preflight/provisioning.
+    this.assertRouteAdmission(req);
     this.assertAdmissionOpen();
 
     // Step 3: non-authoritative preflight (no inference): account binding,
@@ -1015,9 +1039,14 @@ export class BrokerCore {
           return;
         }
         this.assertAdmissionOpen();
-        // Revalidate the candidate against fresh pure reads (§7.2): config
-        // that drifted during admission is rejected instead of admitting the
-        // stale preflight observation. No external process runs here.
+        // Metadata is excluded from the request hash, so the replay lookup
+        // above already covered accepted work; this fresh named-profile
+        // admission repeats the enablement check inside the authoritative
+        // transaction, then revalidates the preflight candidate against
+        // fresh pure reads (§7.2): config that drifted during admission is
+        // rejected instead of admitting the stale preflight observation.
+        // No external process runs here.
+        this.assertRouteAdmission(req);
         this.revalidateSpawnCandidate(req, candidate);
 
         const created = this.createProvisioningSession(coordinatorId, req, payloadHash, candidate);
@@ -3222,7 +3251,9 @@ export class BrokerCore {
         kind: "route",
         id: route.route_id,
         route_id: route.route_id,
-        display_name: route.route_id,
+        display_name: route.display_name ?? route.route_id,
+        enabled: route.enabled !== false,
+        tags: effectiveRouteTags(route),
         project_id: route.project_id,
         provider: route.provider,
         account_profile_id: route.account_profile_id,

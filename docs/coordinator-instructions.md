@@ -6,8 +6,19 @@ concise. The coordinator owns decomposition, integration and final acceptance.
 1. Call `broker_status` first and require `daemon_state: READY`. Then call
    `agents_list` for the exact selected allowed `project_id`, following every
    `next_cursor` until it is `null`; never choose from a partial page. Choose
-   the exact `kind: route` entry with the desired role and model/effort, and
-   record its `route_id`. Registered adapters/account labels do not establish
+   the exact `kind: route` entry with the desired role, model/effort, and
+   tags, and record its `route_id`. Route entries carry the operator's
+   readable `display_name`, an `enabled` flag, and effective `tags`
+   (including the derived `multi-agent` tag); they are selection hints, not
+   permissions, and never appear in worker prompts. Skip `enabled: false`
+   entries: a disabled profile refuses new spawns before any provider work,
+   while its existing sessions keep running. Several sessions may share one
+   profile on distinct physical workspaces; the operator's pools constrain
+   your selection, they do not add a new sandbox. Respect the two separate
+   levels of parallelism: broker-level simultaneous worker sessions, and the
+   vendor-internal native subagents a route's `native_subagents` preference
+   requests — the latter stays advisory and unverified.
+   Registered adapters/account labels do not establish
    available vendor quota or a different vendor login. Respect known
    exhausted/failed routes; record an observed failure before explicitly
    choosing an allowed alternative. Do not silently escalate models, effort,
@@ -32,7 +43,9 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    old 15-minute default. Quiet output alone is not evidence of a hung agent;
    ZCode may buffer output until completion. Use event deltas and the UI's last
    observed activity/deadline before deciding whether cancellation is needed.
-3. Use the single-agent route for small work. A large-task route may request native
+3. Use the single-agent route for small work. A large-task route — usually
+   the one carrying the operator's `large` tag or the derived `multi-agent`
+   tag — may request native
    subagents for independent pieces; the configured model/effort and any child
    count are operator-selected preferences, not proof of enforcement. Native
    subagent smoke evidence exists for Antigravity and Cursor; see

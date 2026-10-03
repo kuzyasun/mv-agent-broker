@@ -172,20 +172,36 @@ autostart scheduler, so a Windows reboot terminates the process. The interactive
 foreground `ui` command remains available whenever direct console logging or
 ephemeral execution is desired.
 
-The Profiles section edits routes with explicit project, configured account,
-role, policy, model, effort, and advisory native-subagent settings. Route IDs
-are editable profile names: the fields in each profile select its behavior.
-A `*_worker` name normally describes one agent, `*_large` is a convention
-that encourages native children, and `*_reviewer` describes an independent
-review; explicit policy still controls permissions. A model refresh is an
-explicit metadata-only action and supports manual model entry when a provider
-is unavailable. Observed catalog timestamps are informational:
-they do not prove authentication or quota. Use **New project wizard** to add
-another repository. Browse local folders, select the repository folder, choose
-file coverage and worker permissions, and copy agent profiles from an existing
-project. Models, efforts, accounts, and native-subagent preferences are copied;
-reviewers receive a separate read-only policy. You can also start without
-profiles and add them afterwards.
+The Profiles page shows three pools — Workers, Reviewers, Researchers — holding
+this project's agent profiles. Each profile card has a readable name, an
+enabled switch, provider/account/model/effort, an explicit policy, tags, and
+advisory native-subagent settings. Add profiles per pool; duplicate, delete,
+move a profile to another role, or change its project at any time — a
+duplicate always receives a new technical route ID. Disabled profiles stay
+visible and editable: the broker refuses new sessions started by route ID
+from them, existing sessions keep working, and replaying an accepted
+idempotency key still returns its accepted session. Disabling is a named
+profile selection control, not provider or account revocation. Route IDs are
+the internal MCP binding and stay in each card's advanced details. A model
+refresh is an explicit metadata-only action and supports manual model entry
+when a provider is unavailable. Observed catalog timestamps are
+informational: they do not prove authentication or quota. Use **New project
+wizard** to add another repository. Browse local folders, select the
+repository folder, choose file coverage and worker permissions, and copy
+agent profiles from an existing project. Readable names, tags, enablement,
+models, efforts, accounts, and native-subagent preferences are copied to new
+route IDs; reviewer and researcher copies receive the separate read-only
+policy. You can also start without profiles and add them afterwards.
+
+Tags are coordinator selection hints, never permissions: toggle the
+`default` and `large` chips or enter custom lower-case tags (letters,
+numbers, hyphen, underscore; 1-32 characters each, at most 12 stored).
+Several profiles may carry `default`; it is a preference, not an exclusive
+choice or a concurrency cap. The `multi-agent` tag is derived from the
+native-subagents mode (`prefer` or `auto`) and shown for context in the UI
+and discovery, but it cannot be stored or toggled — saving rejects it. The
+tag filter includes the derived tag; filtering never hides the other pools'
+Add-profile controls and disabled cards stay editable.
 
 The recommended coverage is the whole project folder: `source_prefixes: ["."]`
 covers every current and future top-level file and folder, except generated
@@ -239,13 +255,22 @@ otherwise it points at the available bridge source. Start the daemon before
 attaching. Reload a client after copying a snippet if its bridge process is
 already running; this reconnects the bridge but does not reload daemon settings.
 
-Use the project selector to filter profiles. Duplicate a profile to create a
-different model/effort or review preset, then give it a unique ID using letters,
-numbers, dot, underscore, or hyphen. Select permissions separately from the
-role; choosing `reviewer` does not change a shared worker policy. The selected
-policy's access is displayed, while the wizard creates a separate read-only
-review policy. Changing shared bound policies requires new IDs/versions through
-configuration rather than changing privileges of old sessions.
+Use the project selector to filter profiles, and the tag filter to narrow by
+an effective tag including the derived `multi-agent` tag. Duplicate a profile
+to create a different model/effort or review preset, give it a readable name
+and a unique technical ID using letters, numbers, dot, underscore, or hyphen.
+Select permissions separately from the role: choosing `reviewer` does not
+change a shared worker policy, while the role switch and the wizard give
+reviewer and researcher profiles only read-only policy choices — an already
+suitable read-only policy is retained, otherwise the single unambiguous
+read-only policy is selected, otherwise the choice stays explicitly
+unresolved. Config validation rejects a named reviewer or researcher profile
+with a non-read-only policy, so saving through JSON cannot silently
+reintroduce that mistake; workers may intentionally be read-only. The
+selected policy's access is displayed, while the wizard creates a separate
+read-only review policy. Changing shared bound policies requires new
+IDs/versions through configuration rather than changing privileges of old
+sessions.
 
 Click **Refresh model catalogue**, then choose from the **Model** dropdown.
 **Search models** filters by part of a model ID, independently of the selected
@@ -298,10 +323,39 @@ files on disk cannot change code already loaded by that process.
 ## Accounts, roles, and routes
 
 Each account is a provider binding (`provider`, quota scope, and CLI-owned
-`auth_mode`). A route selects one account, model, effort, role, policy profile,
-and project. The caller supplies the project, instructions, workspace, and
+`auth_mode`). A route is one project agent profile: an account, model, effort,
+role, policy profile, and project, plus optional coordinator-selection
+metadata — `display_name` (readable name; absent shows the ID), `enabled`
+(omitted means enabled), and `tags` (at most 12 stored lower-case tokens of
+letters, numbers, hyphen, underscore, beginning with a letter or number).
+`default` and `large` are ordinary hints; several profiles may carry
+`default`. The reserved `multi-agent` tag is derived from
+`native_subagents.mode` (`prefer` or `auto`), published with the effective
+tags, and rejected if stored. Tags never change permissions, model, effort,
+or deadlines, and metadata is never appended to worker prompts — the
+coordinator consumes it. Discovery publishes name, enabled flag, and
+effective tags in every route entry, including disabled entries, so
+selection works from live metadata.
+
+Setting `"enabled": false` refuses NEW spawns that select the route by
+`route_id` with `INVALID_REQUEST` and `execution_started: false`, checked
+after the committed idempotency replay and before any preflight,
+provisioning, or inference, and repeated inside the authoritative admission
+transaction. It is a named-profile selection control, not provider or
+account revocation: project authorization and the route/project match are
+checked first (a foreign-project route stays `UNAUTHORIZED`), existing bound
+sessions continue, raw explicit spawns without `route_id` keep their
+existing validation, and replaying an accepted key returns the accepted
+session unchanged — an open PROVISIONING window still completes. Metadata
+edits never invalidate a committed same-key replay, while genuinely
+conflicting arguments still conflict.
+
+The caller supplies the project, instructions, workspace, and
 idempotency key. `agents_list` exposes routes with the same bounded paging as
-the other discovery entries.
+the other discovery entries. Multiple sessions may run from the same profile
+on distinct physical workspaces — a profile is not an execution slot; the
+existing concurrency, quota-scope, session-cap, and physical checkout lease
+guards remain in effect.
 
 Account labels and quota scopes do not select a different vendor login or
 subscription plan. They must reflect the CLI account actually in use. ZCode
@@ -314,9 +368,11 @@ detached worktree. `native_subagents` is advisory prompt text only: it cannot
 guarantee child count, child model, or permissions. The default is one broker
 session with no native delegation preference.
 
-To change a route, edit its JSON `model`, `effort`, or `native_subagents` and
-restart the process that owns the settings: direct stdio mode itself, or the
-idle shared daemon. New sessions use the new route; existing sessions keep
+To change a route's behavior, edit its JSON `model`, `effort`, or
+`native_subagents` and restart the process that owns the settings: direct
+stdio mode itself, or the idle shared daemon. Name, enabled flag, and tags
+are selection metadata that also take effect on restart. New sessions use
+the new route; existing sessions keep
 their immutable provider, account, model, effort, role, policy, and workspace
 settings. A raw `agent_session_spawn` may select `route_id`, or may continue
 using the existing explicit provider/account/model/role/policy fields. Mixing
@@ -484,6 +540,10 @@ Use [these short coordinator instructions](coordinator-instructions.md) in the
 client's project guidance to establish the worker/reviewer workflow.
 
 Page `agents_list` for the project and choose an entry with `kind: "route"`.
+Entries carry the readable `display_name`, the `enabled` flag, and the
+effective `tags` (including the derived `multi-agent` tag), including
+disabled entries so selection can avoid them up front; a disabled profile
+refuses new spawns with `INVALID_REQUEST` even though it stays discoverable.
 For example, call `agent_session_spawn` with:
 
 ```json

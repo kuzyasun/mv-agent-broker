@@ -90,6 +90,37 @@ export interface OperatorRoute {
   role: "worker" | "reviewer" | "researcher";
   policy_profile_id: string;
   native_subagents?: NativeSubagents;
+  /** Readable profile name; omitted shows the route ID (UI and discovery). */
+  display_name?: string;
+  /**
+   * Named-profile selection control for NEW spawns; omitted means enabled.
+   * Existing bound sessions are unaffected and committed replays still
+   * return their accepted sessions; this is not provider/account revocation.
+   */
+  enabled?: boolean;
+  /** Coordinator selection hints; never permissions, model, effort, deadlines. */
+  tags?: string[];
+}
+
+/** Stored-tag budget; the derived tag may add a 13th effective entry. */
+export const MAX_ROUTE_TAGS = 12;
+
+/**
+ * Reserved: derived from `native_subagents.mode` (prefer/auto), never stored.
+ * The tag does not distinguish prefer/auto — the native_subagents field does.
+ */
+export const DERIVED_MULTI_AGENT_TAG = "multi-agent";
+
+const ROUTE_TAG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+
+/**
+ * Effective coordinator-visible tags: stored tags plus the derived reserved
+ * tag when native delegation is preferred or agent-decided. The derived tag
+ * is computed at the boundary (discovery/UI), never persisted.
+ */
+export function effectiveRouteTags(route: Pick<OperatorRoute, "tags" | "native_subagents">): string[] {
+  const mode = route.native_subagents?.mode;
+  return [...(route.tags ?? []), ...(mode === "prefer" || mode === "auto" ? [DERIVED_MULTI_AGENT_TAG] : [])];
 }
 
 export interface OperatorConfig {
@@ -298,6 +329,36 @@ export function validateOperatorConfig(input: unknown, baseDir = process.cwd()):
     if (account.provider !== route.provider) fail(`route ${route.route_id} provider does not match its account`);
     if (!policyIds.has(route.policy_profile_id)) fail(`route ${route.route_id} references unknown policy '${route.policy_profile_id}'`);
     if (!["worker", "reviewer", "researcher"].includes(route.role)) fail(`route ${route.route_id} has an invalid role`);
+    if (route.display_name !== undefined) nonEmpty(route.display_name, `route ${route.route_id}.display_name`);
+    if (route.enabled !== undefined && typeof route.enabled !== "boolean") fail(`route ${route.route_id}.enabled must be a boolean`);
+    if (route.tags !== undefined) {
+      if (!Array.isArray(route.tags) || route.tags.some(tag => typeof tag !== "string")) {
+        fail(`route ${route.route_id}.tags must be an array of strings`);
+      }
+      const seen = new Set<string>();
+      for (const tag of route.tags) {
+        if (!ROUTE_TAG_PATTERN.test(tag)) {
+          fail(`route ${route.route_id}.tags entries must be 1-32 lower-case letters, numbers, hyphen, or underscore, beginning with a letter or number`);
+        }
+        if (tag === DERIVED_MULTI_AGENT_TAG) {
+          fail(`route ${route.route_id}.tags must not store the reserved '${DERIVED_MULTI_AGENT_TAG}' tag; set native_subagents mode prefer or auto instead`);
+        }
+        if (seen.has(tag)) fail(`route ${route.route_id}.tags has duplicate tag '${tag}'`);
+        seen.add(tag);
+      }
+      if (seen.size > MAX_ROUTE_TAGS) {
+        fail(`route ${route.route_id}.tags must hold at most ${MAX_ROUTE_TAGS} stored tags (the derived '${DERIVED_MULTI_AGENT_TAG}' tag is additional)`);
+      }
+    }
+    if (route.role !== "worker") {
+      const policy = policies.find(p => p.policy_profile_id === route.policy_profile_id);
+      const access = policy && policy.config && typeof policy.config === "object" && !Array.isArray(policy.config)
+        ? (policy.config as Record<string, unknown>).access
+        : undefined;
+      if (access !== "read_only") {
+        fail(`route ${route.route_id} role '${route.role}' requires a policy profile with access 'read_only'`);
+      }
+    }
     if (route.effort !== undefined && route.effort !== null) nonEmpty(route.effort, `route ${route.route_id}.effort`);
     if (route.native_subagents !== undefined) {
       const preference = route.native_subagents;

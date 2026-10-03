@@ -10,6 +10,7 @@
   const errorDetails = new Map();
   const catalogues = new Map();
   let projectFilter = "";
+  let tagFilter = "";
   let dirty = false;
   const advancedDirty = new Set();
   const defaultLimits = { globalUnfinishedTurns: 3, quotaScopeUnfinishedTurns: 1, hardTurnDeadlineMs: 3_600_000, maxReviewDiffBytes: 33_554_432 };
@@ -479,10 +480,72 @@
     auto: "Agent decides",
   };
 
+  // Project agent profiles are grouped into three role pools. Pool, name,
+  // enabled flag and tags are coordinator selection metadata only: they never
+  // change permissions, model, effort, or deadlines.
+  const ROLES = ["worker", "reviewer", "researcher"];
+  const ROLE_LABELS = { worker: "Workers", reviewer: "Reviewers", researcher: "Researchers" };
+  const ROLE_EXPLAIN = {
+    worker: "Implement bounded tasks. The selected policy decides access; a read-only worker is intentional and allowed.",
+    reviewer: "Independent review sessions in review slots. Only read-only policies are selectable.",
+    researcher: "Read-only investigation and source mapping. Only read-only policies are selectable.",
+  };
+  const MULTI_AGENT_TAG = "multi-agent";
+  const MAX_STORED_TAGS = 12;
+  const TAG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+  const derivedMultiAgent = (route) => ["prefer", "auto"].includes(route.native_subagents && route.native_subagents.mode);
+  const effectiveTags = (route) => [...(route.tags || []), ...(derivedMultiAgent(route) ? [MULTI_AGENT_TAG] : [])];
+  const allTags = () => [...new Set((state.routes || []).filter(route => !projectFilter || route.project_id === projectFilter).flatMap(effectiveTags))].sort((a, b) => a.localeCompare(b));
+  const readOnlyPolicies = () => (state.policy_profiles || []).filter((p) => p.config && p.config.access === "read_only");
+  const policyAccess = (route) => {
+    const policy = selectedPolicy(route);
+    return policy && policy.config && policy.config.access || "not set";
+  };
+
   function routeSummary(route) {
     const mode = route.native_subagents && route.native_subagents.mode || "off";
     const effort = route.effort || "No override";
-    return `Provider ${route.provider || "not set"} · model ${route.model || "not set"} · role ${route.role || "not set"} · mode ${nativeModeLabels[mode] || mode} · effort ${effort}`;
+    const tags = effectiveTags(route);
+    return `Provider ${route.provider || "not set"} · model ${route.model || "not set"} · role ${route.role || "not set"} · mode ${nativeModeLabels[mode] || mode} · effort ${effort}${tags.length ? ` · tags ${tags.join(", ")}` : ""}`;
+  }
+
+  /** Reviewer/researcher profiles list read-only policies only. */
+  function policyChoicesFor(role) {
+    return role === "worker" ? (state.policy_profiles || []) : readOnlyPolicies();
+  }
+
+  /**
+   * Role changes never widen reviewer/researcher access: keep an already
+   * suitable read-only policy, auto-select one unambiguous read-only policy,
+   * or leave the choice explicitly unresolved instead of guessing.
+   */
+  function adaptPolicyToRole(route) {
+    if (route.role === "worker" || policyAccess(route) === "read_only") return;
+    const options = readOnlyPolicies();
+    if (options.length === 1) {
+      route.policy_profile_id = options[0].policy_profile_id;
+      status(`Selected the only read-only policy ${route.policy_profile_id} for this ${route.role} profile.`, "success");
+    } else {
+      route.policy_profile_id = "";
+    }
+  }
+
+  function tagListError(tags) {
+    const seen = new Set();
+    for (const tag of tags) {
+      if (typeof tag !== "string" || !TAG_PATTERN.test(tag)) {
+        return `Tag '${tag}' must be 1-32 lower-case letters, numbers, hyphen, or underscore, beginning with a letter or number.`;
+      }
+      if (tag === MULTI_AGENT_TAG) {
+        return `'${MULTI_AGENT_TAG}' is derived from the native-subagents mode and cannot be stored as a tag.`;
+      }
+      if (seen.has(tag)) return `Duplicate tag '${tag}'.`;
+      seen.add(tag);
+    }
+    if (seen.size > MAX_STORED_TAGS) {
+      return `At most ${MAX_STORED_TAGS} stored tags are allowed; the derived '${MULTI_AGENT_TAG}' tag is additional.`;
+    }
+    return null;
   }
 
   function markDirty() {
@@ -534,187 +597,378 @@
     return label;
   }
 
-  function renderRoutes() {
-    const container = $("routes");
-    container.replaceChildren();
-    (state.routes || []).forEach((route, index) => {
-      if (projectFilter && route.project_id !== projectFilter) return;
-      const card = make("article");
-      card.className = "route-card";
-      const header = make("header");
-      const title = make("h3", route.route_id || "Unnamed route");
-      header.append(title);
-      const actions = make("div");
-      actions.className = "route-actions";
-      const refresh = make("button", "Refresh model catalogue");
-      refresh.className = "button secondary";
-      refresh.type = "button";
-      refresh.addEventListener("click", async () => {
-        await withButtonBusy(refresh, async () => {
-          status(`Reading pinned ${route.provider} metadata…`);
-          try {
-            const body = await api("/api/models/refresh", { method: "POST", body: JSON.stringify({ provider: route.provider }) });
-            const observed = body.observation || { models: [], source: "unknown", observed_at: NaN, detail: null };
-            catalogues.set(route.provider, { options: Array.isArray(body.options) ? body.options : [], observation: observed });
-            status(`${observed.models.length} ${route.provider} entries · ${observed.source} · ${displayTimestamp(observed.observed_at) ?? "unknown"}. ${observed.detail || "Catalogue only; authentication and quota are unknown."}`, observed.models.length ? "success" : "error");
-            renderRoutes();
-          } catch (error) {
-            status(error.message, "error");
-          }
-        });
-      });
-      const duplicate = make("button", "Duplicate");
-      duplicate.className = "button secondary";
-      duplicate.type = "button";
-      duplicate.addEventListener("click", () => {
-        const copy = JSON.parse(JSON.stringify(route));
-        copy.route_id = uniqueId(route.route_id || "route");
-        state.routes.splice(index + 1, 0, copy);
-        markDirty();
-        renderRoutes();
-      });
-      const remove = make("button", "Delete");
-      remove.className = "button danger";
-      remove.type = "button";
-      remove.addEventListener("click", () => {
-        state.routes.splice(index, 1);
-        markDirty();
-        renderRoutes();
-      });
-      actions.append(refresh, duplicate, remove);
-      header.append(actions);
-      card.append(header);
-      const summary = make("p", routeSummary(route));
-      summary.className = "route-summary";
-      card.append(summary);
+  function visibleRoutes(role) {
+    return (state.routes || []).filter((route) => route.role === role
+      && (!projectFilter || route.project_id === projectFilter)
+      && (!tagFilter || effectiveTags(route).includes(tagFilter)));
+  }
 
-      const fields = make("div");
-      fields.className = "field-grid";
-      fields.append(textField("Route ID / visible label", route.route_id, (value) => setField(route, "route_id", value)));
-      fields.append(selectField("Project", route.project_id, (state.projects || []).map((project) => ({ value: project.project_id, label: project.display_name })), (value) => setField(route, "project_id", value)));
-      const providers = [...new Set((state.accounts || []).map(account => account.provider))];
-      fields.append(selectField("Provider", route.provider, providers.map((value) => ({ value, label: value })), (value) => {
-        setField(route, "provider", value);
-        const accounts = state.accounts.filter(account => account.provider === value);
-        route.account_profile_id = accounts.length === 1 ? accounts[0].account_profile_id : "";
-        renderRoutes();
-      }));
-      fields.append(selectField("Configured account", route.account_profile_id, (state.accounts || []).filter((account) => account.provider === route.provider).map((account) => ({ value: account.account_profile_id, label: `${account.account_profile_id} · ${account.provider}` })), (value) => setField(route, "account_profile_id", value)));
-      fields.append(selectField("Role", route.role, ["worker", "reviewer", "researcher"].map((value) => ({ value, label: value })), (value) => {
-        setField(route, "role", value);
-        renderRoutes();
-      }));
-      fields.append(selectField("Explicit policy", route.policy_profile_id, (state.policy_profiles || []).map((policy) => ({ value: policy.policy_profile_id, label: `${policy.policy_profile_id} · ${policy.config && policy.config.access || "access not set"}` })), (value) => {
-        setField(route, "policy_profile_id", value);
-        renderRoutes();
-      }));
-      const policy = selectedPolicy(route);
-      const accessField = textField("Selected policy access", policy && policy.config && policy.config.access || "not set", () => {});
-      accessField.querySelector("input").readOnly = true;
-      fields.append(accessField);
+  function addProfile(role) {
+    const project = find(state.projects, "project_id", projectFilter) || state.projects[0];
+    const account = state.accounts[0];
+    if (!project || !account) {
+      status("Add a project and an account before adding a profile.", "error");
+      return;
+    }
+    let policy = "";
+    if (role === "worker") {
+      const projectWorker = state.routes.find(route => route.project_id === project.project_id
+        && route.role === "worker" && policyAccess(route) === "workspace_write");
+      const writePolicies = state.policy_profiles.filter(policy => policy.config && policy.config.access === "workspace_write");
+      policy = projectWorker ? projectWorker.policy_profile_id
+        : writePolicies.length === 1 ? writePolicies[0].policy_profile_id : "";
+    } else {
+      const options = readOnlyPolicies();
+      if (options.length === 1) policy = options[0].policy_profile_id;
+    }
+    state.routes.push({
+      route_id: uniqueId("route"),
+      project_id: project.project_id,
+      provider: account.provider,
+      account_profile_id: account.account_profile_id,
+      model: "manual-model",
+      role,
+      policy_profile_id: policy,
+      enabled: true,
+      tags: [],
+      native_subagents: { mode: "off", max_agents: 1 },
+    });
+    const filtered = Boolean(tagFilter);
+    tagFilter = "";
+    markDirty();
+    renderRoutes();
+    status(`Added ${role} profile.${filtered ? " Cleared the tag filter to show it." : ""} Configure its model and policy, then save.`, "success");
+  }
 
-      const pickerHelp = make("p", catalogueSummary(route.provider));
-      pickerHelp.className = "catalogue-summary";
-      fields.append(pickerHelp);
-      const pickerMessage = catalogueMessage(route.provider);
-      if (pickerMessage) {
-        const message = make("p", pickerMessage);
-        message.className = "catalogue-message";
-        fields.append(message);
-      }
-      if (route.provider === "antigravity") {
-        const explanation = make("p", "Antigravity entries are grouped by base model; observed -low, -medium, -high, and -max suffixes become Effort choices.");
-        explanation.className = "catalogue-help";
-        fields.append(explanation);
-      }
-      const searchLabel = make("label");
-      searchLabel.append(make("span", "Search models"));
-      const search = document.createElement("input");
-      search.type = "search";
-      search.placeholder = "Filter by model ID";
-      search.value = modelSearches.get(route) || "";
-      searchLabel.append(search);
-      fields.append(searchLabel);
-      const modelLabel = make("label");
-      modelLabel.append(make("span", "Model"));
-      const model = document.createElement("select");
-      model.setAttribute("aria-describedby", `catalogue-summary-${index}`);
-      populateModelSelect(model, route, search.value);
-      model.addEventListener("change", () => {
-        route.model = model.value;
-        adjustEffortForModel(route);
+  function tagEditor(route, onTagsChanged) {
+    const wrap = make("div");
+    wrap.className = "tag-editor";
+    const chips = make("div");
+    chips.className = "tag-chips";
+    chips.append(make("span", "Tags"));
+    for (const chipName of ["default", "large"]) {
+      const active = (route.tags || []).includes(chipName);
+      const chip = make("button", chipName);
+      chip.type = "button";
+      chip.className = `tag-chip${active ? " active" : ""}`;
+      chip.setAttribute("aria-pressed", String(active));
+      chip.title = "A coordinator selection preference; default is not exclusive and never a concurrency cap.";
+      chip.addEventListener("click", () => {
+        const tags = new Set(route.tags || []);
+        if (tags.has(chipName)) tags.delete(chipName);
+        else tags.add(chipName);
+        const nextTags = [...tags];
+        const error = tagListError(nextTags);
+        if (error) { status(error, "error"); return; }
+        route.tags = nextTags;
         markDirty();
         renderRoutes();
       });
-      modelLabel.append(model);
-      fields.append(modelLabel);
-      pickerHelp.id = `catalogue-summary-${index}`;
-      search.addEventListener("input", () => {
-        modelSearches.set(route, search.value);
-        populateModelSelect(model, route, search.value);
-      });
-      const manual = make("details");
-      manual.className = "manual-model";
-      if (!observedModel(route.provider, route.model)) manual.open = true;
-      manual.append(make("summary", "Enter a model ID manually"));
-      const manualLabel = make("label");
-      manualLabel.append(make("span", "Manual model ID"));
-      const manualInput = document.createElement("input");
-      manualInput.value = route.model || "";
-      manualInput.addEventListener("input", () => {
-        if (route.model !== manualInput.value) {
-          route.model = manualInput.value;
-          markDirty();
-          summary.textContent = routeSummary(route);
+      chips.append(chip);
+    }
+    if (derivedMultiAgent(route)) {
+      const derived = make("span", MULTI_AGENT_TAG);
+      derived.className = "tag-chip active derived";
+      derived.title = "Derived from the native-subagents mode; edit that control to change it. It cannot be stored.";
+      chips.append(derived);
+    }
+    wrap.append(chips);
+    const customLabel = make("label");
+    customLabel.className = "tag-input";
+    customLabel.append(make("span", "Custom tags (comma separated)"));
+    const customHelp = make("span", "Lower-case letters, numbers, hyphen, or underscore; 1-32 characters; at most 12 stored tags. Tags are coordinator hints only and never change permissions, model, effort, or deadlines.");
+    customHelp.className = "field-help";
+    customLabel.append(customHelp);
+    const custom = document.createElement("input");
+    custom.type = "text";
+    custom.value = (route.tags || []).join(", ");
+    custom.placeholder = "e.g. fast-track, windows-only";
+    custom.addEventListener("input", () => {
+      const tags = custom.value.split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
+      // Keep the actual draft, including invalid input, so Save cannot claim
+      // success while silently keeping the previous tags. Do not replace the
+      // editing card on input: that would interrupt typing and lose focus.
+      route.tags = tags;
+      markDirty();
+      const error = tagListError(tags);
+      custom.setAttribute("aria-invalid", String(Boolean(error)));
+      if (error) status(error, "error");
+      for (const chip of chips.querySelectorAll("button")) {
+        const active = tags.includes(chip.textContent);
+        chip.className = `tag-chip${active ? " active" : ""}`;
+        chip.setAttribute("aria-pressed", String(active));
+      }
+      onTagsChanged();
+      renderTagFilter();
+    });
+    customLabel.append(custom);
+    wrap.append(customLabel);
+    return wrap;
+  }
+
+  function routeCard(route) {
+    const index = Math.max(0, (state.routes || []).indexOf(route));
+    const card = make("article");
+    card.className = "route-card" + (route.enabled === false ? " is-disabled" : "");
+    const header = make("header");
+    const titleWrap = make("div");
+    titleWrap.className = "route-title";
+    const profileTitle = make("h3", route.display_name || route.route_id);
+    titleWrap.append(profileTitle);
+    const badge = make("span", route.enabled === false ? "Disabled" : "Enabled");
+    badge.className = `pill ${route.enabled === false ? "pill-off" : "pill-on"}`;
+    titleWrap.append(badge);
+    header.append(titleWrap);
+    const actions = make("div");
+    actions.className = "route-actions";
+    const refresh = make("button", "Refresh model catalogue");
+    refresh.className = "button secondary";
+    refresh.type = "button";
+    refresh.addEventListener("click", async () => {
+      await withButtonBusy(refresh, async () => {
+        status(`Reading pinned ${route.provider} metadata…`);
+        try {
+          const body = await api("/api/models/refresh", { method: "POST", body: JSON.stringify({ provider: route.provider }) });
+          const observed = body.observation || { models: [], source: "unknown", observed_at: NaN, detail: null };
+          catalogues.set(route.provider, { options: Array.isArray(body.options) ? body.options : [], observation: observed });
+          status(`${observed.models.length} ${route.provider} entries · ${observed.source} · ${displayTimestamp(observed.observed_at) ?? "unknown"}. ${observed.detail || "Catalogue only; authentication and quota are unknown."}`, observed.models.length ? "success" : "error");
+          renderRoutes();
+        } catch (error) {
+          status(error.message, "error");
         }
       });
-      manualInput.addEventListener("change", () => {
-        adjustEffortForModel(route);
-        renderRoutes();
-      });
-      manualLabel.append(manualInput);
-      manual.append(manualLabel);
-      fields.append(manual);
-      const known = observedModel(route.provider, route.model);
-      const effortValues = effortValuesFor(route);
-      const currentEffort = route.effort ?? "";
-      if (!effortValues.includes(currentEffort)) effortValues.push(currentEffort);
-      fields.append(selectField("Effort (parent/model limits apply)", currentEffort, effortValues.map((value) => ({ value, label: value || "No override" })), (value) => {
-        setField(route, "effort", value || null);
-        renderRoutes();
-      }));
-      const nativeMode = route.native_subagents && route.native_subagents.mode || "off";
-      fields.append(selectField("Native subagents (advisory)", nativeMode, Object.entries(nativeModeLabels).map(([value, label]) => ({ value, label })), (value) => {
-        route.native_subagents = value === "auto"
-          ? { mode: "auto" }
-          : { mode: value, max_agents: route.native_subagents && route.native_subagents.max_agents || 1 };
+    });
+    const duplicate = make("button", "Duplicate");
+    duplicate.className = "button secondary";
+    duplicate.type = "button";
+    duplicate.title = "Copies name, tags, enablement and settings with a new technical route ID.";
+    duplicate.addEventListener("click", () => {
+      const copy = JSON.parse(JSON.stringify(route));
+      copy.route_id = uniqueId(route.route_id || "route");
+      state.routes.splice(state.routes.indexOf(route) + 1, 0, copy);
+      markDirty();
+      renderRoutes();
+    });
+    const remove = make("button", "Delete");
+    remove.className = "button danger";
+    remove.type = "button";
+    remove.addEventListener("click", () => {
+      state.routes.splice(state.routes.indexOf(route), 1);
+      markDirty();
+      renderRoutes();
+    });
+    actions.append(refresh, duplicate, remove);
+    header.append(actions);
+    card.append(header);
+    const summary = make("p", routeSummary(route));
+    summary.className = "route-summary";
+    card.append(summary);
+
+    const fields = make("div");
+    fields.className = "field-grid";
+    const enabledLabel = make("label");
+    enabledLabel.className = "enabled-toggle";
+    const enabledInput = document.createElement("input");
+    enabledInput.type = "checkbox";
+    enabledInput.checked = route.enabled !== false;
+    enabledInput.addEventListener("change", () => {
+      route.enabled = enabledInput.checked;
+      markDirty();
+      renderRoutes();
+    });
+    enabledLabel.append(enabledInput, make("span", "Enabled (accepts new sessions)"));
+    fields.append(enabledLabel);
+    fields.append(textField("Profile name", route.display_name, (value) => {
+      if (value.trim()) setField(route, "display_name", value);
+      else { delete route.display_name; markDirty(); }
+      profileTitle.textContent = route.display_name || route.route_id;
+    }));
+    const advanced = make("details");
+    advanced.className = "route-advanced";
+    advanced.append(make("summary", "Advanced: technical route ID"));
+    advanced.append(textField("Route ID (internal MCP binding)", route.route_id, (value) => setField(route, "route_id", value)));
+    fields.append(advanced);
+    fields.append(selectField("Project", route.project_id, (state.projects || []).map((project) => ({ value: project.project_id, label: project.display_name })), (value) => { setField(route, "project_id", value); renderRoutes(); }));
+    const providers = [...new Set((state.accounts || []).map(account => account.provider))];
+    fields.append(selectField("Provider", route.provider, providers.map((value) => ({ value, label: value })), (value) => {
+      setField(route, "provider", value);
+      const accounts = state.accounts.filter(account => account.provider === value);
+      route.account_profile_id = accounts.length === 1 ? accounts[0].account_profile_id : "";
+      renderRoutes();
+    }));
+    fields.append(selectField("Configured account", route.account_profile_id, (state.accounts || []).filter((account) => account.provider === route.provider).map((account) => ({ value: account.account_profile_id, label: `${account.account_profile_id} · ${account.provider}` })), (value) => setField(route, "account_profile_id", value)));
+    fields.append(selectField("Role (move pool)", route.role, ROLES.map((value) => ({ value, label: value })), (value) => {
+      setField(route, "role", value);
+      adaptPolicyToRole(route);
+      renderRoutes();
+    }));
+    const policyChoices = policyChoicesFor(route.role).map((policy) => ({ value: policy.policy_profile_id, label: `${policy.policy_profile_id} · ${policy.config && policy.config.access || "access not set"}` }));
+    if (route.role === "worker" && !route.policy_profile_id) {
+      policyChoices.unshift({ value: "", label: "Choose an explicit worker policy" });
+    }
+    if (route.role !== "worker") {
+      if (!route.policy_profile_id) {
+        policyChoices.unshift({ value: "", label: "Choose a read-only policy" });
+      } else if (!policyChoices.some((choice) => choice.value === route.policy_profile_id)) {
+        policyChoices.unshift({ value: route.policy_profile_id, label: `${route.policy_profile_id} · ${policyAccess(route)} (not read-only)` });
+      }
+    }
+    fields.append(selectField("Explicit policy", route.policy_profile_id, policyChoices, (value) => {
+      setField(route, "policy_profile_id", value);
+      renderRoutes();
+    }));
+    const accessField = textField("Selected policy access", policyAccess(route), () => {});
+    accessField.querySelector("input").readOnly = true;
+    fields.append(accessField);
+
+    const pickerHelp = make("p", catalogueSummary(route.provider));
+    pickerHelp.className = "catalogue-summary";
+    fields.append(pickerHelp);
+    const pickerMessage = catalogueMessage(route.provider);
+    if (pickerMessage) {
+      const message = make("p", pickerMessage);
+      message.className = "catalogue-message";
+      fields.append(message);
+    }
+    if (route.provider === "antigravity") {
+      const explanation = make("p", "Antigravity entries are grouped by base model; observed -low, -medium, -high, and -max suffixes become Effort choices.");
+      explanation.className = "catalogue-help";
+      fields.append(explanation);
+    }
+    const searchLabel = make("label");
+    searchLabel.append(make("span", "Search models"));
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = "Filter by model ID";
+    search.value = modelSearches.get(route) || "";
+    searchLabel.append(search);
+    fields.append(searchLabel);
+    const modelLabel = make("label");
+    modelLabel.append(make("span", "Model"));
+    const model = document.createElement("select");
+    model.setAttribute("aria-describedby", `catalogue-summary-${index}`);
+    populateModelSelect(model, route, search.value);
+    model.addEventListener("change", () => {
+      route.model = model.value;
+      adjustEffortForModel(route);
+      markDirty();
+      renderRoutes();
+    });
+    modelLabel.append(model);
+    fields.append(modelLabel);
+    pickerHelp.id = `catalogue-summary-${index}`;
+    search.addEventListener("input", () => {
+      modelSearches.set(route, search.value);
+      populateModelSelect(model, route, search.value);
+    });
+    const manual = make("details");
+    manual.className = "manual-model";
+    if (!observedModel(route.provider, route.model)) manual.open = true;
+    manual.append(make("summary", "Enter a model ID manually"));
+    const manualLabel = make("label");
+    manualLabel.append(make("span", "Manual model ID"));
+    const manualInput = document.createElement("input");
+    manualInput.value = route.model || "";
+    manualInput.addEventListener("input", () => {
+      if (route.model !== manualInput.value) {
+        route.model = manualInput.value;
         markDirty();
-        renderRoutes();
-      }));
-      const countLabel = make("label");
-      countLabel.append(make("span", "Suggested maximum children"));
-      const countHelp = make("span", "Advisory only; not an exact desired count or enforced cap.");
-      countHelp.className = "field-help";
-      countLabel.append(countHelp);
-      const countInput = document.createElement("input");
-      countInput.type = "number";
-      countInput.min = "1";
-      countInput.step = "1";
-      countInput.value = nativeMode === "auto" ? "" : String(route.native_subagents && route.native_subagents.max_agents || 1);
-      countInput.disabled = nativeMode === "off" || nativeMode === "auto";
-      countInput.addEventListener("input", () => {
-        route.native_subagents = { mode: nativeMode === "prefer" ? "prefer" : "off", max_agents: Number(countInput.value) };
-        markDirty();
-      });
-      countLabel.append(countInput);
-      fields.append(countLabel);
-      card.append(fields);
-      const note = make("p", known ? "Model options come from the last catalogue refresh. Child models and counts remain advisory." : "Manual or configured model; combination is unverified until checked against the CLI catalogue. No automatic substitution.");
+        summary.textContent = routeSummary(route);
+      }
+    });
+    manualInput.addEventListener("change", () => {
+      adjustEffortForModel(route);
+      renderRoutes();
+    });
+    manualLabel.append(manualInput);
+    manual.append(manualLabel);
+    fields.append(manual);
+    const known = observedModel(route.provider, route.model);
+    const effortValues = effortValuesFor(route);
+    const currentEffort = route.effort ?? "";
+    if (!effortValues.includes(currentEffort)) effortValues.push(currentEffort);
+    fields.append(selectField("Effort (parent/model limits apply)", currentEffort, effortValues.map((value) => ({ value, label: value || "No override" })), (value) => {
+      setField(route, "effort", value || null);
+      renderRoutes();
+    }));
+    const nativeMode = route.native_subagents && route.native_subagents.mode || "off";
+    fields.append(selectField("Native subagents (advisory)", nativeMode, Object.entries(nativeModeLabels).map(([value, label]) => ({ value, label })), (value) => {
+      route.native_subagents = value === "auto"
+        ? { mode: "auto" }
+        : { mode: value, max_agents: route.native_subagents && route.native_subagents.max_agents || 1 };
+      markDirty();
+      renderRoutes();
+    }));
+    const countLabel = make("label");
+    countLabel.append(make("span", "Suggested maximum children"));
+    const countHelp = make("span", "Advisory only; not an exact desired count or enforced cap.");
+    countHelp.className = "field-help";
+    countLabel.append(countHelp);
+    const countInput = document.createElement("input");
+    countInput.type = "number";
+    countInput.min = "1";
+    countInput.step = "1";
+    countInput.value = nativeMode === "auto" ? "" : String(route.native_subagents && route.native_subagents.max_agents || 1);
+    countInput.disabled = nativeMode === "off" || nativeMode === "auto";
+    countInput.addEventListener("input", () => {
+      route.native_subagents = { mode: nativeMode === "prefer" ? "prefer" : "off", max_agents: Number(countInput.value) };
+      markDirty();
+    });
+    countLabel.append(countInput);
+    fields.append(countLabel);
+    fields.append(tagEditor(route, () => { summary.textContent = routeSummary(route); }));
+    card.append(fields);
+    if (route.enabled === false) {
+      const note = make("p", "Disabled: the broker refuses new sessions from this profile. Existing sessions keep working and an accepted idempotency key still replays its accepted session. Disabling is a selection control, not account or provider revocation.");
       note.className = "small-note";
       card.append(note);
-      container.append(card);
-    });
-    if (!container.children.length) container.append(make("p", "No routes for this project. Add a profile or select another project."));
+    }
+    const note = make("p", known ? "Model options come from the last catalogue refresh. Child models and counts remain advisory." : "Manual or configured model; combination is unverified until checked against the CLI catalogue. No automatic substitution.");
+    note.className = "small-note";
+    card.append(note);
+    return card;
+  }
+
+  function renderTagFilter() {
+    const knownTags = allTags();
+    if (tagFilter && !knownTags.includes(tagFilter)) tagFilter = "";
+    $("tag-filter").replaceChildren(option("", "All tags", !tagFilter), ...knownTags.map(tag => option(tag, tag, tag === tagFilter)));
+  }
+
+  function renderRoutes() {
+    renderTagFilter();
+    const container = $("routes");
+    container.replaceChildren();
+    for (const role of ROLES) {
+      const pool = make("section");
+      pool.className = "pool";
+      pool.setAttribute("aria-label", ROLE_LABELS[role]);
+      const head = make("header");
+      head.className = "pool-header";
+      const routes = visibleRoutes(role);
+      head.append(make("h3", `${ROLE_LABELS[role]} (${routes.length})`));
+      const add = make("button", "Add profile");
+      add.className = "button secondary";
+      add.type = "button";
+      add.addEventListener("click", () => action(() => addProfile(role)));
+      head.append(add);
+      pool.append(head);
+      const explain = make("p", ROLE_EXPLAIN[role]);
+      explain.className = "pool-help";
+      pool.append(explain);
+      const grid = make("div");
+      grid.className = "route-grid";
+      routes.forEach((route) => {
+        grid.append(routeCard(route));
+      });
+      if (!routes.length) {
+        grid.append(make("p", tagFilter ? "No profiles in this pool match the tag filter."
+          : projectFilter ? "No profiles for this project in this pool yet."
+          : "No profiles in this pool yet."));
+      }
+      pool.append(grid);
+      container.append(pool);
+    }
   }
 
   function renderProjects() {
@@ -770,7 +1024,7 @@
   }
 
   function render() {
-    $("revision-label").textContent = `Revision ${revision.slice(0, 12)} · ${state.routes.length} route(s)`;
+    $("revision-label").textContent = `Revision ${revision.slice(0, 12)} · ${state.routes.length} profile(s)`;
     $("project-filter").replaceChildren(option("", "All projects", !projectFilter), ...(state.projects || []).map(project => option(project.project_id, project.display_name, project.project_id === projectFilter)));
     renderLimits();
     renderRoutes();
@@ -908,8 +1162,8 @@
     const policyGrid = make("div");
     policyGrid.className = "field-grid";
     policyGrid.append(
-      field("Access", access, "Reviewer profiles are always read only; worker access controls the new worker policy."),
-      field("Copy agent profiles", copy, "Reuse providers, models, effort, roles, and subagent preferences from another project."),
+      field("Access", access, "Reviewer and researcher profiles are always read only; worker access controls the new worker policy."),
+      field("Copy agent profiles", copy, "Reuse providers, models, effort, roles, names, tags, enablement, and subagent preferences from another project; reviewer and researcher copies receive the new read-only policy."),
     );
     wizard.append(policyGrid);
     const explanation = make("p", "Create adds the project to your draft. Save, then stop the shared daemon while idle and start it again to apply it to new sessions.");
@@ -1186,7 +1440,9 @@
         const copied = JSON.parse(JSON.stringify(sourceRoute));
         copied.route_id = uniqueId(sourceRoute.route_id || "route");
         copied.project_id = projectId;
-        copied.policy_profile_id = sourceRoute.role === "reviewer" ? reviewerPolicyId : policyId;
+        // Roles keep their pool semantics in the new project: workers get the
+        // chosen worker policy; reviewer/researcher copies must stay read-only.
+        copied.policy_profile_id = sourceRoute.role === "worker" ? policyId : reviewerPolicyId;
         state.routes.push(copied);
       });
       wizard.classList.add("hidden");
@@ -1220,6 +1476,10 @@
 
   async function save() {
     try {
+      for (const route of state.routes || []) {
+        const error = tagListError(route.tags || []);
+        if (error) throw new Error(`${route.display_name || route.route_id}: ${error}`);
+      }
       syncAdvanced();
       const body = await api("/api/config", { method: "PUT", body: JSON.stringify({ config: state, revision }) });
       bootstrap.snippets = body.snippets;
@@ -1255,24 +1515,13 @@
   $("save").addEventListener("click", () => runConfigOperation($("save"), save));
   $("restart-daemon").addEventListener("click", () => runConfigOperation($("restart-daemon"), restart));
   $("refresh-status").addEventListener("click", () => { void refreshLiveStatus(); });
-  $("add-route").addEventListener("click", () => {
-    const project = find(state.projects, "project_id", projectFilter) || state.projects[0];
-    const account = state.accounts[0];
-    const policy = state.policy_profiles[0];
-    if (!project || !account || !policy) {
-      status("Add a project, account, and policy before adding a route.", "error");
-      return;
-    }
-    state.routes.push({ route_id: uniqueId("route"), project_id: project.project_id, provider: account.provider, account_profile_id: account.account_profile_id, model: "manual-model", role: "worker", policy_profile_id: policy.policy_profile_id, native_subagents: { mode: "off", max_agents: 1 } });
-    markDirty();
-    renderRoutes();
-  });
   $("new-project").addEventListener("click", () => action(() => {
     syncAdvanced();
     $("project-wizard").classList.remove("hidden");
     renderWizard();
   }));
   $("project-filter").addEventListener("change", () => { projectFilter = $("project-filter").value; renderRoutes(); });
+  $("tag-filter").addEventListener("change", () => { tagFilter = $("tag-filter").value; renderRoutes(); });
   $("global-unfinished-turns").addEventListener("input", () => {
     state.limits = { ...(state.limits || {}), globalUnfinishedTurns: Number($("global-unfinished-turns").value) };
     markDirty();

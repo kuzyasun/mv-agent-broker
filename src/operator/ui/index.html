@@ -96,19 +96,23 @@
     <section class="card">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">PROFILES</p>
-          <h2>Agent profiles</h2>
+          <p class="eyebrow">PROJECT AGENT PROFILES</p>
+          <h2>Agent pools</h2>
         </div>
-        <button id="add-route" class="button secondary">Add route</button>
       </div>
-      <p class="muted">A route names the project, provider account, model, role, and explicit policy. Role labels do not grant permissions.</p>
+      <p class="muted">Workers, Reviewers, and Researchers group this project's profiles. The coordinator selects among enabled profiles by task, role, and tags; tags and the derived multi-agent tag are selection hints, never permissions.</p>
       <details class="profile-help">
-        <summary>How profile names and native subagents work</summary>
-        <p>A profile saves a provider, model, effort, role and permissions. Its name is editable: <code>*_worker</code> is our preset for one worker, <code>cursor_large</code> / <code>agy_large</code> encourage subagents for larger tasks, and <code>*_reviewer</code> is for independent review. The fields below determine behavior.</p>
-        <p>Off requests one agent. Prefer subagents suggests a maximum. Agent decides lets the agent choose whether and how many to use. These are prompt instructions; the broker cannot enforce child count. ZCode can handle large tasks, but its native subagents are unverified, so there is no <code>zcode_large</code> preset. Duplicate a profile to add a preset.</p>
+        <summary>How pools, names, tags, and native subagents work</summary>
+        <p>Each pool holds the profiles of one role. A profile has a readable name, an enabled switch, provider/account/model/effort, an explicit policy, and advisory native-subagent settings. The technical route ID lives in the card's advanced details; MCP calls bind to that ID, and a duplicated profile always receives a distinct one.</p>
+        <p>Tags are coordinator selection hints: default and large are ordinary chips, several profiles may carry default, and you can add custom lower-case tags (letters, numbers, hyphen, underscore; at most 12). The multi-agent tag is derived from the native-subagents mode (prefer or auto), shown for context, and cannot be stored directly. Tags never change permissions, model, effort, or deadlines.</p>
+        <p>Disabled profiles stay visible and editable, refuse new sessions from that profile, and never cancel existing sessions; replaying an accepted idempotency key still returns its accepted session. Disabling is a selection control, not provider or account revocation. New reviewer and researcher profiles are read-only: their policy lists contain only read-only policies, and saving through JSON is validated the same way.</p>
+        <p>Off requests one agent. Prefer subagents suggests a maximum. Agent decides lets the agent choose whether and how many to use. These are prompt instructions; the broker cannot enforce child count, child models, or child permissions. Native delegation stays advisory and unverified — including when the derived multi-agent tag is shown.</p>
       </details>
-      <label>Show profiles for project <select id="project-filter"></select></label>
-      <div id="routes" class="route-grid"></div>
+      <div class="filter-row">
+        <label>Show profiles for project <select id="project-filter"></select></label>
+        <label>Filter by tag <select id="tag-filter"></select></label>
+      </div>
+      <div id="routes" class="pools"></div>
     </section>
 
     <section class="card">

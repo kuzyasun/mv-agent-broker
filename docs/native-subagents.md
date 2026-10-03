@@ -3,9 +3,12 @@
 The broker coordinates vendor sessions; a vendor can delegate within its own
 session. Use a single agent for small tasks and an explicitly selected route for
 larger tasks that benefit from independent work. Native delegation can improve
-elapsed time; it does not establish lower token or quota consumption. Route IDs
-are editable profile names; a
-`*_large` suffix is only a convention.
+elapsed time; it does not establish lower token or quota consumption. Routes
+are project agent profiles with a readable name, an enabled flag, and tags:
+the `large` tag is an operator selection hint, and the derived `multi-agent`
+tag appears when a profile's mode is `prefer` or `auto`. Running several
+broker worker sessions in parallel is a separate broker-level mechanism and
+does not use native subagents at all.
 
 ## Provider mechanisms
 

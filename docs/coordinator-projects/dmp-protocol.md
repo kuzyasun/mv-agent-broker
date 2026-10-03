@@ -29,7 +29,13 @@ Use the active configured workspaces: `dmp-current-project` (this repository),
 read-only `dmp-reviewer`. Discovery can also list earlier workspace IDs retained
 for historical sessions; select the IDs in the active saved configuration for
 new sessions. Start a fresh session to use the new project-wide worker grant.
-Discover and use these exact routes with their live configured models/efforts:
+Discover and use these exact routes with their live configured models/efforts.
+Route entries also carry the operator's readable name, an `enabled` flag, and
+effective tags (including the derived `multi-agent` tag): use them to select
+among enabled profiles and skip disabled ones — a disabled route refuses new
+spawns before provider work while existing sessions keep running. Tags are
+selection hints, never permissions, and several sessions may share one enabled
+profile on distinct physical workspaces:
 
 | Worker routes | Reviewer routes |
 | --- | --- |

@@ -5,6 +5,7 @@ import path from "node:path";
 import { openRegistryDb } from "../../src/storage/db.ts";
 import {
   applyOperatorConfig,
+  effectiveRouteTags,
   loadOperatorConfig,
   operatorConfigFingerprint,
   validateOperatorConfig,
@@ -245,5 +246,82 @@ describe("operator configuration", () => {
     } finally {
       db.close();
     }
+  });
+
+  it("round-trips profile metadata and derives the reserved multi-agent tag from native_subagents", () => {
+    const loaded = loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      routes: [{
+        ...validConfig().routes[0]!,
+        display_name: "Main worker",
+        enabled: false,
+        tags: ["default", "fast-track"],
+      }],
+    }));
+    expect(loaded.routes[0]).toMatchObject({ display_name: "Main worker", enabled: false, tags: ["default", "fast-track"] });
+    expect(effectiveRouteTags(loaded.routes[0]!)).toEqual(["default", "fast-track"]);
+    expect(effectiveRouteTags({ ...loaded.routes[0]!, native_subagents: { mode: "prefer", max_agents: 2 } }))
+      .toEqual(["default", "fast-track", "multi-agent"]);
+    expect(effectiveRouteTags({ ...loaded.routes[0]!, native_subagents: { mode: "auto" } }))
+      .toEqual(["default", "fast-track", "multi-agent"]);
+    expect(effectiveRouteTags({ native_subagents: { mode: "off", max_agents: 1 } })).toEqual([]);
+  });
+
+  it("rejects malformed tag lists and the reserved derived tag even in prefer/auto mode", () => {
+    const withTags = (tags: unknown) => loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      routes: [{ ...validConfig().routes[0]!, tags }],
+    }));
+    expect(() => withTags(["default", "default"])).toThrow(/duplicate tag 'default'/);
+    expect(() => withTags(["Big"])).toThrow(/1-32 lower-case letters/);
+    expect(() => withTags(["-lead"])).toThrow(/1-32 lower-case letters/);
+    expect(() => withTags(["x".repeat(33)])).toThrow(/1-32 lower-case letters/);
+    expect(() => withTags(["multi-agent"])).toThrow(/reserved 'multi-agent' tag/);
+    expect(() => withTags([...Array.from({ length: 13 }, (_, i) => `tag-${i}`)])).toThrow(/at most 12 stored tags/);
+    // Reserved-tag rejection is unconditional, not relaxed by prefer/auto mode.
+    expect(() => loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      routes: [{ ...validConfig().routes[0]!, native_subagents: { mode: "auto" }, tags: ["multi-agent"] }],
+    }))).toThrow(/reserved 'multi-agent' tag/);
+    expect(() => withTags("default")).toThrow(/must be an array of strings/);
+    expect(() => withTags([42])).toThrow(/must be an array of strings/);
+  });
+
+  it("rejects a blank display name and a non-boolean enabled flag", () => {
+    expect(() => loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      routes: [{ ...validConfig().routes[0]!, display_name: "   " }],
+    }))).toThrow(/display_name must be a non-empty string/);
+    expect(() => loadOperatorConfig(JSON.stringify({
+      ...validConfig(),
+      routes: [{ ...validConfig().routes[0]!, enabled: "no" }],
+    }))).toThrow(/enabled must be a boolean/);
+    const omittedMeansEnabled = loadOperatorConfig(JSON.stringify(validConfig()));
+    expect(omittedMeansEnabled.routes[0]?.enabled).toBeUndefined();
+    expect(omittedMeansEnabled.routes[0]?.tags).toBeUndefined();
+  });
+
+  it("requires a read-only policy for named reviewer and researcher routes while workers may stay read-only", () => {
+    const base = validConfig();
+    base.policy_profiles.push({ policy_profile_id: "policy-write", version: "1", config: { access: "workspace_write" } });
+    const reviewer = (policy: string): OperatorConfig => ({
+      ...base,
+      routes: [{ ...base.routes[0]!, route_id: "route-review", role: "reviewer", policy_profile_id: policy }],
+    });
+    expect(() => loadOperatorConfig(JSON.stringify(reviewer("policy-write")))).toThrow(/role 'reviewer' requires a policy profile with access 'read_only'/);
+    expect(() => loadOperatorConfig(JSON.stringify(reviewer("policy-main")))).not.toThrow();
+
+    const researcher = (policy: string): OperatorConfig => ({
+      ...base,
+      routes: [{ ...base.routes[0]!, route_id: "route-research", role: "researcher", policy_profile_id: policy }],
+    });
+    expect(() => loadOperatorConfig(JSON.stringify(researcher("policy-write")))).toThrow(/role 'researcher' requires a policy profile with access 'read_only'/);
+
+    // Workers may intentionally be read-only or write: no direction is forced.
+    expect(() => loadOperatorConfig(JSON.stringify(base))).not.toThrow();
+    expect(() => loadOperatorConfig(JSON.stringify({
+      ...base,
+      routes: [{ ...base.routes[0]!, policy_profile_id: "policy-write" }],
+    }))).not.toThrow();
   });
 });

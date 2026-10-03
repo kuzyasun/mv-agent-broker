@@ -34,7 +34,10 @@
       "account_profile_id": "mock-account",
       "model": "mock-model-1",
       "role": "worker",
-      "policy_profile_id": "demo-read-only"
+      "policy_profile_id": "demo-read-only",
+      "display_name": "Mock demo worker",
+      "enabled": true,
+      "tags": ["default"]
     }
   ]
 }
