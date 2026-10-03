@@ -5,7 +5,15 @@
  * Verifies:
  * - Real harness entrypoint execution (runNativeFeedback) over real stdio/RPC child lifecycle
  * - Exact artifactID chain and current snapshots (S0 -> S1 -> S2)
- * - Same-conversation assertions across turns on worker and reviewer sessions
+ * - Same-conversation assertions across turns on worker and reviewer sessions (persistent mode)
+ * - fresh/handoff feedback modes prove distinct session IDs and distinct observed native refs
+ *   for replacement FIX/R2 sessions after confirmed CLOSED receipts, on the same fixture/S1 and
+ *   the same review slot/S1->S2
+ * - handoff mode delivers a bounded coordinator task.context carrying the findings artifact ID
+ *   (never reviewer prose) to the replacement FIX session
+ * - Bounded measurement evidence: tools/call counts (including failures), UTF-8 JSON result
+ *   byte bodies, per-turn elapsed_ms, chain elapsed, and broker usage copied verbatim
+ * - Invalid feedback_mode rejected before any root allocation
  * - Large findings (>16 KiB) read_only_path transport and manifest ACL
  * - Failed review stops with explicit failed evidence; no automatic fallback and retains fixture
  * - Stale/missing/expired artifact references reject admission (no false pass)
@@ -20,7 +28,7 @@ import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHarness } from "../helpers/harness.ts";
@@ -28,9 +36,15 @@ import { BrokerError } from "../../src/shared/errors.ts";
 import { cursorChatStorePathBudgetViolation } from "../../src/providers/cursor/cursorAdapter.ts";
 import {
   ACCEPTED_RUNTIME_SHA,
+  FEEDBACK_MODES,
+  HANDOFF_CONTEXT_MAX_CHARS,
   INLINE_TOTAL_BYTE_CAP,
+  REVIEWER_SESSION_INSTRUCTIONS,
+  WORKER_SESSION_INSTRUCTIONS,
+  buildHandoffContext,
   createFixtureGitRepo,
   extractRuntime,
+  validateFeedbackMode,
   validateRouteConfig,
   validateProductionConfig,
   resolveAndValidateHarnessRoot,
@@ -42,7 +56,40 @@ import {
   canPerformCleanup,
 } from "../../scripts/native-feedback.mjs";
 
+/** Metrics counter consistency: by-method aggregates must equal the totals. */
+function expectMetricsConsistent(metrics: {
+  calls_total: number;
+  calls_failed: number;
+  result_bytes_total: number;
+  calls_by_method: Record<string, { count: number; failed: number; result_bytes: number }>;
+}) {
+  expect(metrics.calls_total).toBeGreaterThan(0);
+  expect(metrics.result_bytes_total).toBeGreaterThan(0);
+  const sums = Object.values(metrics.calls_by_method).reduce(
+    (acc, m) => ({ count: acc.count + m.count, failed: acc.failed + m.failed, bytes: acc.bytes + m.result_bytes }),
+    { count: 0, failed: 0, bytes: 0 },
+  );
+  expect(sums.count).toBe(metrics.calls_total);
+  expect(sums.failed).toBe(metrics.calls_failed);
+  expect(sums.bytes).toBe(metrics.result_bytes_total);
+}
+
 describe("Native feedback harness integration", () => {
+  it("builds the same baseline Git commit in independent mode fixtures", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ab-fixture-compare-"));
+    try {
+      const first = createFixtureGitRepo(path.join(root, "first"));
+      const second = createFixtureGitRepo(path.join(root, "second"));
+      expect(second.baselineHead).toBe(first.baselineHead);
+      expect(second.baselineIndex).toBe(first.baselineIndex);
+      expect(second.baselineTestHash).toBe(first.baselineTestHash);
+      expect(second.baselinePackageHash).toBe(first.baselinePackageHash);
+    } finally {
+      expect(root.startsWith(path.join(tmpdir(), "ab-fixture-compare-"))).toBe(true);
+      rmSync(root, {recursive:true,force:true});
+    }
+  });
+
   it("uses a fresh owned short temporary root that fits the installed Cursor store budget", () => {
     const { root, approvedBase, ownerToken } = resolveAndValidateHarnessRoot({});
     try {
@@ -102,6 +149,12 @@ describe("Native feedback harness integration", () => {
     expect(res.evidence.findings_acl_denial_verified).toBe(true);
     const evidence = res.evidence;
 
+    // 0. Default continuity mode is persistent; per-turn identity recorded
+    expect(evidence.feedback_mode).toBe("persistent");
+    expect(evidence.turns.map((t: { phase: string }) => t.phase)).toEqual([
+      "worker_initial", "reviewer_r1", "worker_fix", "reviewer_r2",
+    ]);
+
     // 1. Assert 4-turn exact lifecycle completed
     expect(evidence.turns.length).toBe(4);
     expect(evidence.turns.every((t) => t.status?.state === "SUCCEEDED")).toBe(true);
@@ -130,6 +183,15 @@ describe("Native feedback harness integration", () => {
     expect(evidence.sameWorkerConversation).toBe(true);
     expect(evidence.sameReviewerConversation).toBe(true);
 
+    // 4b. Observed native refs per turn: FIX and R2 reuse the exact turn-1/R1 refs
+    expect(evidence.turns[0].native_ref_observed).toBe("mock-native-worker-ref");
+    expect(evidence.turns[1].native_ref_observed).toBe("mock-native-reviewer-ref");
+    expect(evidence.turns[2].native_ref_observed).toBe("mock-native-worker-ref");
+    expect(evidence.turns[3].native_ref_observed).toBe("mock-native-reviewer-ref");
+    expect(evidence.turns[2].session_id).toBe(evidence.turns[0].session_id);
+    expect(evidence.turns[3].session_id).toBe(evidence.turns[1].session_id);
+    expect(evidence.turns[2].result.broker_observed.baseline_snapshot_id).toBe(s1);
+
     // 5. Offline fixture checks: S1 deliberate failure, S2 pass, untouched baseline
     expect(evidence.s1_deliberate_failure_verified).toBe(true);
     expect(evidence.offline_checks.length).toBeGreaterThan(0);
@@ -138,12 +200,157 @@ describe("Native feedback harness integration", () => {
     expect(evidence.offline_checks.some((c) => c.name === "baseline_package_untouched" && c.ok)).toBe(true);
     expect(evidence.offline_checks.some((c) => c.name === "s2_node_test_passed" && c.ok)).toBe(true);
 
-    // 6. Evidence artifacts kept after clean owned fixture removal
+    // 6. Bounded measurement evidence: call counts, UTF-8 JSON result bytes,
+    //    per-turn elapsed, chain elapsed, usage verbatim from the broker.
+    expectMetricsConsistent(evidence.metrics);
+    expect(evidence.metrics.failed_calls.some((c) => c.name === "agent_artifact_read" && c.code === "UNAUTHORIZED")).toBe(true);
+    expect(evidence.metrics.turn_counts).toEqual({ admitted: 4, terminal: 4, succeeded: 4 });
+    expect(evidence.metrics.elapsed_ms_chain).toBeGreaterThan(0);
+    for (const turn of evidence.turns) {
+      expect(typeof turn.elapsed_ms).toBe("number");
+      expect(turn.elapsed_ms).toBeGreaterThanOrEqual(0);
+      // Broker reports usage.availability unknown; harness must copy it verbatim.
+      expect(turn.usage).toEqual({ availability: "unknown", billing_basis: "unknown", measurements: [] });
+    }
+
+    // 7. Evidence artifacts kept after clean owned fixture removal
     expect(existsSync(path.join(res.root, "evidence.private.json"))).toBe(true);
     expect(existsSync(path.join(res.root, "assessment.json"))).toBe(true);
     expect(existsSync(path.join(res.root, "reports"))).toBe(true);
     expect(existsSync(path.join(res.root, "fixture-repo"))).toBe(false); // Cleaned
   }, 35000);
+
+  it("fresh mode closes old sessions to confirmed CLOSED and proves distinct session IDs and native refs on the same fixture/S1 and review slot/S1->S2", async () => {
+    const res = await runNativeFeedback({
+      mock: true,
+      feedback_mode: "fresh",
+      cleanup: true,
+      runtime_sha: ACCEPTED_RUNTIME_SHA,
+    });
+
+    expect(res.status).toBe("passed");
+    const evidence = res.evidence;
+    expect(evidence.feedback_mode).toBe("fresh");
+    expect(evidence.turns.length).toBe(4);
+    expect(evidence.turns.every((t) => t.status?.state === "SUCCEEDED")).toBe(true);
+
+    // Old worker/reviewer sessions closed with a confirmed completed receipt
+    expect(evidence.fresh_worker.closed_session_id).toBe(evidence.turns[0].session_id);
+    expect(evidence.fresh_worker.closed_state).toBe("CLOSED");
+    expect(evidence.fresh_worker.closed_close_state).toBe("completed");
+    expect(evidence.fresh_reviewer.closed_session_id).toBe(evidence.turns[1].session_id);
+    expect(evidence.fresh_reviewer.closed_close_state).toBe("completed");
+
+    // Distinct replacement session IDs for FIX and R2
+    expect(evidence.fresh_worker.session_id).not.toBe(evidence.turns[0].session_id);
+    expect(evidence.fresh_reviewer.session_id).not.toBe(evidence.turns[1].session_id);
+    expect(evidence.turns[2].session_id).toBe(evidence.fresh_worker.session_id);
+    expect(evidence.turns[3].session_id).toBe(evidence.fresh_reviewer.session_id);
+
+    // Distinct observed native refs: replacements did NOT resume old conversations
+    expect(evidence.workerNativeRef).toBe("mock-native-worker-ref");
+    expect(evidence.reviewerNativeRef).toBe("mock-native-reviewer-ref");
+    expect(evidence.fresh_worker.native_ref_observed).toBe("mock-native-worker-ref-2");
+    expect(evidence.fresh_reviewer.native_ref_observed).toBe("mock-native-reviewer-ref-2");
+    expect(evidence.turns[2].native_ref_observed).toBe(evidence.fresh_worker.native_ref_observed);
+    expect(evidence.turns[3].native_ref_observed).toBe(evidence.fresh_reviewer.native_ref_observed);
+    expect(evidence.sameWorkerConversation).toBeFalsy();
+    expect(evidence.sameReviewerConversation).toBeFalsy();
+
+    // FIX still pinned to the same sealed S1; R2 binds the same S1 -> S2 slot
+    expect(evidence.turns[2].result.broker_observed.baseline_snapshot_id).toBe(evidence.snapshots.s1);
+    expect(evidence.turns[3].result.broker_observed.baseline_snapshot_id).toBe(evidence.snapshots.s1);
+    expect(evidence.r2_slot_s2_verified).toBe(true);
+    expect(evidence.s1_deliberate_failure_verified).toBe(true);
+    expect(evidence.offline_checks.every((c) => c.ok)).toBe(true);
+
+    // Same fixture integrity checks as persistent: findings ACL, delivery, metrics
+    expect(evidence.findings_acl_denial_verified).toBe(true);
+    expect(evidence.findings_artifact.delivery_mode).toBe("inline");
+    expectMetricsConsistent(evidence.metrics);
+    expect(evidence.metrics.turn_counts).toEqual({ admitted: 4, terminal: 4, succeeded: 4 });
+  }, 35000);
+
+  it("handoff mode adds a bounded coordinator task.context with the findings artifact ID and no reviewer prose", async () => {
+    const res = await runNativeFeedback({
+      mock: true,
+      feedback_mode: "handoff",
+      cleanup: true,
+      runtime_sha: ACCEPTED_RUNTIME_SHA,
+    });
+
+    expect(res.status).toBe("passed");
+    const evidence = res.evidence;
+    expect(evidence.feedback_mode).toBe("handoff");
+
+    // Bounded English coordinator summary recorded for the FIX handoff
+    const context = evidence.handoff_context;
+    expect(typeof context).toBe("string");
+    expect(context.length).toBeGreaterThan(0);
+    expect(context.length).toBeLessThanOrEqual(HANDOFF_CONTEXT_MAX_CHARS);
+    expect(context).toContain(evidence.snapshots.s1);
+    expect(context).toContain(`findings artifact ${evidence.findings_artifact.artifact_id}`);
+    expect(context).toContain("divide");
+    // Never copied reviewer prose
+    expect(context).not.toContain("FINDINGS:");
+    // Never paths from expired input views
+    expect(context).not.toContain("inputs");
+
+    // Same fresh-mode distinct identity proofs apply
+    expect(evidence.fresh_worker.session_id).not.toBe(evidence.turns[0].session_id);
+    expect(evidence.fresh_worker.native_ref_observed).not.toBe(evidence.workerNativeRef);
+    expect(evidence.fresh_reviewer.native_ref_observed).not.toBe(evidence.reviewerNativeRef);
+    expect(evidence.turns[2].result.broker_observed.baseline_snapshot_id).toBe(evidence.snapshots.s1);
+
+    // Public assessment carries the handoff artifact ID and mode honestly
+    const assessment = JSON.parse(readFileSync(path.join(res.root, "assessment.json"), "utf8"));
+    expect(assessment.feedback_mode).toBe("handoff");
+    expect(assessment.artifact_chain.handoff_artifact_id).toBe(evidence.findings_artifact.artifact_id);
+    expect(assessment.continuity.same_worker_conversation).toBe(false);
+    expectMetricsConsistent(evidence.metrics);
+  }, 35000);
+
+  it("retains a failed fresh chain when a successful FIX reports no native identity", async () => {
+    const res = await runNativeFeedback({ mock: true, feedback_mode: "fresh", mock_fault: "missing_fresh_ref", cleanup: true, runtime_sha: ACCEPTED_RUNTIME_SHA });
+    expect(res.status).toBe("failed");
+    expect(res.evidence.error).toContain("FIX did not report a native conversation ref");
+    expect(res.evidence.turns).toHaveLength(3);
+    expect(res.evidence.turns[2].status.state).toBe("SUCCEEDED");
+    expect(res.evidence.fresh_worker.native_ref_observed).toBeUndefined();
+    expect(existsSync(path.join(res.root, "fixture-repo"))).toBe(true);
+    expect(res.evidence.sessionsClosed).toBe(true);
+  }, 35000);
+
+  it("rejects invalid feedback_mode before any allocation and validates the handoff context builder", async () => {
+    // 1. Mode list and validation function
+    expect(FEEDBACK_MODES).toEqual(["persistent", "fresh", "handoff"]);
+    expect(validateFeedbackMode({})).toBe("persistent");
+    for (const mode of FEEDBACK_MODES) expect(validateFeedbackMode({ feedback_mode: mode })).toBe(mode);
+    expect(() => validateFeedbackMode({ feedback_mode: "resume" })).toThrow(/Invalid feedback_mode 'resume'/);
+    expect(() => validateFeedbackMode({ feedback_mode: "" })).toThrow(/Invalid feedback_mode ''/);
+    expect(() => validateFeedbackMode({ feedback_mode: 7 as unknown as string })).toThrow(/Invalid feedback_mode/);
+
+    // 2. runNativeFeedback rejects before creating any harness root
+    const approvedBase = path.join(tmpdir(), "ab-feedback");
+    mkdirSync(approvedBase, { recursive: true });
+    const before = new Set(readdirSync(approvedBase));
+    await expect(
+      runNativeFeedback({ mock: true, feedback_mode: "resume", runtime_sha: ACCEPTED_RUNTIME_SHA }),
+    ).rejects.toThrow(/Invalid feedback_mode 'resume'/);
+    const after = new Set(readdirSync(approvedBase));
+    expect([...after].filter((entry) => !before.has(entry))).toEqual([]);
+
+    // 3. Handoff context builder bounds and required content
+    const ctx = buildHandoffContext({ baselineSnapshotId: "snap-0", currentSnapshotId: "snap-1", findingsArtifactId: "art-abc" });
+    expect(ctx.length).toBeLessThanOrEqual(HANDOFF_CONTEXT_MAX_CHARS);
+    expect(ctx).toContain("snap-1");
+    expect(ctx).toContain("findings artifact art-abc");
+    expect(ctx).toContain("divide");
+    expect(ctx).not.toContain("FINDINGS:");
+    expect(() => buildHandoffContext({ baselineSnapshotId: "snap-0", currentSnapshotId: "", findingsArtifactId: "art-abc" })).toThrow(/requires baseline/);
+    expect(() => buildHandoffContext({ baselineSnapshotId: "snap-0", currentSnapshotId: "snap-1", findingsArtifactId: "art-" + "a".repeat(2000) })).toThrow(/must not be truncated/);
+    expect(buildPrivacySafeAssessment({ turns: [{ status: {state:"RUNNING"} }] }).turns_completed).toBe(0);
+  });
 
   it("handles large findings (>16 KiB) via read_only_path transport and enforces manifest ACL in real harness", async () => {
     const res = await runNativeFeedback({
@@ -178,6 +385,12 @@ describe("Native feedback harness integration", () => {
     // Only 2 turns admitted: halted immediately after R1 failure, no Turn 3 or 4
     expect(res.evidence.turns.length).toBe(2);
     expect(res.evidence.turns[1]?.status?.state).toBe("FAILED");
+
+    // Metrics stay honest on failure: admitted vs terminal vs succeeded counts
+    expect(res.evidence.metrics.turn_counts).toEqual({ admitted: 2, terminal: 2, succeeded: 1 });
+    expectMetricsConsistent(res.evidence.metrics);
+    expect(res.evidence.metrics.elapsed_ms_chain).toBeGreaterThan(0);
+    expect(res.evidence.turns[1].usage).toEqual({ availability: "unknown", billing_basis: "unknown", measurements: [] });
 
     // Fixture repo and evidence MUST be retained on disk despite cleanup: true
     expect(existsSync(path.join(res.root, "fixture-repo"))).toBe(true);
@@ -342,8 +555,9 @@ describe("Native feedback harness integration", () => {
       status: "passed",
       startedAt: "2026-10-01T00:00:00Z",
       finishedAt: "2026-10-01T00:01:00Z",
+      feedback_mode: "handoff",
       routes: [{ role: "worker", provider: "mock", model: "mock-model" }],
-      turns: [{}, {}, {}, {}],
+      turns: Array.from({ length: 4 }, () => ({ status: {state:"SUCCEEDED"} })),
       snapshots: { s0: "snap-0", s1: "snap-1", s2: "snap-2" },
       findings_artifact: {
         artifact_id: "art-findings",
@@ -351,25 +565,51 @@ describe("Native feedback harness integration", () => {
         content_hash: "hash123",
         delivery_mode: "inline",
       },
+      handoff_context: `Coordinator handoff for a fresh continuation session. Required input is findings artifact art-findings delivered by the broker.`,
+      fresh_worker: { session_id: "session-b", native_ref_observed: "ref-worker-2" },
       workerNativeRef: "ref-worker",
       reviewerNativeRef: "ref-reviewer",
       sameWorkerConversation: true,
       sameReviewerConversation: true,
+      metrics: {
+        calls_total: 30,
+        calls_failed: 1,
+        result_bytes_total: 24000,
+        turn_counts: { admitted: 4, terminal: 4, succeeded: 4 },
+        elapsed_ms_chain: 60000,
+      },
       offline_checks: [{ name: "node_test", ok: true }, { name: "git_status", ok: true }],
     });
 
     expect(assessment.status).toBe("passed");
     expect(assessment.turns_completed).toBe(4);
+    expect(assessment.feedback_mode).toBe("handoff");
+    expect(assessment.artifact_chain.handoff_artifact_id).toBe("art-findings");
     expect(assessment.continuity.same_worker_conversation).toBe(true);
-    expect(assessment.continuity.same_reviewer_conversation).toBe(true);
+    expect(assessment.continuity.fresh_worker_conversation).toBe(true);
+    expect(assessment.metrics).toEqual({
+      calls_total: 30,
+      calls_failed: 1,
+      result_bytes_total: 24000,
+      turn_counts: { admitted: 4, terminal: 4, succeeded: 4 },
+      elapsed_ms_chain: 60000,
+    });
     expect(assessment.all_checks_passed).toBe(true);
     expect(assessment.limitations.length).toBeGreaterThan(0);
+    expect(assessment.limitations.some((l: string) => l.includes("cannot establish relative savings"))).toBe(true);
 
     const jsonStr = JSON.stringify(assessment);
     expect(jsonStr).not.toContain("thinking");
     expect(jsonStr).not.toContain("reasoning");
     expect(jsonStr).not.toContain("password");
     expect(jsonStr).not.toContain("token");
+
+    // 8. Role instructions are mode-invariant: no initial-only fixture steps,
+    //    so a fresh FIX session receives persistent FIX instruction semantics.
+    expect(WORKER_SESSION_INSTRUCTIONS).not.toContain("obsolete");
+    expect(WORKER_SESSION_INSTRUCTIONS).not.toContain("deliberately");
+    expect(WORKER_SESSION_INSTRUCTIONS).toContain("coordinator-owned controls");
+    expect(REVIEWER_SESSION_INSTRUCTIONS).toContain("Independent read-only review");
   });
 });
 

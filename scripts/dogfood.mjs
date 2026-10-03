@@ -3,10 +3,12 @@
 // Task: {name, provider, model, effort, write_scope?, goal, checks?, review?}.
 // write_scope is an explicit opt-in restriction; without it the worker grant
 // covers the whole project.
-// review: {provider, model, effort, goal}. Results stay private in .state.
+// review: {provider, model, effort, goal}. Private results stay in the fresh
+// system-temp ab-df-* root printed as EVIDENCE at completion.
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -23,7 +25,9 @@ if (process.argv[2] === '--serve') {
     if (!['zcode', 'antigravity', 'cursor', 'mock'].includes(route.provider)) throw new Error('Only authorized providers are allowed.');
     if (typeof route.model !== 'string' || !route.model) throw new Error('Explicit model required.');
   }
-  const root = path.join(repo, '.state/dogfood', `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`);
+  // Cursor's SQLite store must fit its Windows path budget even when the
+  // source checkout is deep. Allocate a fresh owned root; retain all evidence.
+  const root = mkdtempSync(path.join(tmpdir(), 'ab-df-'));
   const runtime = path.join(root, 'runtime'); const state = path.join(root, 'state');
   const reviewFrom = task.review_from ? JSON.parse(readFileSync(task.review_from, 'utf8')) : null;
   if (reviewFrom) cpSync(path.join(path.dirname(task.review_from), 'state'), state, { recursive: true });

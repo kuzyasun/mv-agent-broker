@@ -5,6 +5,9 @@ Status of the documentation package from
 Ukrainian, left unmodified). Companion to the CE-01–CE-06 rules in
 [coordinator instructions](../coordinator-instructions.md). This report adds
 no runtime behavior; the full v0.2/native acceptance matrix remains open.
+Baseline and offline checks below describe the original documentation portion.
+The later context-mode pilot adds an opt-in harness, targeted tests and a
+checkpoint; it changes no runtime source or public MCP API.
 
 ## Baseline and dirty state
 
@@ -29,7 +32,7 @@ no runtime behavior; the full v0.2/native acceptance matrix remains open.
 | CE-01 bounded tasks | Task contract delivery and required-input admission: `src/core/broker.ts` (`sendSnapshotPreflight`, `resolveTaskArtifacts`); input planning `src/inputs/manifest.ts` (no silent truncation, `INPUT_LIMIT`/`ARTIFACT_NOT_READY`); whole-project default grant `src/core/policy.ts`; `tests/unit/task-contract.test.ts`, `tests/unit/p2-input-delivery.test.ts`, `tests/unit/required-input-integrity.test.ts` | Bounded-task template + CE-01 rule in coordinator-instructions; example 02 | Worker-side reading/coverage behavior on native models: unknown (mock evidence only) |
 | CE-02 result-first, cursors | `src/bridge/tools.ts` (`agent_turn_result` bounded DTO, `agent_turn_events` cursor/wait); README cursor snippet; `tests/integration/turn-events-wait.test.ts` | CE-02 rule (already implied by instructions rule 4, now explicit) | None documented; host polling costs are outside broker measurement |
 | CE-03 exact route, immutable session | Route discovery and pagination: instructions rules 1, 6; spawn oneOf (route_id XOR explicit bindings) `src/bridge/tools.ts`; `tests/unit/operator-routes.test.ts` | CE-03 rule (new session for any immutable change) | None beyond existing open native readiness/binding gates |
-| CE-04 continuation vs fresh | Persistent sessions, review re-binding: `agent_session_send` review_binding; `tests/integration/native-feedback-harness.test.ts`, [native feedback record](../native-feedback.md); UNKNOWN/quarantine guards `tests/unit/quota-cooldown.test.ts`, `tests/unit/zcode-quota.test.ts`, [recovery runbook](../recovery-runbook.md) | CE-04 rule + fresh-session recipe + handoff template; example 04 | [Combined persistent native chain accepted](../native-smoke/2026-10-03-native-feedback.md) for Windows ZCode Flash/max + Cursor grok/high; fresh handoff and worktree-vs-checkout discipline remain separate |
+| CE-04 continuation vs fresh | Persistent sessions, review re-binding: `agent_session_send` review_binding; `tests/integration/native-feedback-harness.test.ts`, [native feedback record](../native-feedback.md); UNKNOWN/quarantine guards `tests/unit/quota-cooldown.test.ts`, `tests/unit/zcode-quota.test.ts`, [recovery runbook](../recovery-runbook.md) | CE-04 rule + fresh-session recipe + handoff template; example 04 | [All three context modes accepted](../native-smoke/2026-10-03-context-modes.md) for Windows ZCode Flash/max + Cursor grok/high; worktree-vs-checkout discipline and wider native profiles remain separate |
 | CE-05 claims vs observed | `turnResultDto` separates `agent_reported` from `broker_observed`; report bounding `tests/unit/task-contract.test.ts` | CE-05 rule | No automatic claim verification exists or is proposed |
 | CE-06 context/storage/native memory | Artifact/snapshot storage and cleanup `tests/unit/cleanup.test.ts`; input manifests are per-turn (`src/inputs/manifest.ts` lifetime `turn_until_quiescence`) | CE-06 rule (no reuse of materialized paths; retention unchanged) | Native context-size telemetry: unknown |
 
@@ -43,25 +46,27 @@ verification in this repository; native behavior is reported separately.
 | AD-C01 examples use only v0.2 tools/fields | **pass (offline)** | Validator run against the real `bridgeToolDefs()` schemas (recursion over properties/required/`additionalProperties:false`/enum plus the spawn oneOf): 4/4 files PASS (see "Checks run"). Handoff labels live only inside `task.context` strings, not as API properties |
 | AD-C02 bounded task keeps coverage and required artifacts | **pass (offline, unchanged code)** | No src changes; coverage/required-input behavior still enforced by existing tests above (39 passed) |
 | AD-C03 fresh input bindings per turn; old paths/expired IDs stay invalid | **pass (offline)**; native | `src/inputs/manifest.ts` per-turn manifest; `required-input-integrity.test.ts` (12 passed); native input-access enforcement remains a separate open gate |
-| AD-C04 handoff = new conversation, immutable config untouched, worktree caveat | **documented; native not_run** | Recipe in coordinator-instructions; spec §5.2/§8.3 semantics unchanged; no new continuity evidence was collected |
+| AD-C04 handoff = new conversation, immutable config untouched, worktree caveat | **pass (Windows pilot pair)** | [Context-mode pilot](../native-smoke/2026-10-03-context-modes.md): explicit replacement sessions with distinct nonempty native references and confirmed old-session closure; unchanged route controls. Worktree discipline and other native profiles remain separate |
 | AD-C05 no hidden fallback/retry on quota error, UNKNOWN, missing history | **pass (offline, unchanged guards)** | `tests/unit/zcode-quota.test.ts`, `tests/unit/quota-cooldown.test.ts` untouched and green in the last full runs; no src diff in this package |
 | AD-C06 researcher has no broker tools; summary stays a claim | **deferred (documented)** | `role: "researcher"` exists in the spawn schema; this does not certify a native profile or establish a registered pilot route; no profile added |
-| AD-C07 usage honest; unknown ≠ zero; no invented costs | **pass (docs review)** | This report claims no savings or costs; `agent_turn_result.usage.availability` remains `unknown` in `src/bridge/tools.ts` |
-| AD-C08 no runtime router/memory DB/auto reset/new upload API | **pass (diff review)** | Package diff contains docs/examples only |
+| AD-C07 usage honest; unknown ≠ zero; no invented costs | **pass (pilot evidence)** | All 12 comparison turns reported unknown usage/billing and no measurements; measured result payload bytes and elapsed time are not tokens or money |
+| AD-C08 no runtime router/memory DB/auto reset/new upload API | **pass (diff review)** | Original package contains docs/examples; the subsequent pilot adds scripts/tests/docs only. No runtime router, memory DB, automatic reset or upload API |
 
-## Benchmark protocol — `not_run`
+## Benchmark protocol — first pilot completed
 
-Subsequent continuity acceptance completed one persistent four-turn native
-chain on the exact Windows/model pair in the
-[native feedback checkpoint](../native-smoke/2026-10-03-native-feedback.md).
-It retained setup failures and verified the actual final fixture independently.
-No F/P/H comparison was performed; broker-reported usage remained unknown for
-every turn. The following comparison protocol and its `not_run` status stand.
+The [context-mode checkpoint](../native-smoke/2026-10-03-context-modes.md)
+records one authorized F→H→P series on Windows with ZCode Flash/max and Cursor
+grok/high: all three four-turn chains accepted, 12/12 turns succeeded, no extra
+fix cycles. Fresh took 356934 ms, handoff 291435 ms, and persistent 306154 ms.
+All usage/billing remained unknown. The previous
+[persistent-only checkpoint](../native-smoke/2026-10-03-native-feedback.md)
+remains separate, including its retained failed setup attempts.
 
-No measurements exist; **no savings or cost claim is made**. Protocol for a
-future small comparison, run only within explicitly authorized provider/profile
-and usage bounds. The standing authorization covers native development calls;
-this package deliberately leaves the comparative series `not_run`:
+This is a workflow pilot, not a statistically useful efficiency ranking.
+Order was not rotated; the native models chose different helper implementations.
+**Insufficient data to choose a more efficient mode; no savings or cost claim
+is made.** The protocol below governs any later authorized comparison, with
+fixed helper behavior and rotated repeated series needed for stronger conclusions:
 
 - **Modes.** (F) fresh native session per task; (P) persistent worker +
   persistent reviewer across the chain; (H) fresh session with explicit
@@ -109,10 +114,11 @@ this package deliberately leaves the comparative series `not_run`:
 ## Limitations
 
 - Native reading depth, real context sizes and quota costs remain unverified.
-  The separately accepted persistent chain demonstrates continuity for its
-  exact Windows/model pair; mock/offline checks do not promote native profiles.
-- The benchmark protocol has no runs behind it; its variables and counting
-  rules are commitments for a future authorized series, not results.
+  The accepted persistent, fresh and handoff chains demonstrate their workflows
+  for the exact Windows/model pair; mock/offline checks do not promote native profiles.
+- The first native comparison is a single pilot with unknown usage and varying
+  realized helper work. It proves these workflows on the named pair, without
+  choosing an efficiency winner; broader comparisons remain deferred.
 - The operator addendum was preserved byte-for-byte (SHA-256
   `6a2993a6a5ea8fe1cf9d5f3dc984c3e4d5cd922b0eb89786271f2090e12cbad7`)
   and is included as the source document in this authorized completed portion.

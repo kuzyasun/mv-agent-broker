@@ -90,7 +90,7 @@ raise effort or change the main coordinator model.
 Coordinator-side context-efficiency rules (CE-01–CE-06), task/handoff
 templates and the fresh-session recipe are in the
 [coordinator instructions](coordinator-instructions.md); their gap mapping,
-AD-C01–08 verification status and the deferred benchmark protocol are in the
+AD-C01–08 verification status and the context-mode pilot protocol/results are in the
 [post-v0.2 efficiency check](validation/post-v0.2-efficiency-check.md).
 
 The separate accepted runtime portion keeps every actual review change while
@@ -143,7 +143,9 @@ fallback. Usage and subscription quota accounting remain unknown.
 
 The opt-in [dogfood client](../scripts/dogfood.mjs) extracts Git-tracked `src/`
 and `package.json` from the last accepted commit into a private frozen runtime
-under `.state/dogfood/`. `runtime_ref` defaults to `HEAD`; pass an explicit last
+under a fresh system-temp `ab-df-*` root (printed as `EVIDENCE` at completion).
+This short path avoids Cursor's Windows SQLite budget failure independently
+of checkout depth. `runtime_ref` defaults to `HEAD`; pass an explicit last
 verified commit when HEAD is not an accepted checkpoint. The resolved immutable
 commit and copied file count are recorded as `runtimeCommit`/`runtimeFiles` in
 private evidence. Dirty/untracked source is never copied into the broker runtime.
@@ -205,7 +207,7 @@ Production adapters do not rely on reading Desktop chat caches for reports.
 | Runtime supervision | Local Windows ownership, descendant quiescence and guarded operator recovery are implemented; hosted execution domains and wider crash/platform certification remain open |
 | Preflight and binding | Observed native readiness and lifetime account/config binding completed; actual vendor account identity and mandatory native confinement remain unverified |
 | Workspaces/resources | Bounded output/report artifacts and broker-created Git worktrees implemented; total storage admission including staging remains |
-| Complete native feedback loop | [Four-turn Windows native chain](native-smoke/2026-10-03-native-feedback.md) accepted for ZCode Flash/max + Cursor grok/high with both conversations retained; other native profiles and cancellation during native tools remain open |
+| Complete native feedback loop | [Persistent chain](native-smoke/2026-10-03-native-feedback.md) and [fresh/handoff/persistent pilot](native-smoke/2026-10-03-context-modes.md) accepted for Windows ZCode Flash/max + Cursor grok/high; usage is unknown, and other native profiles and cancellation during native tools remain open |
 | Pilot operations | Setup, applied-settings visibility, project registration, idle restart and error details are implemented; fix newly observed multi-project/provider failures as they arise |
 | Acceptance closure | A01–A53 evidence by actual platform/provider/role/profile; retain unknown/failed statuses where no native proof exists |
 
