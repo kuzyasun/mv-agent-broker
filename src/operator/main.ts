@@ -1,5 +1,5 @@
 import path from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { callBridgeTool, bridgeToolDefs } from "../bridge/tools.ts";
 import { runStdioBridge, type McpToolContext } from "../bridge/server.ts";
@@ -7,14 +7,15 @@ import { startDaemon } from "../daemon/bootstrap.ts";
 import { startDaemonRpc, type OperatorStopPlan } from "../daemon/rpc.ts";
 import { listNonterminalTurns, listPendingIntents } from "../storage/repo.ts";
 import { BrokerError } from "../shared/errors.ts";
-import { applyOperatorConfig, loadOperatorConfig, operatorConfigFingerprint, type OperatorConfig } from "./config.ts";
+import { applyOperatorConfig, loadOperatorConfig, operatorConfigFingerprint, validateOperatorConfig, type OperatorConfig } from "./config.ts";
 import { readRuntimeRecord, startOperator, statusOperator, stopOperator } from "./operations.ts";
 import { operatorTurnErrorResult, projectOperatorOverview, projectOperatorQuotaPauses, clearQuotaPauseResult } from "./overview.ts";
 import { inspectQuarantine, reconcileWorkspace } from "./recovery.ts";
+import { isPackageBuild, packageRootFromSource, readRuntimeManifest, runtimeEntryInfo, runtimeIdentity } from "./packageOrigin.ts";
 import { createOperatorStorageHandlers } from "./storage.ts";
 import { startOperatorUi } from "./ui.ts";
 
-type Command = "validate" | "stdio" | "daemon" | "mcp-config" | "ui" | "start" | "status" | "stop" | "quarantine-inspect" | "reconcile-workspace";
+type Command = "init" | "validate" | "stdio" | "daemon" | "mcp-config" | "ui" | "start" | "status" | "stop" | "quarantine-inspect" | "reconcile-workspace";
 
 function parseArgs(argv: string[]): {
   command: Command;
@@ -24,6 +25,8 @@ function parseArgs(argv: string[]): {
   ref: string;
   workspaceId?: string;
   note?: string;
+  help: boolean;
+  version: boolean;
 } {
   let command: Command = "stdio";
   let configPath: string | undefined;
@@ -32,9 +35,13 @@ function parseArgs(argv: string[]): {
   let ref = "HEAD";
   let workspaceId: string | undefined;
   let note: string | undefined;
+  let help = false;
+  let version = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--connect") { connect = true; continue; }
+    if (arg === "--help" || arg === "-h") { help = true; continue; }
+    if (arg === "--version") { version = true; continue; }
     if (arg === "--config") {
       configPath = argv[++index];
       continue;
@@ -61,13 +68,16 @@ function parseArgs(argv: string[]): {
       if (!note) throw new Error("--note requires an operator explanation.");
       continue;
     }
-    if (arg === "validate" || arg === "stdio" || arg === "daemon" || arg === "mcp-config" || arg === "ui" || arg === "start" || arg === "status" || arg === "stop" || arg === "quarantine-inspect" || arg === "reconcile-workspace") {
+    if (arg === "init" || arg === "validate" || arg === "stdio" || arg === "daemon" || arg === "mcp-config" || arg === "ui" || arg === "start" || arg === "status" || arg === "stop" || arg === "quarantine-inspect" || arg === "reconcile-workspace") {
       command = arg;
       continue;
     }
     throw new Error(`Unknown argument '${arg}'.`);
   }
-  if (!configPath) throw new Error("--config PATH is required.");
+  if (help || version) {
+    return { command, configPath: "", connect, port, ref, workspaceId, note, help, version };
+  }
+  if (!configPath) throw new Error("--config PATH is required. Run with --help for usage.");
   if (connect && command !== "mcp-config") throw new Error("--connect is only supported by mcp-config.");
   if (port !== 4318 && command !== "ui") throw new Error("--port is only supported by ui.");
   if (ref !== "HEAD" && command !== "start") throw new Error("--ref is only supported by start.");
@@ -77,7 +87,90 @@ function parseArgs(argv: string[]): {
   if (note !== undefined && command !== "reconcile-workspace") throw new Error("--note is only supported by reconcile-workspace.");
   if (command === "reconcile-workspace" && workspaceId === undefined) throw new Error("reconcile-workspace requires --workspace-id.");
   if (command === "reconcile-workspace" && note === undefined) throw new Error("reconcile-workspace requires --note.");
-  return { command, configPath: path.resolve(configPath), connect, port, ref, workspaceId, note };
+  return { command, configPath: path.resolve(configPath), connect, port, ref, workspaceId, note, help, version };
+}
+
+const HELP_TEXT = `agent-broker — local MCP broker for multi-vendor coding agents
+
+Usage: agent-broker <command> --config PATH [options]
+
+Commands:
+  init                 Write a minimal valid empty operator config and exit.
+  validate             Parse and validate the operator config, then exit.
+  start                Freeze the current runtime into the state directory and
+                       launch a detached shared daemon, then wait until READY.
+  status               Report daemon status (observed-running, last-known or stopped).
+  stop                 Gracefully stop an idle daemon (refuses with active turns).
+  ui                   Serve the operator settings UI on http://127.0.0.1.
+  mcp-config           Print an MCP client configuration snippet.
+  stdio                Run an in-process stdio MCP bridge (default command).
+  daemon               Run the shared daemon in the foreground.
+  quarantine-inspect   List quarantined workspaces in the state directory.
+  reconcile-workspace  Reconcile one workspace after a failure.
+
+Options:
+  --config PATH        Operator configuration file (required except for
+                       --help and --version).
+  --port N             ui: loopback port to listen on (default 4318).
+  --connect            mcp-config: attach to an already-started shared daemon
+                       instead of starting a private in-process one.
+  --ref COMMIT         start: development-only Git snapshot to freeze
+                       (requires running from a Git checkout).
+  --workspace-id ID    quarantine-inspect/reconcile-workspace workspace.
+  --note TEXT          reconcile-workspace operator explanation.
+  --help               Print this help and exit.
+  --version            Print the package version and exit.
+
+Typical first run:
+  agent-broker init --config ./operator.json
+  agent-broker ui --config ./operator.json
+
+The generated config starts empty; add projects, accounts and agent profile
+pools in the operator UI, then run 'agent-broker start --config ./operator.json'.
+`;
+
+function printVersion(): void {
+  let version = "unknown";
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(packageRootFromSource(), "package.json"), "utf8")) as { version?: unknown };
+    if (typeof pkg.version === "string" && pkg.version) version = pkg.version;
+  } catch { /* keep unknown */ }
+  process.stdout.write(`${version}\n`);
+}
+
+function initOperatorConfigFile(configPath: string): { config: string; state_dir: string; coordinator_id: string } {
+  const target = path.resolve(configPath);
+  const configDir = path.dirname(target);
+  const packageRoot = packageRootFromSource();
+  if (isPackageBuild()) {
+    const relative = path.relative(packageRoot, target);
+    if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+      throw new Error("Refusing to create operator configuration inside the installed package; keep configuration and state outside the installation.");
+    }
+  }
+  if (existsSync(target)) throw new Error(`Refusing to overwrite the existing config '${target}'.`);
+  const stateDirRelative = "./agent-broker-state";
+  const config = {
+    version: 1 as const,
+    state_dir: stateDirRelative,
+    coordinator_id: "operator",
+    projects: [],
+    coordinators: [{ coordinator_id: "operator", display_name: "Operator", allowed_project_ids: [] }],
+    accounts: [],
+    workspaces: [],
+    policy_profiles: [],
+    coverage_profiles: [],
+    routes: [],
+  };
+  // Prove the generated file is valid before writing it.
+  validateOperatorConfig(JSON.parse(JSON.stringify(config)), configDir);
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx" });
+  return {
+    config: target,
+    state_dir: path.resolve(configDir, stateDirRelative),
+    coordinator_id: "operator",
+  };
 }
 
 function binaryPins(config: OperatorConfig): Record<string, string | undefined> {
@@ -134,9 +227,8 @@ export function daemonOperatorStatus(
   daemon: Awaited<ReturnType<typeof startDaemon>>,
   appliedConfigFingerprint: string,
 ): Record<string, unknown> {
-  const runtimePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const manifestPath = path.join(runtimePath, "runtime-manifest.json");
-  const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) as { commit: string } : null;
+  const runtimePath = packageRootFromSource();
+  const origin = readRuntimeManifest(runtimePath)?.origin ?? null;
   const overview = projectOperatorOverview(daemon.db);
   return {
     readiness: daemon.lifecycle.currentState,
@@ -145,8 +237,11 @@ export function daemonOperatorStatus(
     daemon_pid: process.pid,
     runtime_observation: "observed-running",
     applied_config_fingerprint: appliedConfigFingerprint,
-    runtime_commit: manifest?.commit ?? null,
-    runtime_path: manifest ? runtimePath : null,
+    runtime_commit: origin?.kind === "git" ? origin.commit : null,
+    runtime_version: origin?.kind === "npm-package" ? origin.version : null,
+    runtime_origin: origin,
+    runtime_identity: origin ? runtimeIdentity(origin) : null,
+    runtime_path: origin ? runtimePath : null,
     ...overview,
     quota_pauses: projectOperatorQuotaPauses(daemon.db, Date.now()),
     pending_intents: listPendingIntents(daemon.db).map(intent => ({
@@ -248,15 +343,29 @@ async function runUi(configPath: string, port: number): Promise<void> {
 }
 
 function printMcpConfig(configPath: string, config: OperatorConfig, connect: boolean): void {
-  const record = connect ? readRuntimeRecord(config.state_dir) : null;
-  const scriptPath = connect
-    ? path.resolve(record?.runtime_path ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."), "src/bridge/main-stdio.ts")
-    : path.resolve(fileURLToPath(import.meta.url));
+  // Without --connect the client runs this CLI in-process stdio mode; with
+  // --connect it attaches to the accepted frozen runtime's out-of-process
+  // bridge. TypeScript runtimes (Git snapshots) need the transform flag;
+  // installed packages run compiled JavaScript with plain Node.
+  const runningScript = path.resolve(fileURLToPath(import.meta.url));
+  let scriptPath = runningScript;
+  let nodeArgs = runningScript.endsWith(".ts") ? ["--experimental-transform-types"] : [];
+  if (connect) {
+    const record = readRuntimeRecord(config.state_dir);
+    const entry = record ? runtimeEntryInfo(record.runtime_path) : null;
+    if (entry) {
+      const extension = entry.entryPath.endsWith(".ts") ? ".ts" : ".js";
+      scriptPath = path.resolve(path.dirname(entry.entryPath), "..", "bridge", `main-stdio${extension}`);
+      nodeArgs = entry.nodeArgs;
+    } else {
+      throw new Error("Start the shared daemon before requesting mcp-config --connect.");
+    }
+  }
   process.stdout.write(`${JSON.stringify({
     mcpServers: {
       "agent-broker": {
         command: path.resolve(process.execPath),
-        args: ["--experimental-transform-types", scriptPath, ...(connect ? [] : ["stdio", "--config", configPath])],
+        args: [...nodeArgs, scriptPath, ...(connect ? [] : ["stdio", "--config", configPath])],
         ...(connect ? { env: { AB_STATE_DIR: config.state_dir, AB_COORDINATOR_ID: config.coordinator_id } } : {}),
       },
     },
@@ -264,9 +373,21 @@ function printMcpConfig(configPath: string, config: OperatorConfig, connect: boo
 }
 
 async function main(): Promise<void> {
-  const { command, configPath, connect, port, ref, workspaceId, note } = parseArgs(process.argv.slice(2));
+  const { command, configPath, connect, port, ref, workspaceId, note, help, version } = parseArgs(process.argv.slice(2));
+  if (help) {
+    process.stdout.write(HELP_TEXT);
+    return;
+  }
+  if (version) {
+    printVersion();
+    return;
+  }
   if (command === "ui") {
     await runUi(configPath, port);
+    return;
+  }
+  if (command === "init") {
+    process.stdout.write(`${JSON.stringify(initOperatorConfigFile(configPath))}\n`);
     return;
   }
   const config = loadOperatorConfig(configPath);

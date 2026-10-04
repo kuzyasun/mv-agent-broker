@@ -349,7 +349,7 @@
     const button = $("restart-daemon");
     const idle = livePayload?.status === "ready" && livePayload.readiness === "READY"
       && livePayload.runtime_observation === "observed-running"
-      && /^[0-9a-f]{40}$/i.test(livePayload.runtime_commit || "")
+      && typeof livePayload.runtime_identity === "string" && livePayload.runtime_identity.length > 0
       && livePayload.active_turn_count === 0
       && Array.isArray(livePayload.active_turns) && livePayload.active_turns.length === 0
       && Array.isArray(livePayload.pending_intents) && livePayload.pending_intents.length === 0;
@@ -520,18 +520,30 @@
       container.append(row);
     }
   }
+  const runtimeLabel = (payload, observation) => {
+    const prefix = observation === "last-known" ? "Last-known " : "";
+    const origin = payload?.runtime_origin;
+    if (origin && origin.kind === "npm-package") {
+      const digest = typeof origin.content_sha256 === "string" && origin.content_sha256.length >= 8
+        ? ` (${origin.content_sha256.slice(0, 8)}…)`
+        : "";
+      return `${prefix}package ${origin.version}${digest}`;
+    }
+    if (typeof payload?.runtime_commit === "string" && payload.runtime_commit) {
+      return `${prefix}${payload.runtime_commit}`;
+    }
+    return null;
+  };
   const renderLiveStatus = (payload, background = false) => {
     livePayload = payload;
     renderSettingsState(payload);
     const live = payload && payload.status === "ready" && payload.readiness === "READY";
     const observation = payload && payload.runtime_observation || "unknown";
-    const runtimeVersion = typeof payload?.runtime_commit === "string" && payload.runtime_commit
-      ? `${observation === "last-known" ? "Last-known " : ""}${payload.runtime_commit}`
-      : live
-        ? "Unknown (source/no manifest)"
+    const runtimeVersion = runtimeLabel(payload, observation)
+      || (live ? "Unknown (source/no manifest)"
         : observation === "last-known"
           ? "Unknown (last-known metadata)"
-          : "Unknown";
+          : "Unknown");
     const runtimePid = typeof payload?.daemon_pid === "number"
       ? `${observation === "last-known" ? "Last-known " : ""}PID ${payload.daemon_pid}`
       : "Not observed";

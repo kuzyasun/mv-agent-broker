@@ -58,15 +58,11 @@ try {
 }
 
 if (-not $record -or
-    [string]::IsNullOrWhiteSpace($record.runtime_commit) -or
+    [string]::IsNullOrWhiteSpace($record.runtime_identity) -or
     [string]::IsNullOrWhiteSpace($record.runtime_path) -or
     [string]::IsNullOrWhiteSpace($record.manifest_path) -or
     [string]::IsNullOrWhiteSpace($record.config_path)) {
   throw "NO_ACCEPTED_RUNTIME: operator-runtime.json is incomplete."
-}
-
-if ($record.runtime_commit -notmatch '^[0-9a-fA-F]{40}$') {
-  throw "NO_ACCEPTED_RUNTIME: recorded runtime_commit '$($record.runtime_commit)' is not a valid 40-character commit hash."
 }
 
 $recordedConfigPath = [System.IO.Path]::GetFullPath($record.config_path)
@@ -96,11 +92,36 @@ try {
   throw "NO_ACCEPTED_RUNTIME: runtime manifest cannot be parsed: $($_.Exception.Message)"
 }
 
-if (-not $manifest -or [string]::Compare([string]$manifest.commit, [string]$record.runtime_commit, [System.StringComparison]::OrdinalIgnoreCase) -ne 0) {
-  throw "NO_ACCEPTED_RUNTIME: manifest commit '$($manifest.commit)' does not match recorded commit '$($record.runtime_commit)'."
+$origin = $manifest.origin
+$expectedIdentity = $null
+if ($origin -and $origin.kind -eq 'git') {
+  if ([string]::IsNullOrWhiteSpace($origin.commit) -or $origin.commit -notmatch '^[0-9a-fA-F]{40}$') {
+    throw "NO_ACCEPTED_RUNTIME: manifest Git commit '$($origin.commit)' is not a valid 40-character commit hash."
+  }
+  $expectedIdentity = "git:$($origin.commit)"
+} elseif ($origin -and $origin.kind -eq 'npm-package') {
+  if ([string]::IsNullOrWhiteSpace($origin.name) -or
+      [string]::IsNullOrWhiteSpace($origin.version) -or
+      [string]::IsNullOrWhiteSpace($origin.content_sha256) -or
+      $origin.content_sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+    throw "NO_ACCEPTED_RUNTIME: manifest package origin is incomplete."
+  }
+  $expectedIdentity = "package:$($origin.name)@$($origin.version):$($origin.content_sha256)"
+} else {
+  throw "NO_ACCEPTED_RUNTIME: runtime manifest is missing a supported origin identity."
 }
 
-$entrypoint = Join-Path $runtimePath "src\operator\main.ts"
+if ([string]::Compare([string]$record.runtime_identity, $expectedIdentity, [System.StringComparison]::OrdinalIgnoreCase) -ne 0) {
+  throw "NO_ACCEPTED_RUNTIME: recorded runtime_identity '$($record.runtime_identity)' does not match manifest identity '$expectedIdentity'."
+}
+
+$runtimeEntry = [string]$manifest.runtime.entry
+if ([string]::IsNullOrWhiteSpace($runtimeEntry)) {
+  throw "NO_ACCEPTED_RUNTIME: runtime manifest does not declare its entry point."
+}
+$expectedEntry = if ($origin.kind -eq 'git') { 'src/operator/main.ts' } else { 'dist/operator/main.js' }
+if ($runtimeEntry -ne $expectedEntry) { throw 'NO_ACCEPTED_RUNTIME: unexpected runtime entry point.' }
+$entrypoint = Join-Path $runtimePath ($runtimeEntry -replace '/', '\')
 if (-not (Test-Path -LiteralPath $entrypoint -PathType Leaf)) {
   throw "NO_ACCEPTED_RUNTIME: runtime entry point not found at '$entrypoint'."
 }
@@ -136,15 +157,20 @@ try {
   throw "PORT_ALREADY_OWNED: UI port $Port cannot be bound ($($_.Exception.Message))."
 }
 
-$commandLine = @(
-  (Quote-Argument $resolvedNodePath),
-  '--experimental-transform-types',
-  (Quote-Argument $entrypoint),
-  'ui',
-  '--config',
-  (Quote-Argument $resolvedConfigPath),
-  '--port',
-  [string]$Port
+# Git-snapshot runtimes keep TypeScript sources and need the transform flag;
+# installed packages freeze compiled JavaScript and run plain Node.
+$nodeArgs = @()
+if ($entrypoint -match '\.ts$') { $nodeArgs += '--experimental-transform-types' }
+
+$commandLine = (
+  @(Quote-Argument $resolvedNodePath) + $nodeArgs + @(
+    (Quote-Argument $entrypoint),
+    'ui',
+    '--config',
+    (Quote-Argument $resolvedConfigPath),
+    '--port',
+    [string]$Port
+  )
 ) -join ' '
 
 $startup = ([wmiclass]'Win32_ProcessStartup').CreateInstance()
@@ -201,7 +227,9 @@ $sidecar = [ordered]@{
   url = "http://127.0.0.1:$Port"
   pid = $processId
   creation_date = $creationDate
-  runtime_commit = [string]$record.runtime_commit
+  runtime_identity = [string]$record.runtime_identity
+  runtime_origin = $origin
+  runtime_commit = $(if ($origin.kind -eq 'git') { [string]$origin.commit } else { $null })
   runtime_path = $runtimePath
   config_path = $resolvedConfigPath
   started_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -214,5 +242,7 @@ $sidecarJson = $sidecar | ConvertTo-Json -Depth 5
   url = "http://127.0.0.1:$Port"
   pid = $processId
   creation_date = $creationDate
-  runtime_commit = [string]$record.runtime_commit
+  runtime_identity = [string]$record.runtime_identity
+  runtime_origin = $origin
+  runtime_commit = $(if ($origin.kind -eq 'git') { [string]$origin.commit } else { $null })
 } | ConvertTo-Json -Compress

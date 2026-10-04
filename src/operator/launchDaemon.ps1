@@ -12,13 +12,18 @@ function Quote-Argument([string]$Value) {
   return '"' + $Value.Replace('"', '\"') + '"'
 }
 
-$commandLine = @(
-  (Quote-Argument $NodePath),
-  '--experimental-transform-types',
-  (Quote-Argument $RuntimeEntry),
-  'daemon',
-  '--config',
-  (Quote-Argument $ConfigPath)
+# Git-snapshot runtimes keep TypeScript sources and need the transform flag;
+# installed packages freeze compiled JavaScript and run plain Node.
+$nodeArgs = @()
+if ($RuntimeEntry -match '\.ts$') { $nodeArgs += '--experimental-transform-types' }
+
+$commandLine = (
+  @(Quote-Argument $NodePath) + $nodeArgs + @(
+    (Quote-Argument $RuntimeEntry),
+    'daemon',
+    '--config',
+    (Quote-Argument $ConfigPath)
+  )
 ) -join ' '
 
 $startup = ([wmiclass]'Win32_ProcessStartup').CreateInstance()

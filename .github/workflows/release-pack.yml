@@ -1,0 +1,42 @@
+name: packaging
+
+# Builds and verifies the installable npm tarball on Windows, where the broker
+# is developed and where its PowerShell launchers and helpers run. The source
+# suite relies on Windows behavior (PowerShell launchers, Win32 process
+# helpers), so there is deliberately no Linux job yet.
+# No publish step: the tarball artifact is the distribution; nothing here
+# claims registry credentials.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:ui
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test -- --maxWorkers=2
+      - run: npm run release:pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-broker-tarball
+          path: releases/*.tgz
+          if-no-files-found: error

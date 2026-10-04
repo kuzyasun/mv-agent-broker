@@ -15,33 +15,28 @@ import { fileURLToPath } from "node:url";
 import { DaemonRpcError, DaemonRpcClient } from "../bridge/rpcClient.ts";
 import { readBridgeToken, socketPathFor } from "../daemon/rpc.ts";
 import { operatorConfigFingerprint, type OperatorConfig } from "./config.ts";
+import { sha256Hex } from "../shared/ids.ts";
+import {
+  PACKAGE_MANIFEST_NAME,
+  extractPackageRuntime,
+  isValidRuntimeOrigin,
+  isPackageBuild,
+  packageRootFromSource,
+  readPackageManifest,
+  runtimeEntryInfo,
+  runtimeIdentity,
+  type RuntimeManifest,
+  type RuntimeManifestFile,
+  type RuntimeOrigin,
+  type RuntimeRecord,
+} from "./packageOrigin.ts";
+
+export type { RuntimeManifest, RuntimeManifestFile, RuntimeOrigin, RuntimeRecord } from "./packageOrigin.ts";
+export { isValidRuntimeOrigin, runtimeIdentity, packageRootFromSource } from "./packageOrigin.ts";
 
 const OPERATOR_RECORD = "operator-runtime.json";
 const READY_TIMEOUT_MS = 20_000;
 const STOP_TIMEOUT_MS = 15_000;
-
-export interface RuntimeManifestFile {
-  path: string;
-  mode: string;
-  oid: string;
-  size: number;
-}
-
-export interface RuntimeManifest {
-  commit: string;
-  files: RuntimeManifestFile[];
-}
-
-export interface RuntimeRecord {
-  runtime_commit: string;
-  runtime_path: string;
-  manifest_path: string;
-  runtime_files: number;
-  config_path: string;
-  daemon_pid: number;
-  process_identity: string;
-  started_at: number;
-}
 
 export interface OperatorStatus {
   status: "ready" | "stopped" | "unavailable";
@@ -51,6 +46,9 @@ export interface OperatorStatus {
   saved_config_fingerprint: string;
   applied_config_fingerprint: string | null;
   runtime_commit: string | null;
+  runtime_version: string | null;
+  runtime_origin: RuntimeOrigin | null;
+  runtime_identity: string | null;
   runtime_path: string | null;
   daemon_pid: number | null;
   active_turn_count: number | null;
@@ -123,12 +121,12 @@ function extractGitRuntime(repoRoot: string, runtimePath: string, ref: string): 
     if (mode === "100755") {
       try { chmodSync(target, 0o755); } catch { /* best effort on Windows */ }
     }
-    files.push({ path: relativePath, mode, oid, size: contents.byteLength });
+    files.push({ path: relativePath, mode, oid, size: contents.byteLength, sha256: sha256Hex(contents) });
   }
   if (!files.some(file => file.path === "package.json") || !files.some(file => file.path === "src/operator/main.ts")) {
     throw new Error("Runtime export is missing package.json or src/operator/main.ts.");
   }
-  return { commit, files };
+  return { origin: { kind: "git", commit }, runtime: { entry: "src/operator/main.ts" }, files };
 }
 
 export function extractRuntime(
@@ -142,10 +140,11 @@ export function extractRuntime(
   const runtimePath = path.join(runtimeRoot, `${Date.now()}-${randomUUID()}`);
   mkdirSync(runtimePath, { recursive: true });
   const manifest = extractGitRuntime(repoRoot, runtimePath, ref);
-  const manifestPath = path.join(runtimePath, "runtime-manifest.json");
+  const manifestPath = path.join(runtimePath, PACKAGE_MANIFEST_NAME);
   writeJsonAtomically(manifestPath, manifest);
   const record: RuntimeRecord = {
-    runtime_commit: manifest.commit,
+    runtime_origin: manifest.origin,
+    runtime_identity: runtimeIdentity(manifest.origin),
     runtime_path: runtimePath,
     manifest_path: manifestPath,
     runtime_files: manifest.files.length,
@@ -170,7 +169,9 @@ export function readRuntimeRecord(stateDir: string): RuntimeRecord | null {
   try {
     const value = JSON.parse(readFileSync(runtimeRecordPath(stateDir), "utf8")) as Partial<RuntimeRecord>;
     if (
-      typeof value.runtime_commit !== "string" ||
+      !isValidRuntimeOrigin(value.runtime_origin) ||
+      typeof value.runtime_identity !== "string" ||
+      value.runtime_identity !== runtimeIdentity(value.runtime_origin) ||
       typeof value.runtime_path !== "string" ||
       typeof value.manifest_path !== "string" ||
       typeof value.daemon_pid !== "number"
@@ -192,17 +193,20 @@ interface LaunchedProcess {
 }
 
 function launchDaemon(runtimePath: string, configPath: string, stateDir: string): LaunchedProcess {
-  const entrypoint = path.join(runtimePath, "src", "operator", "main.ts");
+  const entry = runtimeEntryInfo(runtimePath);
+  if (!entry || !existsSync(entry.entryPath)) {
+    throw new Error(`Frozen runtime entrypoint is missing in '${runtimePath}'.`);
+  }
   const logDir = path.join(runtimePath, "logs");
   mkdirSync(logDir, { recursive: true });
   if (process.platform === "win32") {
-    const helper = path.join(runtimePath, "src", "operator", "launchDaemon.ps1");
+    const launcher = path.join(path.dirname(entry.entryPath), "launchDaemon.ps1");
     const output = execFileSync(
       powershellPath(),
       [
-        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper,
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcher,
         "-NodePath", path.resolve(process.execPath),
-        "-RuntimeEntry", entrypoint,
+        "-RuntimeEntry", entry.entryPath,
         "-ConfigPath", path.resolve(configPath),
         "-RuntimePath", runtimePath,
         "-StateDir", path.resolve(stateDir),
@@ -219,7 +223,7 @@ function launchDaemon(runtimePath: string, configPath: string, stateDir: string)
   const stderr = openSync(path.join(logDir, "daemon.stderr.log"), "a");
   const child = spawn(
     process.execPath,
-    ["--experimental-transform-types", entrypoint, "daemon", "--config", path.resolve(configPath)],
+    [...entry.nodeArgs, entry.entryPath, "daemon", "--config", path.resolve(configPath)],
     { cwd: runtimePath, detached: true, stdio: ["ignore", stdout, stderr], windowsHide: true },
   );
   child.unref();
@@ -342,18 +346,36 @@ async function assertNotOwned(config: OperatorConfig): Promise<void> {
   }
 }
 
-export async function startOperator(config: OperatorConfig, configPath: string, ref = "HEAD"): Promise<Record<string, unknown>> {
-  await assertNotOwned(config);
-  const extracted = extractRuntime(ref, config.state_dir, configPath);
-  const launched = launchDaemon(extracted.record.runtime_path, path.resolve(configPath), config.state_dir);
-  const record: RuntimeRecord = {
-    ...extracted.record,
-    config_path: path.resolve(configPath),
-    daemon_pid: launched.pid,
-    process_identity: launched.identity,
+function originStatusFields(origin: RuntimeOrigin | null): Pick<OperatorStatus, "runtime_commit" | "runtime_version" | "runtime_origin" | "runtime_identity"> {
+  return {
+    runtime_commit: origin?.kind === "git" ? origin.commit : null,
+    runtime_version: origin?.kind === "npm-package" ? origin.version : null,
+    runtime_origin: origin,
+    runtime_identity: origin ? runtimeIdentity(origin) : null,
   };
+}
+
+export async function startOperator(config: OperatorConfig, configPath: string, ref = "HEAD"): Promise<Record<string, unknown>> {
+  const packageRoot = packageRootFromSource();
+  const installed = isPackageBuild() ? readPackageManifest(packageRoot) : null;
+  if (isPackageBuild() && !installed) throw new Error("INSTALLED_PACKAGE_INVALID: runtime manifest is missing or invalid.");
+  if (installed && ref !== "HEAD") {
+    throw new Error("--ref requires running from a development Git checkout; an installed package freezes its own manifest-verified files.");
+  }
+  await assertNotOwned(config);
+  const extracted = installed
+    ? extractPackageRuntime(packageRoot, config.state_dir, configPath)
+    : extractRuntime(ref, config.state_dir, configPath);
+  const record = extracted.record;
+  const launched = launchDaemon(record.runtime_path, path.resolve(configPath), config.state_dir);
+  record.daemon_pid = launched.pid;
+  record.process_identity = launched.identity;
   const status = await waitForReady(config);
-  if (status.daemon_pid !== record.daemon_pid || status.runtime_commit !== record.runtime_commit || status.runtime_path !== record.runtime_path) {
+  if (
+    status.daemon_pid !== record.daemon_pid ||
+    status.runtime_identity !== record.runtime_identity ||
+    !sameRuntimePath(status.runtime_path, record.runtime_path)
+  ) {
     throw new Error("Daemon READY identity does not match the launched runtime.");
   }
   saveRuntimeRecord(config.state_dir, record);
@@ -363,7 +385,7 @@ export async function startOperator(config: OperatorConfig, configPath: string, 
     settings_state: status.applied_config_fingerprint === operatorConfigFingerprint(config) ? "applied" : "unknown",
     saved_config_fingerprint: operatorConfigFingerprint(config),
     applied_config_fingerprint: typeof status.applied_config_fingerprint === "string" ? status.applied_config_fingerprint : null,
-    runtime_commit: record.runtime_commit,
+    ...originStatusFields(record.runtime_origin),
     runtime_path: record.runtime_path,
     state_dir: config.state_dir,
     daemon_pid: record.daemon_pid,
@@ -388,6 +410,7 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
       const appliedConfigFingerprint = typeof status.applied_config_fingerprint === "string"
         ? status.applied_config_fingerprint
         : null;
+      const origin = isValidRuntimeOrigin(status.runtime_origin) ? status.runtime_origin : null;
       return {
         status: "ready",
         readiness,
@@ -397,7 +420,7 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
           : appliedConfigFingerprint === savedConfigFingerprint ? "applied" : "restart_required",
         saved_config_fingerprint: savedConfigFingerprint,
         applied_config_fingerprint: appliedConfigFingerprint,
-        runtime_commit: typeof status.runtime_commit === "string" ? status.runtime_commit : null,
+        ...originStatusFields(origin),
         runtime_path: typeof status.runtime_path === "string" ? status.runtime_path : null,
         daemon_pid: typeof status.daemon_pid === "number" ? status.daemon_pid : null,
         active_turn_count: typeof status.active_turn_count === "number" ? status.active_turn_count : null,
@@ -418,7 +441,7 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
       settings_state: "unknown",
       saved_config_fingerprint: savedConfigFingerprint,
       applied_config_fingerprint: null,
-      runtime_commit: record?.runtime_commit ?? null,
+      ...originStatusFields(record?.runtime_origin ?? null),
       runtime_path: record?.runtime_path ?? null,
       daemon_pid: record?.daemon_pid ?? null,
       active_turn_count: null,
@@ -439,7 +462,7 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
       settings_state: "unknown",
       saved_config_fingerprint: savedConfigFingerprint,
       applied_config_fingerprint: null,
-      runtime_commit: record?.runtime_commit ?? null,
+      ...originStatusFields(record?.runtime_origin ?? null),
       runtime_path: record?.runtime_path ?? null,
       daemon_pid: record?.daemon_pid ?? null,
       active_turn_count: null,
@@ -478,12 +501,10 @@ function sameRuntimePath(value: unknown, runtimePath: string): boolean {
 }
 
 export async function restartOperator(config: OperatorConfig, configPath: string): Promise<Record<string, unknown>> {
+  // readRuntimeRecord only returns records whose origin and identity agree.
   const record = readRuntimeRecord(config.state_dir);
   if (
     !record ||
-    !/^[0-9a-f]{40}$/i.test(record.runtime_commit) ||
-    typeof record.runtime_path !== "string" ||
-    typeof record.manifest_path !== "string" ||
     typeof record.config_path !== "string" ||
     !Number.isInteger(record.daemon_pid) ||
     record.daemon_pid <= 0
@@ -493,18 +514,22 @@ export async function restartOperator(config: OperatorConfig, configPath: string
   const runtimePath = path.resolve(record.runtime_path);
   const manifestPath = path.resolve(record.manifest_path);
   const savedConfigPath = path.resolve(configPath);
-  if (manifestPath !== path.join(runtimePath, "runtime-manifest.json") || path.resolve(record.config_path) !== savedConfigPath) {
+  if (manifestPath !== path.join(runtimePath, PACKAGE_MANIFEST_NAME) || path.resolve(record.config_path) !== savedConfigPath) {
     throw new Error("NO_ACCEPTED_RUNTIME: the accepted runtime record does not match its manifest and saved config; restart was not started.");
   }
-  let manifestCommit = "";
+  let manifestOrigin: RuntimeOrigin | null = null;
   try {
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { commit?: unknown };
-    if (typeof manifest.commit === "string") manifestCommit = manifest.commit;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { origin?: unknown };
+    if (isValidRuntimeOrigin(manifest.origin)) manifestOrigin = manifest.origin;
   } catch {
     throw new Error("NO_ACCEPTED_RUNTIME: the accepted runtime manifest cannot be read; restart was not started.");
   }
-  if (manifestCommit !== record.runtime_commit || !existsSync(path.join(runtimePath, "src", "operator", "main.ts"))) {
-    throw new Error("NO_ACCEPTED_RUNTIME: the accepted runtime manifest does not match the recorded commit; restart was not started.");
+  if (!manifestOrigin || runtimeIdentity(manifestOrigin) !== record.runtime_identity) {
+    throw new Error("NO_ACCEPTED_RUNTIME: the accepted runtime manifest does not match the recorded identity; restart was not started.");
+  }
+  const entry = runtimeEntryInfo(runtimePath);
+  if (!entry || !existsSync(entry.entryPath)) {
+    throw new Error("NO_ACCEPTED_RUNTIME: the accepted runtime entrypoint is missing; restart was not started.");
   }
 
   let live: Record<string, unknown>;
@@ -522,7 +547,7 @@ export async function restartOperator(config: OperatorConfig, configPath: string
   if (live.readiness !== "READY") {
     throw new Error(`DAEMON_UNAVAILABLE: daemon readiness is ${String(live.readiness ?? "unknown")}; restart was not started.`);
   }
-  if (live.runtime_commit !== record.runtime_commit || !sameRuntimePath(live.runtime_path, runtimePath) || live.daemon_pid !== record.daemon_pid) {
+  if (live.runtime_identity !== record.runtime_identity || !sameRuntimePath(live.runtime_path, runtimePath) || live.daemon_pid !== record.daemon_pid) {
     throw new Error("RUNTIME_IDENTITY_MISMATCH: live daemon identity does not match the accepted runtime record; restart was not started.");
   }
   if (typeof live.active_turn_count !== "number" || !Array.isArray(live.pending_intents)) {
@@ -541,7 +566,7 @@ export async function restartOperator(config: OperatorConfig, configPath: string
   const expectedFingerprint = operatorConfigFingerprint(config);
   if (
     status.daemon_pid !== launched.pid ||
-    status.runtime_commit !== record.runtime_commit ||
+    status.runtime_identity !== record.runtime_identity ||
     !sameRuntimePath(status.runtime_path, runtimePath) ||
     status.applied_config_fingerprint !== expectedFingerprint
   ) {
@@ -549,7 +574,8 @@ export async function restartOperator(config: OperatorConfig, configPath: string
   }
   const updated: RuntimeRecord = {
     ...record,
-    runtime_commit: record.runtime_commit,
+    runtime_origin: record.runtime_origin,
+    runtime_identity: record.runtime_identity,
     runtime_path: runtimePath,
     manifest_path: manifestPath,
     config_path: savedConfigPath,
@@ -564,7 +590,7 @@ export async function restartOperator(config: OperatorConfig, configPath: string
     settings_state: "applied",
     saved_config_fingerprint: expectedFingerprint,
     applied_config_fingerprint: expectedFingerprint,
-    runtime_commit: record.runtime_commit,
+    ...originStatusFields(record.runtime_origin),
     runtime_path: runtimePath,
     daemon_pid: launched.pid,
     state_dir: config.state_dir,
@@ -576,11 +602,12 @@ export async function stopOperator(config: OperatorConfig): Promise<Record<strin
   const response = await requestDaemon(config, "operator/stop") as Record<string, unknown>;
   if (response.accepted !== true) throw new Error("Daemon did not acknowledge graceful stop.");
   await waitForStopped(config);
+  const origin = isValidRuntimeOrigin(response.runtime_origin) ? response.runtime_origin : null;
   return {
     status: "stopped",
     readiness: "UNAVAILABLE",
     runtime_observation: "last-known",
-    runtime_commit: response.runtime_commit ?? null,
+    ...originStatusFields(origin),
     runtime_path: response.runtime_path ?? null,
     state_dir: config.state_dir,
     daemon_pid: response.daemon_pid ?? null,

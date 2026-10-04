@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { DaemonRpcError } from "../bridge/rpcClient.ts";
 import { validateOperatorConfig, type OperatorConfig } from "./config.ts";
 import { clearQuotaPauseOperator, executeStorageOperator, previewStorageOperator, readRuntimeRecord, restartOperator, statusOperator, turnErrorOperator } from "./operations.ts";
+import { runtimeEntryInfo } from "./packageOrigin.ts";
 import { parseAntigravityModelCatalog } from "../providers/antigravity/antigravityAdapter.ts";
 import { parseCursorModelCatalog, resolveCursorModel } from "../providers/cursor/cursorAdapter.ts";
 import { boundedSanitizedDetail, resolveBinaryPath, runMetadataProbe, runMetadataProbeWithFailFastRetry } from "../providers/common/readiness.ts";
@@ -371,10 +372,14 @@ export function buildModelOptions(provider: string, catalog: readonly string[]):
 function buildConnectionSnippets(scriptPath: string, config: OperatorConfig): { json: string; toml: string } {
   const command = path.resolve(process.execPath);
   const record = readRuntimeRecord(config.state_dir);
-  const bridgeScript = record
-    ? path.resolve(record.runtime_path, "src", "bridge", "main-stdio.ts")
-    : path.resolve(path.dirname(scriptPath), "..", "bridge", "main-stdio.ts");
-  const args = ["--experimental-transform-types", bridgeScript];
+  // The accepted runtime owns the out-of-process bridge: Git-snapshot
+  // runtimes keep TypeScript sources (transform flag), installed packages
+  // freeze compiled JavaScript (plain Node).
+  const entry = record ? runtimeEntryInfo(record.runtime_path) : null;
+  const bridgeScript = entry
+    ? path.resolve(path.dirname(entry.entryPath), "..", "bridge", `main-stdio${entry.entryPath.endsWith(".ts") ? ".ts" : ".js"}`)
+    : path.resolve(path.dirname(scriptPath), "..", "bridge", scriptPath.endsWith(".ts") ? "main-stdio.ts" : "main-stdio.js");
+  const args = [...(entry?.nodeArgs ?? (scriptPath.endsWith(".ts") ? ["--experimental-transform-types"] : [])), bridgeScript];
   const json = JSON.stringify({
     mcpServers: {
       "agent-broker": {

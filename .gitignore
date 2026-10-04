@@ -6,3 +6,5 @@ dist/
 *.sqlite-shm
 coverage/
 .state/
+/runtime-manifest.json
+/releases/

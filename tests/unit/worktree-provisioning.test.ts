@@ -1376,7 +1376,8 @@ describe("createRealWorktreeGitRunner process fixtures", () => {
 
   it("a hung mutation times out, keeps the effect uncertain, and never echoes arguments", async () => {
     const runner = createRealWorktreeGitRunner({
-      mutateTimeoutMs: 1_500,
+      // The budget includes Windows PowerShell/helper startup under CI load.
+      mutateTimeoutMs: 10_000,
       programOverride: (gitArgs, kind) => (kind === "mutate" ? nodeScript("setInterval(()=>{},1000);")(gitArgs, kind) : undefined),
     });
     const cwd = mkdtempSync(path.join(tmpdir(), "wt-runner-"));

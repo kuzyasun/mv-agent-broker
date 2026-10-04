@@ -10,6 +10,8 @@ import { insertCoordinator, insertIntent } from "../../src/storage/repo.ts";
 import { openRegistryDb } from "../../src/storage/db.ts";
 import { ID_PREFIX, newId } from "../../src/shared/ids.ts";
 import { extractRuntime } from "../../src/operator/operations.ts";
+import { packageContentDigest } from "../../src/operator/packageOrigin.ts";
+import { sha256Hex } from "../../src/shared/ids.ts";
 
 const roots: string[] = [];
 
@@ -44,17 +46,36 @@ describe("operator runtime RPC", () => {
     writeFileSync(path.join(repo, "src/operator/ui/styles.css"), "DIRTY_UI");
     writeFileSync(path.join(repo, "src/providers/common/windowsJobHelper.ps1"), "DIRTY_HELPER");
     writeFileSync(path.join(repo, "src/operator/untracked-marker.txt"), "UNTRACKED");
+    // Packing a source checkout can leave package metadata at its root.
+    // Source CLI --ref must still freeze the committed Git tree.
+    mkdirSync(path.join(repo, "dist/operator"), { recursive: true });
+    writeFileSync(path.join(repo, "dist/operator/main.js"), "throw new Error('Unaccepted package build');");
+    const packageFiles = ["package.json", "dist/operator/main.js"].map(file => {
+      const bytes = readFileSync(path.join(repo, file));
+      return { path: file, mode: "100644", size: bytes.length, sha256: sha256Hex(bytes) };
+    });
+    writeFileSync(path.join(repo, "runtime-manifest.json"), JSON.stringify({
+      origin: { kind: "npm-package", name: "@gemslibe/agent-broker", version: "0.3.0", content_sha256: packageContentDigest(packageFiles) },
+      runtime: { entry: "dist/operator/main.js" }, files: packageFiles,
+    }));
     let started = false;
     try {
       const running = cli("start", ["--ref", commit]);
       started = true;
       expect(running.readiness).toBe("READY");
       expect(running.runtime_commit).toBe(commit);
+      expect(running.runtime_origin).toEqual({ kind: "git", commit });
+      expect(running.runtime_identity).toBe(`git:${commit}`);
+      expect(running.runtime_version).toBeNull();
       expect(running.state_dir).toBe(path.join(root, "state"));
       const manifest = JSON.parse(readFileSync(path.join(running.runtime_path, "runtime-manifest.json"), "utf8"));
+      expect(manifest.origin).toEqual({ kind: "git", commit });
       expect(manifest.files.some((f: { path: string }) => f.path.endsWith("untracked-marker.txt"))).toBe(false);
       for (const file of ["src/operator/main.ts", "src/operator/ui/styles.css", "src/providers/common/windowsJobHelper.ps1"]) {
-        expect(readFileSync(path.join(running.runtime_path, file), "utf8")).toBe(git(["show", `${commit}:${file}`]) + "\n");
+        const committed = execFileSync("git", ["cat-file", "blob", `${commit}:${file}`], {
+          cwd: repo, windowsHide: true, maxBuffer: 16 * 1024 * 1024,
+        });
+        expect(readFileSync(path.join(running.runtime_path, file))).toEqual(committed);
       }
       const status = cli("status");
       expect(status.status).toBe("ready");
@@ -107,6 +128,17 @@ describe("operator runtime RPC", () => {
     expect(path.isAbsolute(extracted.record.runtime_path)).toBe(true);
     expect(extracted.record.runtime_path.startsWith(path.join(stateDir, "runtimes"))).toBe(true);
     expect(extracted.manifest.files.some(file => file.path === "package.json")).toBe(true);
+    const commit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      windowsHide: true,
+    }).trim();
+    expect(extracted.manifest.origin).toEqual({ kind: "git", commit });
+    expect(extracted.record.runtime_origin).toEqual({ kind: "git", commit });
+    expect(extracted.record.runtime_identity).toBe(`git:${commit}`);
+    for (const file of extracted.manifest.files) {
+      expect(file.sha256).toMatch(/^[0-9a-f]{64}$/);
+    }
     const trackedMain = execFileSync("git", ["show", `HEAD:src/operator/main.ts`], {
       cwd: process.cwd(),
       encoding: "utf8",

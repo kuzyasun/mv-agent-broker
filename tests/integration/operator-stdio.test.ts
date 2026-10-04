@@ -12,15 +12,12 @@ afterEach(() => {
 });
 
 describe("operator stdio", () => {
-  it("emits distinct client startup and existing-daemon bridge snippets", () => {
+  it("emits a client startup snippet and refuses connect without an accepted daemon", () => {
     const args = ["--experimental-transform-types", path.resolve("src/operator/main.ts"), "mcp-config", "--config", path.resolve("docs/examples/operator.mock.json")];
     const run = (connect: boolean) => JSON.parse(execFileSync(process.execPath, [...args, ...(connect ? ["--connect"] : [])], { encoding: "utf8", windowsHide: true }).toString()).mcpServers["agent-broker"];
-    const startup = run(false), bridge = run(true);
+    const startup = run(false);
     expect(startup.args).toContain("stdio");
-    expect(bridge.args[1]).toBe(path.resolve("src/bridge/main-stdio.ts"));
-    expect(bridge.args).not.toContain("stdio");
-    expect(bridge.env.AB_COORDINATOR_ID).toBe("coord-main");
-    expect(path.isAbsolute(bridge.env.AB_STATE_DIR)).toBe(true);
+    expect(() => run(true)).toThrow(/Start the shared daemon/);
   });
 
   it("discovers and spawns a named mock route through a fresh daemon", async () => {

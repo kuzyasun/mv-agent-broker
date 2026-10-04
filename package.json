@@ -1,24 +1,40 @@
 {
-  "name": "agent-broker",
-  "version": "0.2.0",
-  "private": true,
-  "description": "Local deterministic execution/session layer with MCP interface for multi-vendor coding agents (MVP v0.2 spec)",
+  "name": "@gemslibe/agent-broker",
+  "version": "0.3.0",
+  "description": "Local deterministic execution/session layer with MCP interface for multi-vendor coding agents",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
   },
+  "bin": {
+    "agent-broker": "bin/agent-broker.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "docs/providers.md",
+    "docs/operator-guide.md",
+    "docs/coordinator-instructions.md",
+    "docs/examples",
+    "scripts/start-ui.ps1",
+    "runtime-manifest.json"
+  ],
   "scripts": {
     "broker": "node --experimental-transform-types src/operator/main.ts",
     "build:ui": "tailwindcss -i src/operator/ui/input.css -o src/operator/ui/styles.css --minify",
+    "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepack": "npm run build:ui && npm run build && node scripts/generate-runtime-manifest.mjs",
+    "release:pack": "npm run typecheck && node scripts/pack-broker.mjs"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",
     "@types/node": "^24.0.0",
     "tailwindcss": "^4.3.3",
-    "typescript": "^5.6.0",
+    "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   }
 }
