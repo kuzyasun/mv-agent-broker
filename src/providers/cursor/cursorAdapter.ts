@@ -244,7 +244,7 @@ function assertRegularOwnedFileOrAbsent(filePath: string, fieldName: string): vo
 
 export class CursorAdapter implements ProviderAdapter {
   readonly providerId = "cursor";
-  readonly adapterVersion = "0.2.9";
+  readonly adapterVersion = "0.3.0";
 
   readonly stateRoot?: string;
   private readonly binary: string;
@@ -397,9 +397,14 @@ export class CursorAdapter implements ProviderAdapter {
 
     try {
       if (req.role === "reviewer") {
+        // Read-only Git review is a physical-session capability: current and
+        // worktree reviewers may inspect their checkout with broker-validated
+        // read-only git commands; snapshot-slot reviewers stay tool-free.
+        const allowReadOnlyGit = req.workspace_mode === "current" || req.workspace_mode === "worktree";
         const reviewerConfig = buildCursorReviewerConfig({
           workspace_path: req.workspace_path,
           read_only_input_paths: req.read_only_input_paths,
+          allow_read_only_git: allowReadOnlyGit,
         });
 
         const stateRoot = path.resolve(this.stateRoot ??
@@ -490,6 +495,7 @@ export class CursorAdapter implements ProviderAdapter {
           read_only_input_paths: req.read_only_input_paths,
           forbidden_paths: [path.join(stateRoot, "sessions")],
           audit_log_path: auditLogFile,
+          allow_read_only_git: allowReadOnlyGit,
           session_id: req.session_id,
           turn_id: req.turn_id,
         });

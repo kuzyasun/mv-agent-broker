@@ -58,14 +58,22 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    A successful turn proves execution, while its reported checks and quality
    remain claims. Inspect the actual changes and run the smallest relevant
    acceptance check; broaden checks for a concrete integration risk.
-5. For substantive changes, use a separate reviewer route with `review_slot` and
-   the worker's original baseline/final target snapshot in `review_binding`.
-   Omit `workspace_precondition` on this reviewer send; the API requires exactly
-   one of the two bindings. `workspace_precondition` belongs to physical worker turns.
-   Request findings first with file/line, impact and reason. Deliver actual findings
-   artifacts to follow-up worker tasks. The original coordinator verifies confirmed
-   findings and reviews the final diff. Do not repeat vendor reviews for unchanged
-   mechanical details.
+5. For substantive Git changes, use a separate reviewer profile in the same
+   registered physical checkout (`current` or `worktree`). Pause all edits until
+   the review finishes; the broker takes an exclusive checkout lease for its
+   own turns, but cannot stop your editor or an external process. Send only
+   `git_review_binding` with full `base_commit` and `target_commit` object IDs;
+   `HEAD` must equal the target. Add `include_working_tree: true` to inspect
+   staged, unstaged and nonignored untracked files without committing. For a
+   purely uncommitted review, both commit IDs can be the current HEAD.
+   The broker records a local fingerprint and checks for drift before dispatch
+   and after completion. Git review creates no snapshots, source copies or
+   full diff input: the reviewer uses Git and reads files in that checkout.
+   To continue authoring in parallel, use a separate reviewer worktree at the
+   committed target. For non-Git sources, explicitly use `review_slot` with
+   `review_binding` (baseline/target snapshots). Never combine binding types.
+   Request findings first with file/line, impact and reason. Deliver findings
+   artifacts to follow-up worker tasks, then inspect the final diff yourself.
 6. New route settings apply to new sessions after restarting the daemon that
    loads the operator configuration. In shared-daemon mode, save the file,
    stop only when there are no active turns or pending intents, then start the
@@ -94,7 +102,8 @@ into a coordinator project's local guidance without changing the broker API.
 ## Resuming a checkpoint
 
 Record session and turn IDs, original spawn/send idempotency keys, exact
-baseline/target snapshots, findings artifacts and selected route fields.
+Git base/target IDs and working-tree fingerprint (or snapshot IDs), findings
+artifacts and selected route fields.
 After a pause, check live readiness and paginate discovery. A changed config
 revision alone does not require replacement: compare the actual route and
 bound session. Repeat a lost operation only with its original key and unchanged
@@ -149,7 +158,8 @@ rules above; none of them widens worker permissions.
 - **CE-04 — Continue or hand off deliberately.** For implement → fix →
   verify, return fixes to the same fit worker with a fresh snapshot
   precondition and the sealed findings artifact as a required input, and
-  reuse the same fit reviewer session with a new explicit `review_binding`
+  reuse the same fit reviewer session with a new explicit `git_review_binding`
+  (or snapshot `review_binding` for non-Git sources)
   for re-review (rules 4–5). Prefer an explicit fresh session with compact
   handoff only when the next topic is independent, prior history misleads,
   an immutable binding must change, or durable context is unavailable. A fresh

@@ -468,7 +468,8 @@ const TURN_COLUMNS: ReadonlyArray<keyof TurnRecord> = [
   "task_goal_hash", "state", "state_version", "execution_started", "native_outcome",
   "termination_reason", "finalization_error", "terminal_candidate", "retry_of_turn_id",
   "deadline_at", "native_conversation_ref", "continuation", "input_manifest_id",
-  "task_artifact_refs", "baseline_snapshot_id", "review_target_snapshot_id", "final_snapshot_id", "runtime_id", "error_code",
+  "task_artifact_refs", "baseline_snapshot_id", "review_target_snapshot_id",
+  "git_base_commit", "git_target_commit", "git_working_tree_digest", "final_snapshot_id", "runtime_id", "error_code",
   "created_at", "accepted_at", "terminal_at", "updated_at",
 ];
 
@@ -496,6 +497,9 @@ function mapTurnRow(row: Record<string, unknown>): TurnRecord {
     task_artifact_refs: jsonParseArray(row.task_artifact_refs),
     baseline_snapshot_id: row.baseline_snapshot_id === null ? null : String(row.baseline_snapshot_id),
     review_target_snapshot_id: row.review_target_snapshot_id === null ? null : String(row.review_target_snapshot_id),
+    git_base_commit: row.git_base_commit === null || row.git_base_commit === undefined ? null : String(row.git_base_commit),
+    git_target_commit: row.git_target_commit === null || row.git_target_commit === undefined ? null : String(row.git_target_commit),
+    git_working_tree_digest: row.git_working_tree_digest === null || row.git_working_tree_digest === undefined ? null : String(row.git_working_tree_digest),
     final_snapshot_id: row.final_snapshot_id === null ? null : String(row.final_snapshot_id),
     runtime_id: row.runtime_id === null ? null : String(row.runtime_id),
     error_code: row.error_code === null ? null : String(row.error_code),

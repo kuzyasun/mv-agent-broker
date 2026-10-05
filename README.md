@@ -109,7 +109,12 @@ a coding task. A manually entered model still has to pass provider preflight.
 - **Workers** implement tasks. The default write policy allows the covered
   project, including related tests and documentation. Narrow file lists are
   an explicit operator choice. Git metadata, broker state and caches stay excluded.
-- **Reviewers** inspect changes with a read-only policy.
+- **Reviewers** inspect changes with a read-only policy. Git review is the
+  default: the reviewer reads the registered checkout with Git, including
+  staged, unstaged and nonignored new files. No broker snapshots or full diff
+  input are needed. Pause edits during review; use a separate worktree at a
+  committed target to keep authoring in parallel. See
+  [Git review](docs/git-review-plan.md).
 - **Researchers** investigate with a read-only policy.
 
 Tags such as `default`, `large` and `fast` help the coordinator choose a profile.
@@ -192,8 +197,13 @@ automatically. After quota recovery, the coordinator submits work explicitly.
 
 Large inputs and full reports stay in artifacts. Coordinators should read needed
 pages and pass artifact references instead of repeatedly copying full transcripts.
-Review diffs include every change with limited unchanged context. Increase the
-review diff budget or choose an appropriate baseline if a complete diff is too large.
+Git review (the default) delivers commit ids and suggested `git diff` commands;
+the reviewer reads the checkout itself, so binary changes such as images are
+visible. The explicit snapshot review alternative builds a complete diff of the
+bound snapshot pair with limited unchanged context; increase its budget or choose
+an appropriate baseline if that diff is too large. Uncommitted Git review uses
+`include_working_tree: true`; the broker records a local file/index fingerprint
+and rejects a result if that state changes. It never stages or commits for you.
 
 **Storage and cleanup** previews expired, unpinned registered artifacts before
 confirmed deletion. It preserves pinned/retained data. Its accounting covers

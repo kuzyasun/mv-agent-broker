@@ -303,6 +303,18 @@ CREATE TABLE IF NOT EXISTS quota_scope_cooldowns (
 );
 `;
 
+const MIGRATION_V6_SQL = `
+-- Git-native review binding: exact full-hex commits a read-only reviewer
+-- turn was admitted against (null for snapshot/writer turns).
+ALTER TABLE turns ADD COLUMN git_base_commit TEXT;
+ALTER TABLE turns ADD COLUMN git_target_commit TEXT;
+`;
+
+const MIGRATION_V7_SQL = `
+-- Fingerprint bound to a Git-native review of uncommitted work.
+ALTER TABLE turns ADD COLUMN git_working_tree_digest TEXT;
+`;
+
 export type Migration = { version: number; sql: string };
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -311,6 +323,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 3, sql: MIGRATION_V3_SQL },
   { version: 4, sql: MIGRATION_V4_SQL },
   { version: 5, sql: MIGRATION_V5_SQL },
+  { version: 6, sql: MIGRATION_V6_SQL },
+  { version: 7, sql: MIGRATION_V7_SQL },
 ];
 
 export class RegistryDb {

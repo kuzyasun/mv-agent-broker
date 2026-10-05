@@ -57,8 +57,11 @@ bounded event deltas with the last consumed numeric cursor and waits/backoff;
 retrieve result once after terminal status. SUCCEEDED proves execution, not
 quality. Do not replace UNKNOWN turns or replay lost responses with new keys.
 
-Use a separate reviewer in `dmp-review-project` with the author's original baseline
-and sealed final target in review_binding. Inspect actual diffs and run relevant
+Use a separate reviewer profile in the author's registered checkout, with
+`git_review_binding` (full base/target commit IDs). Add `include_working_tree: true` for uncommitted changes and pause writes until review ends. To keep
+authoring in parallel, review the committed target in a separate worktree.
+`dmp-review-project` and snapshot `review_binding` are explicit alternatives.
+Inspect actual diffs and run relevant
 acceptance checks yourself. Follow DMP ownership boundaries for public
 interfaces, shared build files, profiles and normative documents.
 

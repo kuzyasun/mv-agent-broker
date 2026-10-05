@@ -61,7 +61,7 @@ const hookScriptPath = fileURLToPath(new URL("../../src/providers/cursor/permiss
  * and a unique per-turn policy/audit directory (also under the forbidden
  * sessions tree when installed by the adapter).
  */
-function createTestEnv() {
+function createTestEnv(allowReadOnlyGit = false) {
   const root = mkdtempSync(path.join(os.tmpdir(), "broker-cursor-hooks-test-"));
   tempRoots.push(root);
 
@@ -105,6 +105,7 @@ function createTestEnv() {
     read_only_input_paths: [inputFile, subInputDir],
     forbidden_paths: [path.join(stateDir, "sessions"), configDir],
     audit_log_path: auditLogPath,
+    allow_read_only_git: allowReadOnlyGit,
     session_id: "test-sess",
     turn_id: "test-turn-1",
   });
@@ -662,5 +663,275 @@ describe("Cursor Reviewer trusted preToolUse hook", () => {
     const homeDir = mkdtempSync(path.join(os.tmpdir(), "worker-home-"));
     tempRoots.push(homeDir);
     expect(existsSync(path.join(homeDir, ".cursor", "hooks.json"))).toBe(false);
+  });
+
+  describe("read-only Git review (allow_read_only_git)", () => {
+    function initGitRepo(dir: string): void {
+      const run = (args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", windowsHide: true });
+      expect(run(["init", "--quiet"]).status).toBe(0);
+      writeFileSync(path.join(dir, "tracked.txt"), "one\n", "utf8");
+      expect(run(["add", "."]).status).toBe(0);
+      expect(run(["-c", "user.email=review@broker.test", "-c", "user.name=Reviewer", "commit", "--quiet", "-m", "init"]).status).toBe(0);
+    }
+
+    function shellCall(env: ReturnType<typeof createTestEnv>, command: string, workingDirectory?: string, cwd?: string, toolUseId?: string) {
+      const toolInput: Record<string, unknown> = { command };
+      if (workingDirectory !== undefined) toolInput.working_directory = workingDirectory;
+      const payload = readPayload("Shell", toolInput, toolUseId);
+      return invokeHook(env.policyPath, cwd !== undefined ? { ...payload, cwd } : payload);
+    }
+
+    it("allows the read-only git set and enforces hardening flags via updated_input", () => {
+      const env = createTestEnv(true);
+
+      const status = shellCall(env, "git status", env.workspace, undefined, "call-git-status");
+      expect(status.exitCode).toBe(0);
+      expect(status.parsed).toEqual({
+        permission: "allow",
+        updated_input: { command: "git --no-pager --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false status", working_directory: env.workspace },
+      });
+
+      const diff = shellCall(env, "git diff HEAD~1..HEAD", env.workspace, undefined, "call-git-diff");
+      expect(diff.parsed.permission).toBe("allow");
+      expect(diff.parsed.updated_input.command).toBe(
+        "git --no-pager --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false diff --no-ext-diff --no-textconv HEAD~1..HEAD");
+
+      const show = shellCall(env, "git show --stat HEAD", env.workspace);
+      expect(show.parsed.permission).toBe("allow");
+      expect(show.parsed.updated_input.command).toBe(
+        "git --no-pager --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false show --no-ext-diff --no-textconv --stat HEAD");
+
+      const log = shellCall(env, 'git log --oneline -5 --grep="w s"', env.workspace);
+      expect(log.parsed.permission).toBe("allow");
+      expect(log.parsed.updated_input.command).toBe(
+        'git --no-pager --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false log --no-ext-diff --no-textconv --oneline -5 "--grep=w s"');
+
+      const lsFiles = shellCall(env, "git ls-files -o --exclude-standard", env.workspace);
+      expect(lsFiles.parsed.permission).toBe("allow");
+      expect(lsFiles.parsed.updated_input.command).toBe("git --no-pager --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false ls-files -o --exclude-standard");
+
+      expect(shellCall(env, "git rev-parse --show-toplevel", env.workspace).parsed.permission).toBe("allow");
+
+      // Without tool working_directory or payload cwd the bound workspace anchors.
+      const anchored = invokeHook(env.policyPath, readPayload("Shell", { command: "git status" }, "call-git-anchor"));
+      expect(anchored.parsed).toEqual({ permission: "allow", updated_input: { command: "git --no-pager --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false status" } });
+
+      // Pre-hardened commands are accepted; the rewrite never duplicates flags.
+      const preHardened = shellCall(env, "git --no-pager diff --no-ext-diff HEAD", env.workspace);
+      expect(preHardened.parsed.updated_input.command).toBe(
+        "git --no-pager --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false diff --no-ext-diff --no-textconv HEAD");
+    });
+
+    it("rewritten commands really execute read-only in a real repository", () => {
+      const env = createTestEnv(true);
+      initGitRepo(env.workspace);
+      for (const command of ["git status", "git diff HEAD", "git show HEAD", "git log --oneline -1", "git ls-files", "git rev-parse HEAD"]) {
+        const res = shellCall(env, command, env.workspace);
+        expect(res.parsed.permission, command).toBe("allow");
+        const run = spawnSync(res.parsed.updated_input.command, { cwd: env.workspace, encoding: "utf8", shell: true, windowsHide: true });
+        expect(run.status, `${command} -> ${res.parsed.updated_input.command}`).toBe(0);
+      }
+    });
+
+    it("disables a configured fsmonitor command during allowed Git reads", () => {
+      const env = createTestEnv(true);
+      initGitRepo(env.workspace);
+      const marker = path.join(env.root, "fsmonitor-ran.txt");
+      const program = path.join(env.root, "fsmonitor.cjs");
+      writeFileSync(program, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran');\n`);
+      const helper = `"${process.execPath.replaceAll("\\", "/")}" "${program.replaceAll("\\", "/")}"`;
+      expect(spawnSync("git", ["config", "core.fsmonitor", helper], {
+        cwd: env.workspace, encoding: "utf8", windowsHide: true,
+      }).status).toBe(0);
+      // Establish that this repository configuration really runs the program.
+      expect(spawnSync("git", ["status", "--porcelain"], {
+        cwd: env.workspace, encoding: "utf8", windowsHide: true,
+      }).status).toBe(0);
+      expect(existsSync(marker)).toBe(true);
+      rmSync(marker);
+      for (const command of ["git status --porcelain", "git diff HEAD", "git ls-files --others --exclude-standard"]) {
+        const admitted = shellCall(env, command, env.workspace);
+        expect(admitted.parsed.permission).toBe("allow");
+        const run = spawnSync(admitted.parsed.updated_input.command, {
+          cwd: env.workspace, encoding: "utf8", shell: true, windowsHide: true,
+        });
+        expect(run.status).toBe(0);
+        expect(existsSync(marker)).toBe(false);
+      }
+    });
+
+    it("denies shell expansion and escaping before Git argument validation", () => {
+      const env = createTestEnv(true);
+      for (const command of ["git diff *", "git diff '?'", "git diff [ab]", "git diff {a,b}", "git -C ~ status", "git diff --ou\\tput=review-out.txt"]) {
+        expect(shellCall(env, command, env.workspace).parsed.permission, command).toBe("deny");
+      }
+    });
+
+    it("denies mutating and unlisted git subcommands", () => {
+      const env = createTestEnv(true);
+      const denied = [
+        "git commit -m x",
+        "git push origin main",
+        "git reset --hard HEAD~1",
+        "git clean -fdx",
+        "git checkout -- .",
+        "git add .",
+        "git rebase main",
+        "git merge --ff-only main",
+        "git stash pop",
+        "git config user.email evil@test",
+        "git branch -D evil",
+        "git tag -f v1",
+        "git notes add -m x",
+        "git worktree add ../evil",
+        "git gc --prune=now",
+        "git apply patch.diff",
+        "git version",
+        "git",
+        "git STATUS",
+      ];
+      for (const command of denied) {
+        expect(shellCall(env, command, env.workspace).parsed.permission, command).toBe("deny");
+      }
+    });
+
+    it("denies chaining, redirection, substitution and non-git executables", () => {
+      const env = createTestEnv(true);
+      const denied = [
+        "git status && git push",
+        "git status; git push",
+        "git status | cat",
+        "git status > out.txt",
+        "git diff < patch.diff",
+        "git log $(git rev-parse HEAD)",
+        "git log `git rev-parse HEAD`",
+        "git log --format=%h%n%s",
+        "git status\n; git push",
+        'git "status',
+        "ls -la",
+        "rm -rf .",
+        "git.exe status",
+        "FOO=1 git status",
+        "env git status",
+        "(git status)",
+        "git (status)",
+        "git --no-pager=v status",
+      ];
+      for (const command of denied) {
+        expect(shellCall(env, command, env.workspace).parsed.permission, JSON.stringify(command)).toBe("deny");
+      }
+    });
+
+    it("denies git global overrides and binds -C to the workspace", () => {
+      const env = createTestEnv(true);
+      const denied = [
+        "git -c core.pager=less status",
+        "git --git-dir=C:\\elsewhere\\.git status",
+        "git --work-tree=C:\\elsewhere status",
+        "git --exec-path=C:\\evil status",
+        "git --bare status",
+        "git -C",
+        "git -C status",
+        `git -C ${env.outsideDir} status`,
+        "git -C ..\\..\\..\\outside status",
+      ];
+      for (const command of denied) {
+        expect(shellCall(env, command, env.workspace).parsed.permission, command).toBe("deny");
+      }
+
+      // -C inside the workspace stays admitted and is preserved by the rewrite.
+      const inside = shellCall(env, "git -C src status", env.workspace);
+      expect(inside.parsed.permission).toBe("allow");
+      expect(inside.parsed.updated_input.command).toBe("git --no-pager --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false -C src status");
+    });
+
+    it("denies output files, external helpers and signature/index leaks", () => {
+      const env = createTestEnv(true);
+      const denied = [
+        "git diff --output=patch.diff HEAD",
+        "git diff --output patch.diff HEAD",
+        "git show -O orderfile HEAD",
+        "git diff -Oorder HEAD",
+        "git diff --ext-diff HEAD",
+        "git diff --textconv HEAD",
+        "git diff --no-index C:\\outside\\a C:\\outside\\b",
+        "git show --show-signature HEAD",
+      ];
+      for (const command of denied) {
+        expect(shellCall(env, command, env.workspace).parsed.permission, command).toBe("deny");
+      }
+    });
+
+    it("binds working_directory and cwd to the canonical policy workspace", () => {
+      const env = createTestEnv(true);
+
+      const sub = shellCall(env, "git status", path.join(env.workspace, "src"));
+      expect(sub.parsed.permission).toBe("allow");
+      expect(sub.parsed.updated_input.working_directory).toBe(path.join(env.workspace, "src"));
+
+      // Relative directories resolve against the bound workspace.
+      expect(shellCall(env, "git status", "src").parsed.permission).toBe("allow");
+
+      // Top-level cwd outside the workspace denies even without tool working_directory.
+      const cwdOutside = invokeHook(env.policyPath, { ...readPayload("Shell", { command: "git status" }), cwd: env.outsideDir });
+      expect(cwdOutside.parsed.permission).toBe("deny");
+      expect(shellCall(env, "git status", env.outsideDir).parsed.permission).toBe("deny");
+      expect(shellCall(env, "git status", "..\\..\\..\\outside").parsed.permission).toBe("deny");
+
+      // Missing targets and file targets fail closed.
+      expect(shellCall(env, "git status", path.join(env.workspace, "missing-dir")).parsed.permission).toBe("deny");
+      expect(shellCall(env, "git status", path.join(env.workspace, "index.ts")).parsed.permission).toBe("deny");
+
+      // Non-string cwd and unknown extra fields fail closed.
+      const badCwd = invokeHook(env.policyPath, { ...readPayload("Shell", { command: "git status" }), cwd: 42 });
+      expect(badCwd.parsed.permission).toBe("deny");
+      expect(invokeHook(env.policyPath, readPayload("Shell", { command: "git status", timeout: 5 })).parsed.permission).toBe("deny");
+      expect(invokeHook(env.policyPath, readPayload("Shell", { working_directory: env.workspace })).parsed.permission).toBe("deny");
+    });
+
+    it("keeps Shell fully denied without the opt-in (snapshot-slot behavior)", () => {
+      const env = createTestEnv(false);
+      const denied = shellCall(env, "git status", env.workspace);
+      expect(denied.parsed).toEqual({
+        permission: "deny",
+        user_message: "Requested tool is not allowed in reviewer mode.",
+      });
+      expect(invokeHook(env.policyPath, readPayload("Read", { file_path: path.join(env.workspace, "index.ts") })).parsed).toEqual({ permission: "allow" });
+    });
+
+    it("audits shell decisions and preserves Read/Grep/List behavior with the opt-in", () => {
+      const env = createTestEnv(true);
+      expect(shellCall(env, "git status", env.workspace, undefined, "call-git-a1").parsed.permission).toBe("allow");
+      expect(shellCall(env, "git push --force", env.workspace, undefined, "call-git-a2").parsed.permission).toBe("deny");
+      expect(invokeHook(env.policyPath, readPayload("Read", { file_path: path.join(env.workspace, "index.ts") }, "call-git-a3")).parsed).toEqual({ permission: "allow" });
+      expect(invokeHook(env.policyPath, readPayload("Grep", { pattern: "console" }, "call-git-a4")).parsed).toEqual({ permission: "allow" });
+      expect(invokeHook(env.policyPath, readPayload("List", { file_path: env.workspace }, "call-git-a5")).parsed).toEqual({ permission: "allow" });
+
+      const records = readAuditLog(env.auditLogPath);
+      const shellAllow = records.find(r => r.toolkind === "shell" && r.decision === "allow");
+      expect(shellAllow).toBeDefined();
+      expect(shellAllow!.status).toBe("success");
+      expect(shellAllow!.pathhash).toMatch(/^[0-9a-f]{64}$/);
+      expect(shellAllow!.callid).toMatch(/^[0-9a-f]{32}$/);
+      const shellDeny = records.find(r => r.toolkind === "shell" && r.decision === "deny");
+      expect(shellDeny).toBeDefined();
+      expect(records.every(r => (REVIEWER_HOOK_STATUSES as readonly string[]).includes(r.status))).toBe(true);
+
+      // Raw commands are never persisted; only hashed identities.
+      const raw = readFileSync(env.auditLogPath, "utf8");
+      expect(raw).not.toContain("git status");
+      expect(raw).not.toContain("push");
+    });
+
+    it("fails closed on policies missing the allow_read_only_git flag", () => {
+      const env = createTestEnv(true);
+      const raw = JSON.parse(readFileSync(env.policyPath, "utf8")) as Record<string, unknown>;
+      delete raw.allow_read_only_git;
+      const policyPath = path.join(env.configDir, "policy-nogitflag.json");
+      writeFileSync(policyPath, JSON.stringify(raw), "utf8");
+      const res = invokeHook(policyPath, readPayload("Shell", { command: "git status" }));
+      expect(res.exitCode).toBe(2);
+      expect(res.parsed.permission).toBe("deny");
+    });
   });
 });

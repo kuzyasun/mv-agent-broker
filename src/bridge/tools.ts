@@ -87,7 +87,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_spawn",
-      description: "Create a durable logical session (PROVISIONING→IDLE) without inference (§6.1). Idempotent. mode=worktree with repository_workspace_id+base_commit requests a broker-created detached Git worktree (§8.3).",
+      description: "Create a durable logical session (PROVISIONING→IDLE) without inference — launches no provider run (§6.1). Idempotent. mode=worktree with repository_workspace_id+base_commit requests a broker-created detached Git worktree (§8.3). role=reviewer with a registered current/worktree workspace is a Git-native read-only reviewer; role=reviewer with review_slot is the explicit snapshot-review alternative.",
       inputSchema: {
         type: "object",
         properties: {
@@ -117,16 +117,18 @@ export function bridgeToolDefs(): McpToolDef[] {
         ],
         additionalProperties: false,
       },
+      annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: false },
     },
     {
       name: "agent_workspace_snapshot",
-      description: "Explicit sealed capture of a registered workspace under a read admission (no writer/quarantine). Idempotent (§10.1.1).",
+      description: "Capture a registered workspace's source into LOCAL broker snapshot storage under a read admission (no writer, no quarantine). Reads project files and stores them locally; launches no provider run and sends nothing to any vendor. Idempotent (§10.1.1).",
       inputSchema: {
         type: "object",
         properties: { project_id: str, workspace_id: str, idempotency_key: str },
         required: ["project_id", "workspace_id", "idempotency_key"],
         additionalProperties: false,
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     {
       name: "agent_sessions_list",
@@ -145,7 +147,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_send",
-      description: "Submit a task turn: atomic admission; returns turn_id without waiting for inference. Supply exactly one binding: workspace_precondition for physical worker turns, or review_binding for review_slot turns. Never send both (§7.2).",
+      description: "Submit a task turn and LAUNCH one provider inference run; returns turn_id without waiting. Supply exactly one binding: workspace_precondition for workers, review_binding for snapshot review_slot turns, or git_review_binding for read-only Git review in current/worktree (include_working_tree=true for uncommitted changes). Never combine bindings (§7.2).",
       inputSchema: {
         type: "object",
         properties: {
@@ -165,22 +167,30 @@ export function bridgeToolDefs(): McpToolDef[] {
           },
           workspace_precondition: {
             type: "object",
-            description: "Physical worker workspace only. Omit when supplying review_binding.",
+            description: "Physical worker workspace only. Omit when supplying another binding.",
             properties: { expected_snapshot_id: str },
             required: ["expected_snapshot_id"],
             additionalProperties: false,
           },
           review_binding: {
             type: "object",
-            description: "Exact baseline and target for a review_slot turn. Omit workspace_precondition.",
+            description: "Snapshot review_slot turns only. Explicit dirty-workspace alternative to Git review.",
             properties: { baseline_snapshot_id: str, target_snapshot_id: str },
             required: ["baseline_snapshot_id", "target_snapshot_id"],
+            additionalProperties: false,
+          },
+          git_review_binding: {
+            type: "object",
+            description: "Read-only Git reviewer turns only: full-hex base_commit and target_commit. By default requires a clean checkout; include_working_tree=true binds an uncommitted checkout digest. The broker delivers no snapshots or diff bytes.",
+            properties: { base_commit: str, target_commit: str, include_working_tree: { type: "boolean" } },
+            required: ["base_commit", "target_commit"],
             additionalProperties: false,
           },
         },
         required: ["session_id", "idempotency_key", "task"],
         additionalProperties: false,
       },
+      annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
     },
     {
       name: "agent_turn_status",
@@ -282,6 +292,9 @@ function turnDto(t: TurnRecord) {
     input_manifest_id: t.input_manifest_id,
     baseline_snapshot_id: t.baseline_snapshot_id,
     review_target_snapshot_id: t.review_target_snapshot_id,
+    git_base_commit: t.git_base_commit,
+    git_target_commit: t.git_target_commit,
+    git_working_tree_digest: t.git_working_tree_digest,
     final_snapshot_id: t.final_snapshot_id,
     continuation: t.continuation,
     created_at: t.created_at,
@@ -333,6 +346,10 @@ function turnResultDto(core: BrokerCore, coordinatorId: string, turn: TurnRecord
       execution_started: turn.execution_started,
       input_manifest_id: turn.input_manifest_id,
       baseline_snapshot_id: turn.baseline_snapshot_id,
+      review_target_snapshot_id: turn.review_target_snapshot_id,
+      git_base_commit: turn.git_base_commit,
+      git_target_commit: turn.git_target_commit,
+      git_working_tree_digest: turn.git_working_tree_digest,
       final_snapshot_id: turn.final_snapshot_id,
       error_code: turn.error_code,
     },
@@ -442,23 +459,33 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
     case "agent_session_send": {
       rejectUnknownKeys(rawArgs, [
         "session_id", "idempotency_key", "task", "workspace_precondition", "review_binding",
-        "deadline_ms", "retry_of_turn_id",
+        "git_review_binding", "deadline_ms", "retry_of_turn_id",
       ]);
       const task = rawArgs.task as Record<string, unknown> | undefined;
       if (!task) throw new BrokerError("INVALID_REQUEST", "Argument 'task' is required.");
       if (!Array.isArray(task.artifact_refs)) {
         throw new BrokerError("INVALID_REQUEST", "task.artifact_refs must be an array.");
       }
-      const hasPrecond = rawArgs.workspace_precondition !== undefined;
-      const hasReview = rawArgs.review_binding !== undefined;
-      if (hasPrecond === hasReview) {
-        throw new BrokerError("INVALID_REQUEST", "Exactly one of workspace_precondition / review_binding is required. For review_slot send review_binding only; for a physical worker workspace send workspace_precondition only.");
+      const bindingNames = ["workspace_precondition", "review_binding", "git_review_binding"] as const;
+      const presentBindings = bindingNames.filter((name) => rawArgs[name] !== undefined);
+      if (presentBindings.length !== 1) {
+        throw new BrokerError("INVALID_REQUEST", "Exactly one of workspace_precondition / review_binding / git_review_binding is required. Physical worker turns send workspace_precondition only; review_slot turns send review_binding only; Git reviewer turns send git_review_binding only.");
       }
-      const bindingName = hasPrecond ? "workspace_precondition" : "review_binding";
+      const bindingName = presentBindings[0]!;
       const binding = rawArgs[bindingName];
       if (binding === null || typeof binding !== "object" || Array.isArray(binding)) {
-        throw new BrokerError("INVALID_REQUEST", `${bindingName} must be an object. For review_slot send review_binding only; for a physical worker workspace send workspace_precondition only.`);
+        throw new BrokerError("INVALID_REQUEST", `${bindingName} must be an object.`);
       }
+      const bindingRecord = binding as Record<string, unknown>;
+      rejectUnknownKeys(bindingRecord, bindingName === "git_review_binding"
+        ? ["base_commit", "target_commit", "include_working_tree"]
+        : bindingName === "review_binding"
+          ? ["baseline_snapshot_id", "target_snapshot_id"]
+          : ["expected_snapshot_id"]);
+      if (bindingName === "git_review_binding" && bindingRecord.include_working_tree !== undefined && typeof bindingRecord.include_working_tree !== "boolean") {
+        throw new BrokerError("INVALID_REQUEST", "Argument 'include_working_tree' must be a boolean.");
+      }
+      const requireBindingString = (name: string): string => requireString(binding as Record<string, unknown>, name);
       return core.send(ctx.coordinatorId, {
         session_id: requireString(rawArgs, "session_id"),
         idempotency_key: requireString(rawArgs, "idempotency_key"),
@@ -470,21 +497,24 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
           artifact_refs: task.artifact_refs as string[],
           checks: optionalStringArray(task, "checks"),
         },
-        ...(hasPrecond
-          ? {
-              workspace_precondition: {
-                expected_snapshot_id: requireString(
-                  rawArgs.workspace_precondition as Record<string, unknown>,
-                  "expected_snapshot_id",
-                ),
-              },
-            }
-          : {
-              review_binding: {
-                baseline_snapshot_id: requireString(rawArgs.review_binding as Record<string, unknown>, "baseline_snapshot_id"),
-                target_snapshot_id: requireString(rawArgs.review_binding as Record<string, unknown>, "target_snapshot_id"),
-              },
-            }),
+        ...(bindingName === "workspace_precondition"
+          ? { workspace_precondition: { expected_snapshot_id: requireBindingString("expected_snapshot_id") } }
+          : bindingName === "review_binding"
+            ? {
+                review_binding: {
+                  baseline_snapshot_id: requireBindingString("baseline_snapshot_id"),
+                  target_snapshot_id: requireBindingString("target_snapshot_id"),
+                },
+              }
+            : {
+                git_review_binding: {
+                  base_commit: requireBindingString("base_commit"),
+                  target_commit: requireBindingString("target_commit"),
+                  ...(typeof (binding as Record<string, unknown>).include_working_tree === "boolean"
+                    ? { include_working_tree: (binding as Record<string, unknown>).include_working_tree as boolean }
+                    : {}),
+                },
+              }),
         ...(optionalInt(rawArgs, "deadline_ms", 1000, 86_400_000) !== undefined
           ? { deadline_ms: optionalInt(rawArgs, "deadline_ms", 1000, 86_400_000) }
           : {}),

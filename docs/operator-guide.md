@@ -285,15 +285,15 @@ preset every new location is covered automatically.
 When replacing a coverage or policy already bound to a session, use a new
 profile ID for future sessions and keep the historical evidence. After saving,
 stop and start the shared daemon only when there are no active turns or pending
-intents. Verify `agent_workspace_snapshot` before paying for a worker or
-reviewer turn.
+intents. Verify `agent_workspace_snapshot` before a snapshot-bound worker
+turn; Git reviewer turns do not require a snapshot.
 
 Broker-managed Windows Git operations enable `core.longpaths` for each
 invocation; they do not change repository or global Git configuration. A
 detached worktree contains the selected commit only. To review unfinished
-changes, use a current-checkout snapshot with a sealed baseline/target review
-binding, or explicitly transfer only the intended changes into an isolated
-checkout before capturing it.
+changes in the same registered checkout, send `git_review_binding` with
+`include_working_tree: true`. Pause writes during that review. A separate
+reviewer worktree at the committed target allows the author to keep working.
 
 The Connection section emits MCP JSON and Codex TOML that attach to the shared
 daemon through `src/bridge/main-stdio.ts`, with `AB_STATE_DIR` and
@@ -409,8 +409,9 @@ subscription plan. They must reflect the CLI account actually in use. ZCode
 Start Plan selection remains unverified; the current standalone route uses
 Individual. Never put access tokens or API keys in this config.
 
-Route roles are `worker`, `reviewer`, and `researcher`. Reviewers should use a
-`review_slot` workspace and a review policy; workers normally use a current or
+Route roles are `worker`, `reviewer`, and `researcher`. Git reviewers use a
+read-only review policy in a registered current or detached worktree. Explicit
+snapshot review uses a `review_slot`; workers normally use a current or
 detached worktree. `native_subagents` is advisory prompt text only: it cannot
 guarantee child count, child model, or permissions. The default is one broker
 session with no native delegation preference.
@@ -614,10 +615,16 @@ and limits. Changing the parent route does not guarantee child settings.
 
 ## Review workflow and limitations
 
-Use a worker route to make changes in a worktree, capture the resulting
-snapshot, then create a reviewer session with a review-slot route and the
-baseline/target binding. Native subagents do not replace the independent
-broker reviewer.
+Use a reviewer profile in the author's registered checkout, with a read-only
+policy. Send `git_review_binding` with the exact base and target commit IDs.
+Set `include_working_tree: true` for staged, unstaged and nonignored new files;
+no commit or snapshot is required. The broker pins the observed file/index
+state and rejects drift. Pause edits until review finishes: the broker lease
+serializes broker jobs, not external editors. Use a separate worktree at the
+committed target for parallel author progress. Snapshot review remains an
+explicit option for non-Git sources. Native subagents do not replace the
+independent reviewer. See [Git review](git-review-plan.md) and
+[request examples](examples/coordinator/README.md).
 
 See [native subagent notes](native-subagents.md), [pilot issues](pilot-issues.md),
 and the [provider capability matrix](provider-capabilities.md). No guide

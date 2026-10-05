@@ -25,6 +25,13 @@ export interface CursorReviewerConfig {
 export interface ReviewerProfileParams {
   workspace_path: string | null | undefined;
   read_only_input_paths?: readonly string[];
+  /**
+   * Opt in to read-only Git review: the generated profile allows the native
+   * Shell tool for `git` while the trusted preToolUse hook enforces the
+   * read-only subcommand selection. Only for reviewers in physical
+   * current/worktree sessions; snapshot-slot reviewers stay tool-free.
+   */
+  allow_read_only_git?: boolean;
 }
 
 export function validateCanonicalPath(rawPath: unknown, fieldName = "path"): string {
@@ -69,14 +76,16 @@ export function buildCursorReviewerConfig(
 ): CursorReviewerConfig {
   let workspaceRaw: string | null | undefined;
   let inputsRaw: readonly string[] | undefined;
+  let allowReadOnlyGit = false;
 
   if (
     typeof inputOrWorkspace === "object" &&
     inputOrWorkspace !== null &&
-    ("workspace_path" in inputOrWorkspace || "read_only_input_paths" in inputOrWorkspace)
+    ("workspace_path" in inputOrWorkspace || "read_only_input_paths" in inputOrWorkspace || "allow_read_only_git" in inputOrWorkspace)
   ) {
     workspaceRaw = inputOrWorkspace.workspace_path;
     inputsRaw = inputOrWorkspace.read_only_input_paths;
+    allowReadOnlyGit = inputOrWorkspace.allow_read_only_git === true;
   } else {
     workspaceRaw = inputOrWorkspace as string | null | undefined;
     inputsRaw = maybeInputs;
@@ -110,6 +119,16 @@ export function buildCursorReviewerConfig(
     }
   }
 
+  // Native deny rules beat allow rules, so read-only Git review requires the
+  // blanket Shell deny to yield to `Shell(git)`; the broker-owned preToolUse
+  // hook then enforces the actual read-only subcommand selection.
+  const deny = ["Write(**)", "WebFetch(*)", "Mcp(*:*)"];
+  if (allowReadOnlyGit) {
+    allow.push("Shell(git)");
+  } else {
+    deny.splice(1, 0, "Shell(*)");
+  }
+
   return {
     version: 1,
     editor: {
@@ -121,12 +140,7 @@ export function buildCursorReviewerConfig(
     },
     permissions: {
       allow,
-      deny: [
-        "Write(**)",
-        "Shell(*)",
-        "WebFetch(*)",
-        "Mcp(*:*)",
-      ],
+      deny,
     },
   };
 }

@@ -114,6 +114,11 @@ export interface TurnRecord {
   task_artifact_refs: string[];
   baseline_snapshot_id: string | null;
   review_target_snapshot_id: string | null;
+  /** Git-native review binding: exact reviewed commits (full hex), null for non-Git-review turns. */
+  git_base_commit: string | null;
+  git_target_commit: string | null;
+  /** Fingerprint of an admitted uncommitted Git checkout, null for clean reviews. */
+  git_working_tree_digest: string | null;
   final_snapshot_id: string | null;
   runtime_id: string | null;
   error_code: string | null;

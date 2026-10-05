@@ -17,6 +17,17 @@ export interface McpToolDef {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /**
+   * MCP tool annotations (hints only — never enforcement): truthful flags
+   * about what a tool does, e.g. a read-only local capture vs a tool that
+   * launches a provider run.
+   */
+  annotations?: {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
 }
 
 export interface McpToolContext {

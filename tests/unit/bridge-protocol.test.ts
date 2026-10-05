@@ -305,21 +305,33 @@ describe("runStdioBridge transport loop", () => {
 // ─── §8.3 additive spawn workspace fields at the bridge boundary ────────────
 
 describe("agent_session_send binding guidance", () => {
-  it.each(["review_binding", "workspace_precondition"])("rejects null %s before admission with actionable guidance", async (bindingName) => {
+  it.each(["review_binding", "workspace_precondition", "git_review_binding"])("rejects null %s before admission with actionable guidance", async (bindingName) => {
     const send = vi.fn();
     await expect(callBridgeTool({ coordinatorId: "coord", core: { send } as unknown as BrokerCore }, "agent_session_send", {
       session_id: "s", idempotency_key: "k", task: { goal: "review", artifact_refs: [] }, [bindingName]: null,
-    })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringContaining("must be an object. For review_slot") });
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringContaining(`${bindingName} must be an object`) });
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("rejects contradictory review/worker bindings before admission and explains the correction", async () => {
+  it("rejects contradictory bindings before admission and explains the one-binding rule", async () => {
     const send = vi.fn();
     await expect(callBridgeTool({ coordinatorId: "coord", core: { send } as unknown as BrokerCore }, "agent_session_send", {
       session_id: "s", idempotency_key: "k", task: { goal: "review", checks: [], artifact_refs: [] },
       review_binding: { baseline_snapshot_id: "base", target_snapshot_id: "target" },
       workspace_precondition: { expected_snapshot_id: "target" },
-    })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringContaining("For review_slot send review_binding only") });
+    })).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("Exactly one of workspace_precondition / review_binding / git_review_binding is required"),
+    });
+    expect(send).not.toHaveBeenCalled();
+    await expect(callBridgeTool({ coordinatorId: "coord", core: { send } as unknown as BrokerCore }, "agent_session_send", {
+      session_id: "s", idempotency_key: "k2", task: { goal: "review", checks: [], artifact_refs: [] },
+      git_review_binding: { base_commit: "a".repeat(40), target_commit: "b".repeat(40) },
+      review_binding: { baseline_snapshot_id: "base", target_snapshot_id: "target" },
+    })).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("Git reviewer turns send git_review_binding only"),
+    });
     expect(send).not.toHaveBeenCalled();
   });
 });

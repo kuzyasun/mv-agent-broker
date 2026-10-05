@@ -245,5 +245,40 @@ describe("Cursor reviewer profile helper", () => {
       expect(cfg1.permissions.allow).toEqual(["Read(C:\\workspace)"]);
       expect(cfg2.permissions.allow).toEqual(["Read(C:\\workspace)"]);
     });
+
+    it("opts into read-only git by allowing Shell(git) and dropping the blanket Shell deny", () => {
+      const config = buildCursorReviewerConfig({
+        workspace_path: "C:\\project\\src",
+        allow_read_only_git: true,
+      });
+      expect(config.permissions.allow).toEqual(["Read(C:\\project\\src)", "Shell(git)"]);
+      // Native deny beats allow, so the blanket Shell(*) deny must yield.
+      expect(config.permissions.deny).toEqual(["Write(**)", "WebFetch(*)", "Mcp(*:*)"]);
+    });
+
+    it("keeps the tool-free deny list without the opt-in (explicit false and default)", () => {
+      const explicitFalse = buildCursorReviewerConfig({
+        workspace_path: "C:\\project\\src",
+        allow_read_only_git: false,
+      });
+      const byDefault = buildCursorReviewerConfig({ workspace_path: "C:\\project\\src" });
+      for (const config of [explicitFalse, byDefault]) {
+        expect(config.permissions.allow).toEqual(["Read(C:\\project\\src)"]);
+        expect(config.permissions.deny).toEqual(["Write(**)", "Shell(*)", "WebFetch(*)", "Mcp(*:*)"]);
+      }
+    });
+
+    it("combines the git opt-in with input path allowances", () => {
+      const config = buildCursorReviewerConfig({
+        workspace_path: "C:\\project\\src",
+        read_only_input_paths: ["C:\\broker inputs\\diff.patch"],
+        allow_read_only_git: true,
+      });
+      expect(config.permissions.allow).toEqual([
+        "Read(C:\\project\\src)",
+        "Read(C:\\broker inputs\\diff.patch)",
+        "Shell(git)",
+      ]);
+    });
   });
 });

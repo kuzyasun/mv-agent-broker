@@ -253,8 +253,8 @@ describe("Cursor adapter", () => {
       approvalMode: "allowlist",
       sandbox: { readBoundary: "workspace" },
       permissions: {
-        allow: [`Read(${f.root})`],
-        deny: ["Write(**)", "Shell(*)", "WebFetch(*)", "Mcp(*:*)"],
+        allow: [`Read(${f.root})`, "Shell(git)"],
+        deny: ["Write(**)", "WebFetch(*)", "Mcp(*:*)"],
       },
     });
     // Per-turn policy/audit cleaned after successful completion; stable config retained.
@@ -340,8 +340,38 @@ describe("Cursor adapter", () => {
     expect(existsSync(path.join(f.stateRoot, "sessions", sessionHash, "config", "chats"))).toBe(false);
     expect(existsSync(f.sentinel)).toBe(false);
   });
-  it("bumps adapter version to 0.2.9 for explicit effort mapping", () => {
-    expect(new CursorAdapter().adapterVersion).toBe("0.2.9");
+  it("bumps adapter version to 0.3.0 for read-only git review", () => {
+    expect(new CursorAdapter().adapterVersion).toBe("0.3.0");
+  });
+  it("opts current and worktree reviewers into read-only git and keeps review_slot tool-free", async () => {
+    const f = fixture();
+    const configFor = async (workspace_mode: TurnExecutionRequest["workspace_mode"], sessionId: string) => {
+      const result = await f.adapter.executeTurn(request({
+        role: "reviewer", workspace_mode, workspace_path: f.root, session_id: sessionId,
+      }), gate(), () => {});
+      return JSON.parse(result.agent_reported!.summary);
+    };
+    for (const mode of ["current", "worktree"] as const) {
+      const inspection = await configFor(mode, `sess-git-${mode}`);
+      expect(inspection.cursorConfig.permissions.allow, mode).toContain("Shell(git)");
+      expect(inspection.cursorConfig.permissions.deny, mode).not.toContain("Shell(*)");
+    }
+    const slot = await configFor("review_slot", "sess-git-review_slot");
+    expect(slot.cursorConfig.permissions.allow).not.toContain("Shell(git)");
+    expect(slot.cursorConfig.permissions.deny).toContain("Shell(*)");
+
+    // The hook policy carries the same opt-in; failing turns retain per-turn
+    // policy evidence for inspection.
+    for (const mode of ["current", "worktree", "review_slot"] as const) {
+      const sessionId = `sess-policy-${mode}`;
+      await expect(f.adapter.executeTurn(request({
+        role: "reviewer", workspace_mode: mode, workspace_path: f.root, session_id: sessionId,
+        turn_id: `t-policy-${mode}`, task_envelope: "nonzero",
+      }), gate(), () => {})).rejects.toMatchObject({ code: "PROVIDER_PROTOCOL_ERROR" });
+      const turnPolicyDir = readFileSync(path.join(f.root, "observed-turn-policy-dir.txt"), "utf8");
+      const policy = JSON.parse(readFileSync(path.join(turnPolicyDir, "reviewer-policy.json"), "utf8"));
+      expect(policy.allow_read_only_git, mode).toBe(mode !== "review_slot");
+    }
   });
   it.each(["root", "sessions", "data"])("refuses a private history %s junction before native launch", async component => {
     const f = fixture(); const g = gate();
@@ -451,8 +481,9 @@ describe("Cursor adapter", () => {
           `Read(${ws})`,
           `Read(${inputs[0]})`,
           `Read(${inputs[1]})`,
+          "Shell(git)",
         ],
-        deny: ["Write(**)", "Shell(*)", "WebFetch(*)", "Mcp(*:*)"],
+        deny: ["Write(**)", "WebFetch(*)", "Mcp(*:*)"],
       },
     });
   });

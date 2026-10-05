@@ -57,7 +57,8 @@ export interface TurnInputManifest {
   policy_binding: { policy_profile_id: string; policy_profile_version: string };
   workspace_binding:
     | { workspace_id: string | null; expected_snapshot_id: string | null }
-    | { review: { baseline_snapshot_id: string; target_snapshot_id: string } };
+    | { review: { baseline_snapshot_id: string; target_snapshot_id: string } }
+    | { git_review: { workspace_id: string; base_commit: string; target_commit: string; working_tree_digest: string | null } };
   inputs: TurnInputEntry[];
   created_at: number;
   manifest_hash: string;

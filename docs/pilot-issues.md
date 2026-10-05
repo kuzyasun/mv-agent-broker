@@ -253,3 +253,18 @@ launch. Future author work uses an isolated checkout with no concurrent
 coordinator edits. No broker enforcement change was added.
 
 Private evidence: `.state/dogfood/2026-10-01T22-33-43-225Z-d6857849/`.
+## 2026-10-05: npm cache bookkeeping rejected after a completed ZCode author turn
+
+ZCode completed the Cursor Git-review package, but the accepted shared broker
+finalized turn `turn-3fd4aca8765751b30f2f65c0` as `FAILED / SCOPE_VIOLATION`:
+`Writes into excluded/protected subtrees: node_modules/.package-lock.json`.
+Execution started and native termination was normal; this is not a successful
+broker turn. Source changes were retained in its isolated checkout. The
+coordinator copied only the source/test diff and independently verified the
+Cursor tests (119/119), without copying dependencies or accepting the native
+summary as proof.
+
+This is a generated dependency-cache write, not an inferred source-file
+allowlist. Keep protected-path policy intact. Prepare dependencies before
+worker admission; investigate benign package-manager bookkeeping separately
+if it recurs. No shared daemon/configuration was changed for this incident.

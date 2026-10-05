@@ -1,0 +1,15 @@
+{
+  "tool": "agent_session_spawn",
+  "note": "Parallel Git reviewer in a broker-created worktree at the exact committed target. Use the discovered read-only reviewer route; the author may keep editing its own checkout. No commit is created.",
+  "arguments": {
+    "project_id": "<project-id>",
+    "idempotency_key": "<new-unique-key>",
+    "route_id": "<discovered-read-only-reviewer-route-id>",
+    "instructions": "Review the exact bound commits read-only; report findings with file/line, impact and reason.",
+    "workspace": {
+      "mode": "worktree",
+      "repository_workspace_id": "<registered-repository-workspace-id>",
+      "base_commit": "<full-target-commit-object-id>"
+    }
+  }
+}

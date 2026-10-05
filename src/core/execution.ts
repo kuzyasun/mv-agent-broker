@@ -90,6 +90,7 @@ import {
   readSessionPhysicalBinding,
   resolvePhysicalCheckoutIdentity,
 } from "../workspaces/identity.ts";
+import { gitReviewDrift, resolveGitReviewRoot } from "../workspaces/gitReview.ts";
 import { loadSessionWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
 import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
 import {
@@ -249,6 +250,16 @@ function enterFinalizingTrigger(
 
 interface CancelWatch {
   reason: string | null;
+}
+
+/**
+ * A Git-native review turn: bound to exact full-hex commits (git_review_binding)
+ * instead of snapshots. The reviewer reads the registered bound checkout with
+ * its own Git tooling; the broker captures no snapshots and synthesizes no
+ * diff inputs.
+ */
+function isGitReviewTurn(turn: Pick<TurnRecord, "git_base_commit" | "git_target_commit">): boolean {
+  return turn.git_base_commit !== null && turn.git_target_commit !== null;
 }
 
 export class TurnExecutor {
@@ -422,6 +433,18 @@ export class TurnExecutor {
     if (!pinned.ok) {
       this.finalizePreStartKnown(turnNow, session, pinned.code, pinned.message, continuation);
       return;
+    }
+
+    // Git review: revalidate the exact-commit contract under the held lease
+    // BEFORE inference. A queued or restarted turn re-proves the contract at
+    // dispatch time — HEAD moved off the target commit or a dirty checkout
+    // (external or coordinator edit) fails closed with zero inference.
+    if (isGitReviewTurn(turnNow)) {
+      const drift = this.gitReviewCheckoutDrift(session, turnNow.git_target_commit!, turnNow.git_working_tree_digest, "pre-dispatch");
+      if (drift) {
+        this.finalizePreStartKnown(turnNow, session, "WORKSPACE_CHANGED", drift, continuation);
+        return;
+      }
     }
 
     // Required input delivery BEFORE dispatch (§7.1.1, §13.2.1): resolve →
@@ -987,6 +1010,9 @@ export class TurnExecutor {
         ? JSON.stringify({
             baseline_snapshot_id: turn.baseline_snapshot_id,
             target_snapshot_id: turn.review_target_snapshot_id,
+            ...(isGitReviewTurn(turn)
+              ? { git_base_commit: turn.git_base_commit, git_target_commit: turn.git_target_commit, git_working_tree_digest: turn.git_working_tree_digest }
+              : {}),
             turn_id: turn.turn_id,
             session_id: session.session_id,
             source: session.provider,
@@ -1557,8 +1583,16 @@ export class TurnExecutor {
           : null,
     }));
 
-    const workspace_binding =
-      session.workspace_mode === "review_slot"
+    const workspace_binding = isGitReviewTurn(turn)
+      ? {
+          git_review: {
+            workspace_id: session.workspace_id ?? "",
+            base_commit: turn.git_base_commit ?? "",
+            target_commit: turn.git_target_commit ?? "",
+            working_tree_digest: turn.git_working_tree_digest,
+          },
+        }
+      : session.workspace_mode === "review_slot"
         ? { review: { baseline_snapshot_id: turn.baseline_snapshot_id ?? "", target_snapshot_id: turn.review_target_snapshot_id ?? "" } }
         : { workspace_id: session.workspace_id, expected_snapshot_id: turn.baseline_snapshot_id };
 
@@ -1739,6 +1773,17 @@ export class TurnExecutor {
       // §9.3: the prompt states which snapshot replaced the previous code.
       ...(turn.review_target_snapshot_id
         ? [`review_target_snapshot=${turn.review_target_snapshot_id} (this replaced the previous code in your cwd)`]
+        : []),
+      // Git-native review: compact exact commit ids plus suggested diff
+      // commands. The broker NEVER synthesizes or delivers diff bytes — the
+      // reviewer reads the bound checkout with its own Git tooling.
+      ...(turn.git_base_commit && turn.git_target_commit
+        ? [
+            `git_review_binding: base_commit=${turn.git_base_commit} target_commit=${turn.git_target_commit} working_tree_digest=${turn.git_working_tree_digest ?? "clean"} (review this exact commit pair and bound working-tree state in your cwd)`,
+            ...(turn.git_working_tree_digest
+              ? [`suggested git commands: git diff --no-ext-diff --no-textconv ${turn.git_base_commit} (tracked working content); git diff --cached --no-ext-diff --no-textconv ${turn.git_target_commit}; git diff --no-ext-diff --no-textconv; git ls-files --others --exclude-standard, then read each untracked file; external diff and textconv are disabled`]
+              : [`suggested git commands: git diff --no-ext-diff --no-textconv --stat ${turn.git_base_commit}..${turn.git_target_commit}; git diff --no-ext-diff --no-textconv ${turn.git_base_commit}..${turn.git_target_commit}; git show --no-ext-diff --no-textconv ${turn.git_target_commit} --stat`]),
+          ]
         : []),
       inputs.length > 0
         ? `required inputs (${inputs.length}) — every input below is required:`
@@ -2112,6 +2157,27 @@ export class TurnExecutor {
   }
 
   /**
+   * Git review drift re-check against the session's durable PINNED checkout:
+   * HEAD must still equal the exact target commit and the checkout must stay
+   * clean or match its working-tree digest. `phase` only labels the failure. Unresolvable/unreadable state
+   * fails closed as drift.
+   */
+  private gitReviewCheckoutDrift(session: SessionRecord, targetCommit: string, digest: string | null, phase: "pre-dispatch" | "post-run"): string | null {
+    const binding = readSessionPhysicalBinding(this.db, session.session_id);
+    if (binding.kind === "malformed") {
+      return `session physical cwd binding is unusable for the ${phase} drift re-check`;
+    }
+    if (binding.kind !== "bound") {
+      return `session has no durable physical cwd binding for the ${phase} drift re-check`;
+    }
+    const root = resolveGitReviewRoot(binding.binding.canonical_cwd);
+    if (!root) {
+      return `review checkout does not resolve for the ${phase} drift re-check`;
+    }
+    return gitReviewDrift(root, targetCommit, digest);
+  }
+
+  /**
    * Returns a drift description when the live workspace digest no longer
    * matches the turn's baseline snapshot (§8.2), or null when it matches.
    * A06: the digest is taken from the session's PINNED checkout when bound —
@@ -2198,7 +2264,11 @@ export class TurnExecutor {
     // requires a sealed final snapshot + complete observed delta + scope
     // check. A known capture/scope failure is a finalization failure — the
     // native outcome is preserved separately (§5.3).
-    const isWriter = session.workspace_id !== null && session.workspace_mode !== "review_slot";
+    // Git review turns are not writers: the exact-commit binding is the
+    // evidence, no final snapshot is captured, and a checkout that drifted
+    // during the review must not produce an accepted SUCCEEDED review.
+    const isGitReview = isGitReviewTurn(turn);
+    const isWriter = session.workspace_id !== null && session.workspace_mode !== "review_slot" && !isGitReview;
     let finalSnapshotId: string | null = null;
     let delta: ManifestDelta | null = null;
     let evidenceError: CoverageError | null = null;
@@ -2215,6 +2285,11 @@ export class TurnExecutor {
           evidenceError = new CoverageError(String(e), "EVIDENCE_CAPTURE_FAILED");
         }
       }
+    }
+
+    if (isGitReview && !evidenceError && result.native_outcome === "completed") {
+      const drift = this.gitReviewCheckoutDrift(session, turn.git_target_commit!, turn.git_working_tree_digest, "post-run");
+      if (drift) evidenceError = new CoverageError(drift, "WORKSPACE_CHANGED");
     }
 
     if (evidenceError) {
@@ -2696,7 +2771,11 @@ export class TurnExecutor {
       const unrecoverableReport = reportStatus.get(turn.turn_id);
       const forceReportFailure = unrecoverableReport?.ok === false;
 
-      const isWriter = session.workspace_id !== null && session.workspace_mode !== "review_slot";
+      // Git review turns are never writers (no final snapshot in recovery)
+      // and their SUCCEEDED candidate must survive the post-run drift check:
+      // a checkout that changed since the review fails closed instead.
+      const isGitReview = isGitReviewTurn(turn);
+      const isWriter = session.workspace_id !== null && session.workspace_mode !== "review_slot" && !isGitReview;
       let finalSnapshotId: string | null = null;
       let delta: ManifestDelta | null = null;
       let evidenceError: CoverageError | null = null;
@@ -2713,6 +2792,12 @@ export class TurnExecutor {
             evidenceError = new CoverageError(String(e), "EVIDENCE_CAPTURE_FAILED");
           }
         }
+      }
+
+      if (isGitReview && !forceReportFailure && !evidenceError &&
+          row.candidate === "SUCCEEDED" && row.native_outcome === "completed") {
+        const drift = this.gitReviewCheckoutDrift(session, turn.git_target_commit!, turn.git_working_tree_digest, "post-run");
+        if (drift) evidenceError = new CoverageError(drift, "WORKSPACE_CHANGED");
       }
 
       const nativeRef = row.native_conversation_ref ?? undefined;

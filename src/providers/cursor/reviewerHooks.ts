@@ -88,6 +88,12 @@ export interface ReviewerHookPolicy {
   /** Immutable physical identities; paths alone must never be re-granted. */
   physical_bindings: Array<{ path: string; dev: string; ino: string; kind: "file" | "directory" }>;
   audit_log_path: string;
+  /**
+   * When true the hook additionally admits the native Shell tool for a
+   * broker-validated read-only Git command set; when false Shell stays
+   * generically denied (snapshot-slot reviewer behavior).
+   */
+  allow_read_only_git: boolean;
   session_id?: string;
   turn_id?: string;
 }
@@ -123,6 +129,8 @@ export interface BuildReviewerHookPolicyParams {
   read_only_input_paths?: readonly string[];
   forbidden_paths?: readonly string[];
   audit_log_path: string;
+  /** Read-only Git review opt-in; defaults to false (Shell fully denied). */
+  allow_read_only_git?: boolean;
   session_id?: string;
   turn_id?: string;
 }
@@ -222,6 +230,7 @@ export function buildReviewerHookPolicy(params: BuildReviewerHookPolicyParams): 
     forbidden_paths: validatedForbidden,
     physical_bindings: physicalBindings,
     audit_log_path: validatedAudit,
+    allow_read_only_git: params.allow_read_only_git === true,
     session_id: params.session_id,
     turn_id: params.turn_id,
   };

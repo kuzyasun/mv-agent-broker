@@ -1,11 +1,11 @@
 {
   "tool": "agent_session_send",
-  "note": "Reviewer turn: review_binding only, never workspace_precondition. The baseline/diff inputs are delivered by the broker from the binding, so task.artifact_refs stays empty; findings come back as the reviewer's report artifact.",
+  "note": "Git reviewer in the registered author checkout. Pause edits while it runs. Use only git_review_binding; no snapshots or full diff artifact are required. Both commits can be HEAD for purely uncommitted review.",
   "arguments": {
     "session_id": "<reviewer-session-id>",
     "idempotency_key": "<new-unique-key>",
     "task": {
-      "goal": "Review the diff between the bound baseline and target snapshots and report findings.",
+      "goal": "Review the bound Git changes, including staged, unstaged and nonignored new files. Report findings.",
       "acceptance_criteria": [
         "Every finding states a file/line reference, impact and reason.",
         "Confirmed findings are delivered in the findings artifact."
@@ -13,15 +13,16 @@
       "relevant_paths": [
         "src/"
       ],
-      "context": "Read-only review. Work from the delivered baseline and diff inputs; do not modify any file. Separate broker-observed facts from claims and report findings first.",
+      "context": "Read-only review in your cwd. Use Git and read relevant files. Do not modify, stage or commit. Report findings first with file/line, impact and reason.",
       "artifact_refs": [],
       "checks": [
         "List findings with file/line, impact and reason; state explicitly what could not be verified."
       ]
     },
-    "review_binding": {
-      "baseline_snapshot_id": "<worker-baseline-snapshot-id>",
-      "target_snapshot_id": "<worker-final-target-snapshot-id>"
+    "git_review_binding": {
+      "base_commit": "<full-base-commit-object-id>",
+      "target_commit": "<full-target-commit-object-id>",
+      "include_working_tree": true
     }
   }
 }
