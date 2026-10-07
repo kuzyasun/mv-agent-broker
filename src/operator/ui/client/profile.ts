@@ -54,7 +54,10 @@ export function effectiveRouteTags(
   const mode = route.native_subagents?.mode;
   const isMultiAgent = mode === "prefer" || mode === "auto";
   const stored = route.tags ?? [];
-  return isMultiAgent ? [...stored, DERIVED_MULTI_AGENT_TAG] : [...stored];
+  if (isMultiAgent) {
+    return Array.from(new Set([...stored, DERIVED_MULTI_AGENT_TAG]));
+  }
+  return [...stored];
 }
 
 export function isReadOnlyRole(role: string): boolean {
@@ -74,10 +77,12 @@ export function roleDisplayName(role: string): string {
 }
 
 export function findReadOnlyPolicy(policies: OperatorPolicyProfile[]): string | undefined {
-  const found = policies.find(
-    (p) => p.config?.access === "read_only" || p.policy_profile_id.includes("read-only"),
+  const strict = policies.find((p) => p.config?.access === "read_only");
+  if (strict) return strict.policy_profile_id;
+  const fallback = policies.find((p) =>
+    p.policy_profile_id.toLowerCase().includes("read-only"),
   );
-  return found?.policy_profile_id;
+  return fallback?.policy_profile_id;
 }
 
 export function generateUniqueRouteId(baseId: string, existingRoutes: OperatorRoute[]): string {

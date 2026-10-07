@@ -15,7 +15,7 @@ export function AdvancedSection(): JSX.Element {
     if (!advancedDraft.value) {
       initAdvancedDraft();
     }
-  }, []);
+  }, [draftConfig.value]);
 
   const draft = advancedDraft.value;
   if (!draft) {

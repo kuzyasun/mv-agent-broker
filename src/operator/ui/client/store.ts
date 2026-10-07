@@ -137,8 +137,13 @@ export const canSave = computed(() => {
 export const canRestart = computed(() => {
   if (isSaving.value || isRestarting.value || isDirty.value) return false;
   if (!statusData.value) return false;
+  if (statusData.value.status !== "ready") return false;
+  if (statusData.value.runtime_observation === "unknown") return false;
   const activeCount = statusData.value.active_turn_count ?? 0;
-  return activeCount === 0;
+  const pendingIntentsCount = Array.isArray(statusData.value.pending_intents)
+    ? statusData.value.pending_intents.length
+    : 0;
+  return activeCount === 0 && pendingIntentsCount === 0;
 });
 
 let messageTimer: ReturnType<typeof setTimeout> | null = null;
@@ -177,7 +182,7 @@ export function setSection(section: NavSection): void {
   window.location.hash = section;
 }
 
-export function initNavigation(): void {
+export function initNavigation(): () => void {
   const parseHash = () => {
     const hash = window.location.hash.replace(/^#/, "") as NavSection;
     if (VALID_SECTIONS.includes(hash)) {
@@ -188,6 +193,9 @@ export function initNavigation(): void {
   };
   parseHash();
   window.addEventListener("hashchange", parseHash);
+  return () => {
+    window.removeEventListener("hashchange", parseHash);
+  };
 }
 
 // Config loading & lifecycle
@@ -251,6 +259,7 @@ export async function saveConfiguration(): Promise<boolean> {
       connectionSnippets.value = res.snippets;
     });
     setActionMessage(res.message || "Configuration saved successfully.", "success", 5000);
+    void refreshStatus();
     return true;
   } catch (err) {
     if (err instanceof ApiError && err.status === 409) {
@@ -468,8 +477,7 @@ export function applyAdvancedDraft(): boolean {
         state_dir: stateDir,
         coverage_profiles: coverage,
       };
-      advancedDraft.value = null;
-      advancedError.value = null;
+      initAdvancedDraft();
     });
 
     setActionMessage("Advanced settings applied to draft.", "info", 3000);
@@ -482,14 +490,12 @@ export function applyAdvancedDraft(): boolean {
 }
 
 export function cancelAdvancedDraft(): void {
-  batch(() => {
-    advancedDraft.value = null;
-    advancedError.value = null;
-  });
+  initAdvancedDraft();
 }
 
 // Status Polling
 let statusInterval: ReturnType<typeof setInterval> | null = null;
+let visibilityHandler: (() => void) | null = null;
 
 export async function refreshStatus(): Promise<void> {
   if (statusLoading.value) return;
@@ -508,8 +514,18 @@ export async function refreshStatus(): Promise<void> {
 }
 
 export function startStatusPolling(): void {
-  if (statusInterval) clearInterval(statusInterval);
+  stopStatusPolling();
   void refreshStatus();
+
+  visibilityHandler = () => {
+    if (typeof document !== "undefined" && document.visibilityState === "visible") {
+      void refreshStatus();
+    }
+  };
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", visibilityHandler);
+  }
+
   statusInterval = setInterval(() => {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") {
       return;
@@ -523,19 +539,40 @@ export function stopStatusPolling(): void {
     clearInterval(statusInterval);
     statusInterval = null;
   }
+  if (visibilityHandler && typeof document !== "undefined") {
+    document.removeEventListener("visibilitychange", visibilityHandler);
+    visibilityHandler = null;
+  }
 }
 
+let activeInspectingTurnId: string | null = null;
+
 export async function loadTurnErrorAction(turnId: string): Promise<void> {
+  activeInspectingTurnId = turnId;
   turnErrorLoading.value = true;
+  selectedTurnError.value = { turn_id: turnId, error: {} };
   try {
     const data = await fetchTurnError(turnId);
-    selectedTurnError.value = data;
+    if (activeInspectingTurnId === turnId) {
+      selectedTurnError.value = data;
+    }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    setActionMessage(`Failed to inspect turn error: ${msg}`, "error", 5000);
+    if (activeInspectingTurnId === turnId) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActionMessage(`Failed to inspect turn error: ${msg}`, "error", 5000);
+      selectedTurnError.value = null;
+    }
   } finally {
-    turnErrorLoading.value = false;
+    if (activeInspectingTurnId === turnId) {
+      turnErrorLoading.value = false;
+    }
   }
+}
+
+export function closeTurnErrorAction(): void {
+  activeInspectingTurnId = null;
+  selectedTurnError.value = null;
+  turnErrorLoading.value = false;
 }
 
 export async function clearQuotaPauseAction(

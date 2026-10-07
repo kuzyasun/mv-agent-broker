@@ -30,17 +30,24 @@ export function StorageSection(): JSX.Element {
       return;
     }
 
+    const reqProject = selectedProject.value;
     isPreviewing.value = true;
     lastResult.value = null;
     try {
-      const res = await previewStorage(selectedProject.value, days);
-      preview.value = res;
-      setActionMessage("Storage cleanup preview generated.", "info", 3000);
+      const res = await previewStorage(reqProject, days);
+      if (selectedProject.value === reqProject) {
+        preview.value = res;
+        setActionMessage("Storage cleanup preview generated.", "info", 3000);
+      }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setActionMessage(`Preview failed: ${msg}`, "error", 5000);
+      if (selectedProject.value === reqProject) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setActionMessage(`Preview failed: ${msg}`, "error", 5000);
+      }
     } finally {
-      isPreviewing.value = false;
+      if (selectedProject.value === reqProject) {
+        isPreviewing.value = false;
+      }
     }
   };
 
@@ -69,6 +76,7 @@ export function StorageSection(): JSX.Element {
         5000,
       );
     } catch (err) {
+      preview.value = null; // Stale or invalid preview token must be cleared
       const msg = err instanceof Error ? err.message : String(err);
       setActionMessage(`Cleanup execution failed: ${msg}`, "error", 5000);
     } finally {

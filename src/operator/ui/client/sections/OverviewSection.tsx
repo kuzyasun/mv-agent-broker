@@ -1,6 +1,7 @@
 import type { JSX } from "preact";
 import {
   clearQuotaPauseAction,
+  closeTurnErrorAction,
   displayPreferences,
   loadTurnErrorAction,
   refreshStatus,
@@ -215,9 +216,7 @@ export function OverviewSection(): JSX.Element {
             <button
               type="button"
               className="p-1 text-[#747686] hover:text-[#141b2b] cursor-pointer"
-              onClick={() => {
-                selectedTurnError.value = null;
-              }}
+              onClick={closeTurnErrorAction}
             >
               <XIcon size={16} />
             </button>

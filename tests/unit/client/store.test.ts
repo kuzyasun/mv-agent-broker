@@ -13,6 +13,7 @@ import {
   editingRouteId,
   hasUnappliedEditor,
   initAdvancedDraft,
+  isAdvancedDirty,
   isGlobalDirty,
   isRouteDraftDirty,
   loadConfiguration,
@@ -237,6 +238,7 @@ describe("operator UI reactive store and draft lifecycle", () => {
     const applySuccess = applyAdvancedDraft();
     expect(applySuccess).toBe(true);
     expect(draftConfig.value?.accounts).toEqual([]);
-    expect(advancedDraft.value).toBeNull();
+    expect(advancedDraft.value?.accountsJson).toBe("[]");
+    expect(isAdvancedDirty.value).toBe(false);
   });
 });

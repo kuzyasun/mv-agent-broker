@@ -20,10 +20,11 @@ import { AdvancedSection } from "./sections/AdvancedSection.tsx";
 
 export function App(): JSX.Element {
   useEffect(() => {
-    initNavigation();
+    const cleanupNav = initNavigation();
     void loadConfiguration(true);
     startStatusPolling();
     return () => {
+      cleanupNav();
       stopStatusPolling();
     };
   }, []);
