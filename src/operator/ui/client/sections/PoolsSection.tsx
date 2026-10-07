@@ -1,0 +1,769 @@
+import { useSignal } from "@preact/signals";
+import type { JSX } from "preact";
+import {
+  PlusIcon,
+  SearchIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  EditIcon,
+  CopyIcon,
+  TrashIcon,
+  RefreshIcon,
+  XIcon,
+  CheckIcon,
+} from "../components/Icons.tsx";
+import {
+  applyRouteDraft,
+  cancelRouteDraft,
+  catalogObservations,
+  deleteRouteAction,
+  draftConfig,
+  duplicateRouteAction,
+  editingRouteId,
+  isNewRoute,
+  isRouteDraftDirty,
+  routeDraft,
+  searchQuery,
+  selectedProject,
+  startEditRoute,
+  tagFilter,
+  toggleRouteEnabledAction,
+  updateRouteDraftField,
+  setActionMessage,
+} from "../store.ts";
+import {
+  createDefaultRoute,
+  effectiveRouteTags,
+  filterRoutes,
+  findReadOnlyPolicy,
+  isReadOnlyRole,
+  parseModelOptions,
+  roleDisplayName,
+} from "../profile.ts";
+import { refreshCatalog } from "../api.ts";
+import type { OperatorRoute, OperatorPolicyProfile } from "../types.ts";
+
+export function PoolsSection(): JSX.Element {
+  const config = draftConfig.value;
+  const routes = config?.routes ?? [];
+  const accounts = config?.accounts ?? [];
+  const policies = config?.policy_profiles ?? [];
+  const projects = config?.projects ?? [];
+
+  // Collapsed states per pool
+  const workersOpen = useSignal<boolean>(true);
+  const reviewersOpen = useSignal<boolean>(true);
+  const researchersOpen = useSignal<boolean>(true);
+
+  // Manual model input toggle in inspector
+  const manualModel = useSignal<boolean>(false);
+  const catalogRefreshing = useSignal<boolean>(false);
+
+  // Filtered routes
+  const filtered = filterRoutes(routes, {
+    projectId: selectedProject.value,
+    search: searchQuery.value,
+    tag: tagFilter.value,
+  });
+
+  const workers = filtered.filter((r) => r.role === "worker");
+  const reviewers = filtered.filter((r) => r.role === "reviewer");
+  const researchers = filtered.filter((r) => r.role === "researcher");
+
+  // Collect all unique tags for filter dropdown
+  const allUniqueTags = Array.from(
+    new Set(routes.flatMap((r) => effectiveRouteTags(r))),
+  ).sort();
+
+  const handleAddProfile = (role: "worker" | "reviewer" | "researcher" = "worker") => {
+    const projId = selectedProject.value || projects[0]?.project_id || "default";
+    const newRoute = createDefaultRoute(projId, routes, accounts, policies, role);
+    startEditRoute(newRoute, true);
+    if (role === "worker") workersOpen.value = true;
+    if (role === "reviewer") reviewersOpen.value = true;
+    if (role === "researcher") researchersOpen.value = true;
+  };
+
+  const handleRefreshCatalog = async (provider: string) => {
+    catalogRefreshing.value = true;
+    try {
+      const observation = await refreshCatalog(provider);
+      const nextMap = new Map(catalogObservations.value);
+      nextMap.set(provider, observation);
+      catalogObservations.value = nextMap;
+      setActionMessage(`Refreshed catalog for ${provider} (${observation.models.length} models).`, "info", 3000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActionMessage(`Failed to refresh catalog: ${msg}`, "error", 4000);
+    } finally {
+      catalogRefreshing.value = false;
+    }
+  };
+
+  return (
+    <div className="flex-1 flex overflow-hidden">
+      {/* Middle Inventory Area */}
+      <div className="flex-1 flex flex-col min-w-0 bg-[#f8f9fa] overflow-y-auto">
+        {/* Controls Toolbar */}
+        <div className="p-3 bg-white border-b border-[#c4c5d7] flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-2 flex-1 min-w-[240px] max-w-md">
+            <div className="relative w-full">
+              <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-[#747686]">
+                <SearchIcon size={14} />
+              </span>
+              <input
+                type="text"
+                className="w-full pl-8 pr-3 h-8 bg-white border border-[#c4c5d7] text-xs font-mono text-[#141b2b] placeholder-[#747686] outline-none focus:border-[#1d4ed8]"
+                placeholder="Filter profiles by name, ID, model..."
+                value={searchQuery.value}
+                onInput={(e) => {
+                  searchQuery.value = (e.target as HTMLInputElement).value;
+                }}
+              />
+            </div>
+
+            {/* Tag Filter Dropdown */}
+            <select
+              className="h-8 px-2 bg-white border border-[#c4c5d7] text-xs text-[#141b2b] outline-none focus:border-[#1d4ed8] cursor-pointer"
+              value={tagFilter.value}
+              onChange={(e) => {
+                tagFilter.value = (e.target as HTMLSelectElement).value;
+              }}
+            >
+              <option value="">All tags</option>
+              {allUniqueTags.map((t) => (
+                <option key={t} value={t}>
+                  #{t}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="h-8 px-3 bg-[#1d4ed8] text-white text-xs font-medium flex items-center gap-1.5 hover:bg-[#1e40af] active:bg-[#1e3a8a] cursor-pointer"
+              onClick={() => handleAddProfile("worker")}
+            >
+              <PlusIcon size={14} />
+              <span>Add Profile</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Pools Inventory Panels */}
+        <div className="p-4 space-y-4">
+          {/* Workers Pool */}
+          <PoolCardList
+            title="Workers"
+            role="worker"
+            count={workers.length}
+            isOpen={workersOpen.value}
+            onToggle={() => {
+              workersOpen.value = !workersOpen.value;
+            }}
+            onAdd={() => handleAddProfile("worker")}
+            routes={workers}
+          />
+
+          {/* Reviewers Pool */}
+          <PoolCardList
+            title="Reviewers"
+            role="reviewer"
+            count={reviewers.length}
+            isOpen={reviewersOpen.value}
+            onToggle={() => {
+              reviewersOpen.value = !reviewersOpen.value;
+            }}
+            onAdd={() => handleAddProfile("reviewer")}
+            routes={reviewers}
+          />
+
+          {/* Researchers Pool */}
+          <PoolCardList
+            title="Researchers"
+            role="researcher"
+            count={researchers.length}
+            isOpen={researchersOpen.value}
+            onToggle={() => {
+              researchersOpen.value = !researchersOpen.value;
+            }}
+            onAdd={() => handleAddProfile("researcher")}
+            routes={researchers}
+          />
+        </div>
+      </div>
+
+      {/* Profile Inspector Drawer / Column */}
+      {routeDraft.value && (
+        <aside
+          className="w-[420px] bg-white border-l border-[#c4c5d7] flex flex-col shrink-0 z-20 shadow-[-2px_0_4px_rgba(0,0,0,0.03)] overflow-hidden"
+          aria-label="Profile Inspector"
+        >
+          {/* Inspector Header */}
+          <div className="h-10 px-3 bg-[#f1f3ff] border-b border-[#c4c5d7] flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs font-semibold uppercase text-[#1d4ed8]">
+                {isNewRoute.value ? "New Profile" : "Edit Profile"}
+              </span>
+              <span className="text-xs font-mono text-[#747686] truncate">
+                {routeDraft.value.route_id}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="p-1 text-[#747686] hover:text-[#141b2b] cursor-pointer"
+              onClick={cancelRouteDraft}
+              title="Close editor"
+            >
+              <XIcon size={16} />
+            </button>
+          </div>
+
+          {/* Inspector Form Body */}
+          <div className="flex-1 p-3 overflow-y-auto space-y-3 text-xs">
+            {/* Route ID */}
+            <div>
+              <label className="block font-medium text-[#434655] mb-1">Route ID</label>
+              <input
+                type="text"
+                className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+                value={routeDraft.value.route_id}
+                onInput={(e) =>
+                  updateRouteDraftField("route_id", (e.target as HTMLInputElement).value)
+                }
+              />
+            </div>
+
+            {/* Display Name */}
+            <div>
+              <label className="block font-medium text-[#434655] mb-1">Display Name</label>
+              <input
+                type="text"
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs focus:border-[#1d4ed8] outline-none"
+                placeholder="Optional readable profile name"
+                value={routeDraft.value.display_name ?? ""}
+                onInput={(e) =>
+                  updateRouteDraftField(
+                    "display_name",
+                    (e.target as HTMLInputElement).value || undefined,
+                  )
+                }
+              />
+            </div>
+
+            {/* Project */}
+            <div>
+              <label className="block font-medium text-[#434655] mb-1">Project</label>
+              <select
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+                value={routeDraft.value.project_id}
+                onChange={(e) =>
+                  updateRouteDraftField("project_id", (e.target as HTMLSelectElement).value)
+                }
+              >
+                {projects.map((p) => (
+                  <option key={p.project_id} value={p.project_id}>
+                    {p.display_name || p.project_id}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Role */}
+            <div>
+              <label className="block font-medium text-[#434655] mb-1">Role</label>
+              <select
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+                value={routeDraft.value.role}
+                onChange={(e) => {
+                  const newRole = (e.target as HTMLSelectElement).value as
+                    | "worker"
+                    | "reviewer"
+                    | "researcher";
+                  updateRouteDraftField("role", newRole);
+                  // Ensure policy compatibility: reviewers/researchers must have read-only policy
+                  if (isReadOnlyRole(newRole)) {
+                    const readPolicy = findReadOnlyPolicy(policies);
+                    if (readPolicy) {
+                      updateRouteDraftField("policy_profile_id", readPolicy);
+                    }
+                  }
+                }}
+              >
+                <option value="worker">Worker (Execution / Full Scope)</option>
+                <option value="reviewer">Reviewer (Strictly Read-Only)</option>
+                <option value="researcher">Researcher (Strictly Read-Only)</option>
+              </select>
+            </div>
+
+            {/* Account & Provider */}
+            <div>
+              <label className="block font-medium text-[#434655] mb-1">Account & Provider</label>
+              <select
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+                value={routeDraft.value.account_profile_id}
+                onChange={(e) => {
+                  const accId = (e.target as HTMLSelectElement).value;
+                  const acc = accounts.find((a) => a.account_profile_id === accId);
+                  updateRouteDraftField("account_profile_id", accId);
+                  if (acc) {
+                    updateRouteDraftField("provider", acc.provider);
+                  }
+                }}
+              >
+                {accounts.map((a) => (
+                  <option key={a.account_profile_id} value={a.account_profile_id}>
+                    {a.account_profile_id} ({a.provider} / {a.quota_scope_id})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Model & Discovery */}
+            <div className="space-y-1.5 p-2 bg-[#f8f9fa] border border-[#e5e7eb]">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-[#434655]">Model Selection</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="text-[11px] text-[#1d4ed8] hover:underline cursor-pointer flex items-center gap-1"
+                    onClick={() => handleRefreshCatalog(routeDraft.value!.provider)}
+                    disabled={catalogRefreshing.value}
+                  >
+                    <RefreshIcon size={12} />
+                    <span>{catalogRefreshing.value ? "Refreshing…" : "Refresh catalogue"}</span>
+                  </button>
+                  <span className="text-[#c4c5d7]">|</span>
+                  <button
+                    type="button"
+                    className="text-[11px] text-[#747686] hover:text-[#141b2b] cursor-pointer"
+                    onClick={() => {
+                      manualModel.value = !manualModel.value;
+                    }}
+                  >
+                    {manualModel.value ? "Use dropdown" : "Manual entry"}
+                  </button>
+                </div>
+              </div>
+
+              {manualModel.value ? (
+                <div>
+                  <input
+                    type="text"
+                    className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8] outline-none"
+                    placeholder="Enter model identifier"
+                    value={routeDraft.value.model}
+                    onInput={(e) =>
+                      updateRouteDraftField("model", (e.target as HTMLInputElement).value)
+                    }
+                  />
+                </div>
+              ) : (
+                <ModelSelector
+                  provider={routeDraft.value.provider}
+                  selectedModel={routeDraft.value.model}
+                  selectedEffort={routeDraft.value.effort ?? ""}
+                  onModelChange={(model, effort) => {
+                    updateRouteDraftField("model", model);
+                    updateRouteDraftField("effort", effort || undefined);
+                  }}
+                  onEffortChange={(effort) => {
+                    updateRouteDraftField("effort", effort || undefined);
+                  }}
+                />
+              )}
+            </div>
+
+            {/* Policy Profile */}
+            <div>
+              <label className="block font-medium text-[#434655] mb-1">Policy Profile</label>
+              <select
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+                value={routeDraft.value.policy_profile_id}
+                onChange={(e) =>
+                  updateRouteDraftField("policy_profile_id", (e.target as HTMLSelectElement).value)
+                }
+              >
+                {policies.map((p) => {
+                  const access = p.config?.access ?? "read_only";
+                  const isRead = access === "read_only";
+                  const disabled = isReadOnlyRole(routeDraft.value!.role) && !isRead;
+                  return (
+                    <option
+                      key={p.policy_profile_id}
+                      value={p.policy_profile_id}
+                      disabled={disabled}
+                    >
+                      {p.policy_profile_id} ({access})
+                    </option>
+                  );
+                })}
+              </select>
+              {isReadOnlyRole(routeDraft.value.role) && (
+                <p className="mt-1 text-[11px] text-[#747686]">
+                  Reviewers and researchers are restricted to read-only policies.
+                </p>
+              )}
+            </div>
+
+            {/* Tags Input */}
+            <div>
+              <label className="block font-medium text-[#434655] mb-1">
+                Tags (comma separated)
+              </label>
+              <input
+                type="text"
+                className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+                placeholder="default, fast, review..."
+                value={(routeDraft.value.tags ?? []).join(", ")}
+                onInput={(e) => {
+                  const raw = (e.target as HTMLInputElement).value;
+                  const parsed = raw
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter((s) => s.length > 0 && s !== "multi-agent");
+                  updateRouteDraftField("tags", parsed);
+                }}
+              />
+              <p className="mt-1 text-[11px] text-[#747686]">
+                Multi-agent tag is automatically derived from native delegation mode.
+              </p>
+            </div>
+
+            {/* Native Subagents (Advisory Delegation) */}
+            <div className="p-2.5 bg-[#f8f9fa] border border-[#e5e7eb] space-y-2">
+              <span className="font-medium text-[#434655]">Native Subagent Delegation</span>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] text-[#747686] mb-0.5">Mode</label>
+                  <select
+                    className="w-full h-7 px-1.5 border border-[#c4c5d7] text-xs bg-white outline-none cursor-pointer"
+                    value={routeDraft.value.native_subagents?.mode ?? "off"}
+                    onChange={(e) => {
+                      const mode = (e.target as HTMLSelectElement).value as
+                        | "off"
+                        | "prefer"
+                        | "auto";
+                      if (mode === "auto") {
+                        updateRouteDraftField("native_subagents", { mode: "auto" });
+                      } else if (mode === "prefer") {
+                        updateRouteDraftField("native_subagents", {
+                          mode: "prefer",
+                          max_agents: 2,
+                        });
+                      } else {
+                        updateRouteDraftField("native_subagents", { mode: "off", max_agents: 1 });
+                      }
+                    }}
+                  >
+                    <option value="off">Off (Single worker)</option>
+                    <option value="prefer">Prefer subagents</option>
+                    <option value="auto">Auto (Provider managed)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] text-[#747686] mb-0.5">Max Subagents</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    className="w-full h-7 px-1.5 border border-[#c4c5d7] text-xs bg-white outline-none disabled:bg-[#f1f3f5] disabled:cursor-not-allowed"
+                    disabled={routeDraft.value.native_subagents?.mode !== "prefer"}
+                    value={
+                      routeDraft.value.native_subagents &&
+                      "max_agents" in routeDraft.value.native_subagents
+                        ? routeDraft.value.native_subagents.max_agents
+                        : 1
+                    }
+                    onInput={(e) => {
+                      const count = parseInt((e.target as HTMLInputElement).value, 10) || 1;
+                      updateRouteDraftField("native_subagents", {
+                        mode: "prefer",
+                        max_agents: count,
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Enablement */}
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                type="checkbox"
+                id="profile-enable-toggle"
+                className="w-4 h-4 border border-[#c4c5d7] text-[#1d4ed8] focus:ring-0 cursor-pointer"
+                checked={routeDraft.value.enabled !== false}
+                onChange={(e) => {
+                  updateRouteDraftField("enabled", (e.target as HTMLInputElement).checked);
+                }}
+              />
+              <label
+                htmlFor="profile-enable-toggle"
+                className="text-xs font-medium text-[#141b2b] cursor-pointer"
+              >
+                Enabled for new task sessions
+              </label>
+            </div>
+          </div>
+
+          {/* Inspector Footer Actions */}
+          <div className="p-3 bg-[#f1f3ff] border-t border-[#c4c5d7] flex items-center justify-between gap-2 shrink-0">
+            <button
+              type="button"
+              className="h-8 px-3 bg-white border border-[#c4c5d7] text-[#141b2b] text-xs font-medium hover:bg-[#e9edff] cursor-pointer"
+              onClick={cancelRouteDraft}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="h-8 px-4 bg-[#1d4ed8] text-white text-xs font-medium hover:bg-[#1e40af] active:bg-[#1e3a8a] cursor-pointer flex items-center gap-1.5"
+              onClick={applyRouteDraft}
+            >
+              <CheckIcon size={14} />
+              <span>Apply to draft</span>
+            </button>
+          </div>
+        </aside>
+      )}
+    </div>
+  );
+}
+
+// Collapsible Pool Section List
+function PoolCardList(props: {
+  title: string;
+  role: "worker" | "reviewer" | "researcher";
+  count: number;
+  isOpen: boolean;
+  onToggle: () => void;
+  onAdd: () => void;
+  routes: OperatorRoute[];
+}): JSX.Element {
+  const { title, count, isOpen, onToggle, onAdd, routes } = props;
+
+  return (
+    <div className="border border-[#c4c5d7] bg-white">
+      {/* Pool Header */}
+      <div className="h-9 px-3 bg-[#f1f3ff] border-b border-[#c4c5d7] flex items-center justify-between">
+        <button
+          type="button"
+          className="flex items-center gap-2 text-xs font-semibold text-[#141b2b] hover:text-[#1d4ed8] cursor-pointer"
+          onClick={onToggle}
+        >
+          {isOpen ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
+          <span>{title}</span>
+          <span className="text-[11px] font-mono text-[#747686] bg-white px-1.5 py-0.2 border border-[#c4c5d7]">
+            {count} {count === 1 ? "profile" : "profiles"}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className="h-6 px-2 bg-white border border-[#c4c5d7] text-[11px] font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1 cursor-pointer"
+          onClick={onAdd}
+        >
+          <PlusIcon size={12} />
+          <span>Add to pool</span>
+        </button>
+      </div>
+
+      {/* Pool Content */}
+      {isOpen && (
+        <div className="p-3">
+          {routes.length === 0 ? (
+            <div className="py-6 text-center text-xs text-[#747686] font-mono">
+              No profiles found in this pool.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {routes.map((route) => (
+                <ProfileCard key={route.route_id} route={route} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Individual Profile Card
+function ProfileCard({ route }: { route: OperatorRoute }): JSX.Element {
+  const isEditing = editingRouteId.value === route.route_id;
+  const isEnabled = route.enabled !== false;
+  const tags = effectiveRouteTags(route);
+
+  return (
+    <div
+      className={`border p-3 flex flex-col justify-between transition-none ${
+        isEditing
+          ? "border-[#1d4ed8] bg-[#eff6ff] shadow-sm"
+          : isEnabled
+            ? "border-[#c4c5d7] bg-white hover:border-[#747686]"
+            : "border-[#e5e7eb] bg-[#f8f9fa] opacity-75"
+      }`}
+    >
+      <div>
+        {/* Top bar: Provider / Model & Badges */}
+        <div className="flex items-start justify-between gap-2 mb-1.5">
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold text-[#141b2b] truncate" title={route.display_name}>
+              {route.display_name || route.route_id}
+            </div>
+            <div className="text-[11px] font-mono text-[#747686] truncate">
+              {route.route_id}
+            </div>
+          </div>
+
+          <div className="flex flex-col items-end gap-1 shrink-0">
+            {!isEnabled && (
+              <span className="px-1.5 py-0.5 text-[10px] font-mono uppercase bg-[#fef2f2] border border-[#fecaca] text-[#dc2626]">
+                Disabled
+              </span>
+            )}
+            <span className="px-1.5 py-0.5 text-[10px] font-mono bg-[#f1f3ff] border border-[#c4c5d7] text-[#434655]">
+              {route.provider}
+            </span>
+          </div>
+        </div>
+
+        {/* Model and Effort */}
+        <div className="text-xs font-mono text-[#141b2b] bg-[#f8f9fa] border border-[#e5e7eb] px-2 py-1 my-2 flex items-center justify-between">
+          <span className="truncate">{route.model}</span>
+          {route.effort && (
+            <span className="text-[10px] uppercase font-semibold text-[#1d4ed8] ml-1 shrink-0">
+              {route.effort}
+            </span>
+          )}
+        </div>
+
+        {/* Tags */}
+        <div className="flex flex-wrap gap-1 mt-2">
+          {tags.map((t) => (
+            <span
+              key={t}
+              className={`px-1.5 py-0.5 text-[10px] font-mono ${
+                t === "multi-agent"
+                  ? "bg-[#dce1ff] text-[#1d4ed8] border border-[#cad3ff]"
+                  : "bg-[#f1f3ff] text-[#434655] border border-[#c4c5d7]"
+              }`}
+            >
+              #{t}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Row Actions */}
+      <div className="pt-3 mt-3 border-t border-[#e5e7eb] flex items-center justify-between">
+        <button
+          type="button"
+          className="text-xs text-[#747686] hover:text-[#141b2b] cursor-pointer"
+          onClick={() => toggleRouteEnabledAction(route.route_id)}
+          title={isEnabled ? "Disable profile" : "Enable profile"}
+        >
+          {isEnabled ? "Disable" : "Enable"}
+        </button>
+
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className="p-1 text-[#747686] hover:text-[#1d4ed8] cursor-pointer"
+            onClick={() => duplicateRouteAction(route)}
+            title="Duplicate profile"
+          >
+            <CopyIcon size={14} />
+          </button>
+          <button
+            type="button"
+            className="p-1 text-[#747686] hover:text-[#dc2626] cursor-pointer"
+            onClick={() => deleteRouteAction(route.route_id)}
+            title="Delete profile"
+          >
+            <TrashIcon size={14} />
+          </button>
+          <button
+            type="button"
+            className="h-6 px-2 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1 cursor-pointer ml-1"
+            onClick={() => startEditRoute(route, false)}
+          >
+            <EditIcon size={12} />
+            <span>Edit</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Model & Effort Selector dropdown helper
+function ModelSelector({
+  provider,
+  selectedModel,
+  selectedEffort,
+  onModelChange,
+  onEffortChange,
+}: {
+  provider: string;
+  selectedModel: string;
+  selectedEffort: string;
+  onModelChange: (model: string, effort: string) => void;
+  onEffortChange: (effort: string) => void;
+}): JSX.Element {
+  const observation = catalogObservations.value.get(provider);
+  const models = observation?.models ?? [selectedModel];
+  const options = parseModelOptions(provider, models);
+
+  const currentOption = options.find((o) => o.model === selectedModel);
+  const availableEfforts = currentOption?.efforts ?? ["", "low", "medium", "high", "max"];
+
+  return (
+    <div className="space-y-1.5">
+      <div>
+        <label className="block text-[11px] text-[#747686] mb-0.5">Model</label>
+        <select
+          className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+          value={selectedModel}
+          onChange={(e) => {
+            const nextModel = (e.target as HTMLSelectElement).value;
+            const opt = options.find((o) => o.model === nextModel);
+            const nextEffort = opt?.efforts.includes(selectedEffort)
+              ? selectedEffort
+              : opt?.efforts[0] ?? "";
+            onModelChange(nextModel, nextEffort);
+          }}
+        >
+          {options.map((opt) => (
+            <option key={opt.model} value={opt.model}>
+              {opt.model}
+            </option>
+          ))}
+          {!options.some((o) => o.model === selectedModel) && (
+            <option value={selectedModel}>{selectedModel} (custom)</option>
+          )}
+        </select>
+      </div>
+
+      {availableEfforts.length > 1 && (
+        <div>
+          <label className="block text-[11px] text-[#747686] mb-0.5">Effort</label>
+          <select
+            className="w-full h-7 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+            value={selectedEffort}
+            onChange={(e) => onEffortChange((e.target as HTMLSelectElement).value)}
+          >
+            {availableEfforts.map((eff) => (
+              <option key={eff} value={eff}>
+                {eff === "" ? "(default / none)" : eff}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
+  );
+}

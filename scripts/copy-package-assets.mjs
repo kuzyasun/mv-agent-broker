@@ -18,6 +18,7 @@ const ASSET_EXTENSIONS = new Set([".css", ".html", ".js", ".json", ".mjs", ".ps1
 function copyAssets(sourceDir, distDir) {
   mkdirSync(distDir, { recursive: true });
   for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name === "client") continue;
     const sourcePath = path.join(sourceDir, entry.name);
     const distPath = path.join(distDir, entry.name);
     if (entry.isDirectory()) {
