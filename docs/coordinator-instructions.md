@@ -112,6 +112,15 @@ was retained; it does not prove there are no historical sessions or reviews.
 Resolve known IDs and inspect the actual review binding instead of relying on
 a stale pause note. A prior review applies to its exact target.
 
+Unrelated provider catalogue changes do not require replacing a session:
+preflight checks the selected model and effort. If the broker reports actual
+CLI, launch-input, authentication or account-binding drift before acceptance,
+create a new session with the same authorized route and task settings. This
+does not require another operator approval or a different provider. Inspect
+known turns first if execution status is uncertain. After upgrading from the
+full-catalogue fingerprint implementation, old sessions need replacement;
+do not rewrite their stored bindings.
+
 Do not silently change a baseline to bypass an input limit. A findings-closure
 review between an already reviewed target and a new target is a deliberate
 follow-up with those findings as its checklist. A full checkpoint review keeps

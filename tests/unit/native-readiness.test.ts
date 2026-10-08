@@ -36,6 +36,7 @@ import {
   assertProbeArgvSafe,
   fingerprintBinaryTarget,
   hashFileBounded,
+  fingerprintReadinessObservation,
   readReadinessObservation,
   runMetadataProbe,
   isProviderReadinessObservation,
@@ -156,6 +157,37 @@ describe("cursor readiness probes", () => {
     const f = cursorFixture();
     expectBrokerError(() => f.adapter.preflight({ model: "made-up-model" }), "MODEL_UNAVAILABLE");
     expect(readInvocations(f.logFile).some((i) => i.args.some((a) => a === "--print"))).toBe(false);
+  });
+
+  it("broker forwards the requested model and effort to preflight before creating a session", async () => {
+    const f = cursorFixture();
+    const h = createHarness();
+    try {
+      h.core.adapters.set("cursor", f.adapter);
+      insertAccount(h.db, {
+        account_profile_id: "acct-cursor-route",
+        provider: "cursor",
+        quota_scope_id: "qs-shared",
+        auth_mode: "native",
+      });
+      const before = brokerCounts(h);
+      expect(() => h.core.spawn(h.seed.coordinatorId, {
+        project_id: h.seed.projectId,
+        idempotency_key: "cursor-unavailable-effort",
+        provider: "cursor",
+        account_profile_id: "acct-cursor-route",
+        model: "gpt-5.6-sol",
+        effort: "low",
+        role: "worker",
+        instructions: "test",
+        workspace: { mode: "current", workspace_id: h.seed.workspaceMain },
+        policy_profile_id: "pol-writer",
+      })).toThrow(expect.objectContaining({ code: "MODEL_UNAVAILABLE" }));
+      expect(brokerCounts(h)).toEqual(before);
+      expect(readInvocations(f.logFile).some((i) => i.args.some((a) => a === "--print"))).toBe(false);
+    } finally {
+      h.cleanup();
+    }
   });
 
   it("maps effort to an exact catalog ID and rejects unavailable or contradictory choices", () => {
@@ -606,6 +638,54 @@ describe("core durable provider binding", () => {
       expect(error.code).toBe("PROVIDER_INCOMPATIBLE");
       expect(error.message).toMatch(/replacement session/);
       expect(brokerCounts(h)).toEqual(before); // zero accepted resources
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("forwards requested model/effort preflight refusal before accepting an existing-session turn", async () => {
+    const h = createHarness();
+    try {
+      const spy = installSpy(h, observation());
+      const spawn = await h.spawnWorkerSession({ model: "mock-model-1", effort: "high" });
+      const before = brokerCounts(h);
+
+      spy.preflightError = new BrokerError("MODEL_UNAVAILABLE", "requested model-effort route is unavailable", {
+        executionStarted: false,
+      });
+      const error = sendError(h, spawn.session_id, "unavailable-route-send");
+      expect(error.code).toBe("MODEL_UNAVAILABLE");
+      expect(error.executionStarted).toBe(false);
+      expect(spy.preflightCalls.at(-1)).toMatchObject({ model: "mock-model-1", effort: "high" });
+      expect(brokerCounts(h)).toEqual(before);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not invalidate a durable session when catalog contents or order change", async () => {
+    const h = createHarness();
+    try {
+      const initialObservation = observation({ model_catalog: ["mock-model-1", "obsolete-model"] });
+      const spy = installSpy(h, initialObservation);
+      const spawn = await h.spawnWorkerSession();
+
+      // A newly available or reordered catalog remains useful to route checks,
+      // but does not alter durable CLI/config/account identity.
+      spy.observation = observation({ model_catalog: ["new-model", "mock-model-1"] });
+      expect(fingerprintReadinessObservation(spy.observation)).toBe(
+        fingerprintReadinessObservation(initialObservation),
+      );
+      const sent = h.sendTask(spawn.session_id, "catalog-change-send");
+      expect(sent.state).toBe("ACCEPTED");
+
+      // The dispatch recheck sees a further catalog change after admission.
+      spy.observation = observation({ model_catalog: ["mock-model-1", "new-model"] });
+      h.adapter.plan(sent.turn_id, [{ kind: "complete", outcome: "completed" }]);
+      await start(h, sent);
+      await settle(h);
+      expect(h.core.turnStatus(h.seed.coordinatorId, sent.turn_id).state).toBe("SUCCEEDED");
+      expect(spy.preflightCalls.at(-1)).toMatchObject({ model: "mock-model-1", effort: null });
     } finally {
       h.cleanup();
     }

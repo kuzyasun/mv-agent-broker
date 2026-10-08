@@ -39,6 +39,12 @@ the actual account/quota boundary used by the CLI.
 
 ## Shared execution contract
 
+- Cursor and Antigravity check the selected model and effort during preflight.
+  Adding, removing or reordering unrelated catalogue entries does not invalidate
+  a session. Changes to the CLI, launch inputs, observed authentication or
+  registered account binding still require revalidation in a new session.
+  ZCode's installed provider configuration is a launch input, so changing that
+  file still requires a new session.
 - One adapter call starts one native process and acquires one dispatch gate.
   The broker does not retry, change models or start a fresh session after a
   failed explicit resume. Vendor-internal retries can still occur.

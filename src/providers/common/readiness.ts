@@ -82,12 +82,11 @@ export function isProviderReadinessObservation(value: unknown): value is Provide
   return true;
 }
 
-/** Pure comparable fingerprint over the observation's observed content. */
+/** Durable identity fingerprint; the model catalog is checked per requested route, not bound to a session. */
 export function fingerprintReadinessObservation(observation: ProviderReadinessObservation): string {
   return sha256Canonical({
     provider: observation.provider,
     cli_version: observation.cli_version,
-    model_catalog: observation.model_catalog,
     authenticated: observation.authenticated,
     input_fingerprint: observation.input_fingerprint,
   });
