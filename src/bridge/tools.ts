@@ -91,7 +91,9 @@ export function bridgeToolDefs(): McpToolDef[] {
       inputSchema: {
         type: "object",
         properties: {
-          project_id: str, idempotency_key: str, route_id: str, provider: str, account_profile_id: str,
+          project_id: str, idempotency_key: str,
+          route_id: { ...str, description: "Configured route from agents_list. Omit provider, account_profile_id, model, effort, role and policy_profile_id when using this field." },
+          provider: { ...str, description: "Raw binding only, without route_id. Requires account_profile_id, model, role and policy_profile_id." }, account_profile_id: str,
           model: str, effort: str, role: { type: "string", enum: ["worker", "reviewer", "researcher"] },
           instructions: str,
           workspace: {
@@ -108,13 +110,20 @@ export function bridgeToolDefs(): McpToolDef[] {
             additionalProperties: false,
           },
           policy_profile_id: str,
-          policy_restrictions: { type: "object", additionalProperties: true },
+          policy_restrictions: {
+            type: "object",
+            description: "Optional narrowing of the configured policy. For a read-only audit on a worker route, set access to read_only; this grants no writes.",
+            properties: {
+              access: { type: "string", enum: ["read_only", "workspace_write"] },
+              write_scope: { type: "array", items: str, description: "Explicit operator-requested write prefixes only; [] denies writes. Task paths do not imply a scope restriction." },
+            },
+            additionalProperties: false,
+          },
         },
         required: ["project_id", "idempotency_key", "instructions", "workspace"],
-        oneOf: [
-          { required: ["route_id"], not: { anyOf: ["provider", "account_profile_id", "model", "effort", "role", "policy_profile_id"].map(key => ({ required: [key] })) } },
-          { required: ["provider", "account_profile_id", "model", "role", "policy_profile_id"], not: { required: ["route_id"] } },
-        ],
+        // Keep fields visible to MCP clients that flatten root unions into opaque
+        // argument maps. BrokerCore validates route/raw exclusivity and required
+        // binding fields before accepting a session.
         additionalProperties: false,
       },
       annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: false },

@@ -9,6 +9,22 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-08: Session-spawn fields were opaque in the client tool catalogue
+
+The coordinator tried resource listings and searches inside Beehive to discover
+spawn arguments. The observed client catalogue exposed `agent_session_spawn`
+as an opaque union of argument maps, without named parameters. The advertised
+schema had a root `oneOf` whose branches contained only required-field rules;
+common field definitions lived outside those branches.
+
+The spawn schema now exposes one object with named fields and typed, closed
+`policy_restrictions`. Route/raw binding exclusivity and required bindings remain
+validated by BrokerCore before acceptance. Coordinator instructions include a
+complete scoped read-only spawn example. Local MCP tests confirm the audit grant
+and reject missing or mixed bindings without creating extra sessions. Actual
+client catalogue regeneration remains to be checked after deployment/reconnection;
+the client schema conversion and its cache are outside these local tests.
+
 ## 2026-10-08: Audit instructions did not narrow a worker's write policy
 
 Beehive's replacement Antigravity worker session stayed IDLE after its send

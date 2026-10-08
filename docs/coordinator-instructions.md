@@ -49,6 +49,22 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    workspace with covering coverage; for an audit, create a read-only session.
    Changing the spawn restrictions requires a new idempotency key; do not
    alter an existing session's stored binding.
+   Use the MCP tool's advertised fields directly; resource listings and searches
+   inside the target project do not discover another server's tool arguments.
+   Complete read-only spawn example (replace the IDs from live discovery and
+   choose a new unique key):
+
+   ```json
+   {
+     "project_id": "<allowed project ID>",
+     "route_id": "<authorized worker route ID>",
+     "idempotency_key": "<unique audit spawn key>",
+     "instructions": "Read-only audit. Do not modify project files.",
+     "workspace": {"mode": "current", "workspace_id": "<registered workspace ID>"},
+     "policy_restrictions": {"access": "read_only"}
+   }
+   ```
+
    Omit `deadline_ms` to use the operator's configured default (one hour unless
    changed), or supply an explicit duration for this task. Do not hardcode the
    old 15-minute default. Quiet output alone is not evidence of a hung agent;

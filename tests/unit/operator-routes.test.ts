@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createHarness, settle, start } from "../helpers/harness.ts";
 import type { OperatorRoute } from "../../src/operator/config.ts";
+import { bridgeToolDefs, callBridgeTool } from "../../src/bridge/tools.ts";
 
 const route: OperatorRoute = {
   route_id: "mock-worker",
@@ -16,6 +17,36 @@ const route: OperatorRoute = {
 };
 
 describe("named operator routes", () => {
+  it("discovers explicit spawn fields and creates a read-only audit through MCP on a worker route", async () => {
+    const h = createHarness({ routes: new Map([[route.route_id, route]]) });
+    try {
+      const schema = bridgeToolDefs().find(def => def.name === "agent_session_spawn")!.inputSchema;
+      expect(schema.oneOf).toBeUndefined();
+      expect(schema.properties).toHaveProperty("route_id");
+      expect(schema.properties).toHaveProperty("policy_restrictions.properties.access.enum", ["read_only", "workspace_write"]);
+      const ctx = { coordinatorId: h.seed.coordinatorId, core: h.core };
+      const args = {
+        project_id: h.seed.projectId, route_id: route.route_id,
+        idempotency_key: "scoped-audit", instructions: "Read-only audit.",
+        workspace: { mode: "current", workspace_id: h.seed.workspaceMain },
+        policy_restrictions: { access: "read_only" },
+      };
+      const spawned = await callBridgeTool(ctx, "agent_session_spawn", args) as { session_id: string };
+      const status = await callBridgeTool(ctx, "agent_session_status", { session_id: spawned.session_id });
+      expect(status).toMatchObject({ provider: "mock", model: route.model, role: "worker", effective_policy: { access: "read_only", write_scope: [] } });
+
+      // The flat advertised schema must not weaken runtime binding validation.
+      await expect(callBridgeTool(ctx, "agent_session_spawn", { ...args, idempotency_key: "mixed-audit", model: "raw-model" }))
+        .rejects.toMatchObject({ code: "INVALID_REQUEST", executionStarted: false });
+      const { route_id: _routeId, ...withoutBinding } = args;
+      await expect(callBridgeTool(ctx, "agent_session_spawn", { ...withoutBinding, idempotency_key: "missing-binding" }))
+        .rejects.toMatchObject({ code: "INVALID_REQUEST", executionStarted: false });
+      await expect(callBridgeTool(ctx, "agent_session_spawn", {}))
+        .rejects.toMatchObject({ code: "INVALID_REQUEST" });
+      expect(h.core.sessionsList(h.seed.coordinatorId, h.seed.projectId)).toHaveLength(1);
+    } finally { h.cleanup(); }
+  });
+
   it("uses agent-decided native delegation without injecting a numeric cap", async () => {
     const autoRoute: OperatorRoute = { ...route, native_subagents: { mode: "auto" } };
     const h = createHarness({ routes: new Map([[autoRoute.route_id, autoRoute]]) });
