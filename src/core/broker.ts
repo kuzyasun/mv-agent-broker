@@ -110,7 +110,7 @@ import {
   type PhysicalCheckoutIdentity,
   type SessionPhysicalCwdBinding,
 } from "../workspaces/identity.ts";
-import { CoverageError, uncoveredWriteScope, validateCoverageConfig, type CoverageConfig } from "../workspaces/coverage.ts";
+import { CoverageError, coverageContractHash, uncoveredWriteScope, validateCoverageConfig, type CoverageConfig } from "../workspaces/coverage.ts";
 import {
   GIT_REVIEW_COMMIT_PATTERN,
   GitReviewPreflightError,
@@ -333,6 +333,8 @@ export interface BrokerOptions {
   incarnation?: string;
   /** Operator-configured named routes; routes are in-memory, sessions are durable. */
   routes?: ReadonlyMap<string, OperatorRoute>;
+  /** Active operator-configured workspace IDs; absent for registry-managed cores. */
+  configuredWorkspaceIds?: ReadonlySet<string>;
 }
 
 export class BrokerCore {
@@ -347,6 +349,7 @@ export class BrokerCore {
   /** §8.3 incarnation fencing identity (unique per broker process). */
   readonly worktreeIncarnation: string;
   readonly routes: ReadonlyMap<string, OperatorRoute>;
+  private readonly configuredWorkspaceIds: ReadonlySet<string> | null;
   private readonly worktreeLocks: RepositoryMutationLock;
   /**
    * §8.3 durable repository fence, mirrored in memory: common-dir keys of
@@ -376,6 +379,7 @@ export class BrokerCore {
     this.worktreeGitRunner = opts.worktreeGitRunner ?? createRealWorktreeGitRunner();
     this.worktreeIncarnation = opts.incarnation ?? randomUUID();
     this.routes = opts.routes ?? new Map();
+    this.configuredWorkspaceIds = opts.configuredWorkspaceIds === undefined ? null : new Set(opts.configuredWorkspaceIds);
     this.worktreeLocks = new RepositoryMutationLock(this.worktreeIncarnation);
     this.deferExecution = opts.deferExecution ?? false;
     this.loadWorktreeRepositoryFences();
@@ -1182,6 +1186,20 @@ export class BrokerCore {
         );
       }
     }
+    // §12.1 policy preflight and workspace admission are pure registry checks.
+    // Run them before provider readiness and before worktree preflight can
+    // create its managed root or perform Git reads.
+    const policy = cloneFrozenPolicy(this.spawnPolicyPreflight(req));
+    // Git reviewers must be effectively read-only: no write-enabled session
+    // may review a real checkout (reject before workspace/Git/provider work).
+    if (req.role === "reviewer" && req.workspace.mode !== "review_slot" && policy.access !== "read_only") {
+      throw new BrokerError(
+        "INVALID_REQUEST",
+        "Git reviewer sessions require an effective read_only policy; narrow the profile with policy_restrictions.access='read_only'.",
+        { executionStarted: false },
+      );
+    }
+    const workspaceAdmissionFingerprint = this.validateSpawnWorkspace(req, policy);
     // §8.3 workspace field contract, decided BEFORE any accepted resource:
     // broker-created detached worktrees need a registered same-project source
     // repository reference plus an explicit full-hex commit; contradictory or
@@ -1201,18 +1219,6 @@ export class BrokerCore {
       throw new BrokerError(
         "PROVIDER_INCOMPATIBLE",
         `Account profile '${account.account_profile_id}' is registered for provider '${account.provider}', not '${req.provider}'.`,
-        { executionStarted: false },
-      );
-    }
-    // §12.1 policy preflight: requested restrictions validated and narrowed
-    // against the operator profile BEFORE any session/reservation exists.
-    const policy = cloneFrozenPolicy(this.spawnPolicyPreflight(req));
-    // Git reviewers must be effectively read-only: no write-enabled session
-    // may review a real checkout (reject the spawn before any resource).
-    if (req.role === "reviewer" && req.workspace.mode !== "review_slot" && policy.access !== "read_only") {
-      throw new BrokerError(
-        "INVALID_REQUEST",
-        "Git reviewer sessions require an effective read_only policy; narrow the profile with policy_restrictions.access='read_only'.",
         { executionStarted: false },
       );
     }
@@ -1269,6 +1275,7 @@ export class BrokerCore {
       policy,
       observation: candidate.observation,
       worktreeSource,
+      workspaceAdmissionFingerprint,
     });
     if (worktreeSource) candidate.worktreeSource = worktreeSource;
     return candidate;
@@ -1421,8 +1428,9 @@ export class BrokerCore {
     // in-memory comparison; no external process runs here). The §8.3 worktree
     // source binding is re-read from the live registry rows — drift refuses.
     const policy = cloneFrozenPolicy(this.spawnPolicyPreflight(req));
+    const workspaceAdmissionFingerprint = this.validateSpawnWorkspace(req, policy);
     const worktreeSource = this.revalidateWorktreeSource(req, candidate);
-    const fresh = spawnCandidateFingerprint({ provider: req.provider, adapterVersion: adapter.adapterVersion, account, policy, observation: candidate.observation, worktreeSource });
+    const fresh = spawnCandidateFingerprint({ provider: req.provider, adapterVersion: adapter.adapterVersion, account, policy, observation: candidate.observation, worktreeSource, workspaceAdmissionFingerprint });
     if (fresh !== candidate.fingerprint) {
       throw new BrokerError(
         "POLICY_UNSUPPORTED",
@@ -1498,6 +1506,180 @@ export class BrokerCore {
     });
     if (!narrowed.ok) throw new BrokerError(narrowed.code, narrowed.reason, { executionStarted: false });
     return narrowed.policy;
+  }
+
+  /** Pure workspace and coverage admission, repeated inside the spawn transaction. */
+  private validateSpawnWorkspace(req: ResolvedSpawnRequest, policy: EffectiveWritePolicy): string {
+    const request = req.workspace;
+    let workspace: WorkspaceRecord | null = null;
+    if (request.workspace_id) {
+      workspace = getWorkspace(this.db, request.workspace_id);
+      if (!workspace || workspace.project_id !== req.project_id) {
+        throw new BrokerError("INVALID_REQUEST", "Unknown workspace reference for this project.", { executionStarted: false });
+      }
+      if (workspace.mode !== request.mode) {
+        throw new BrokerError("INVALID_REQUEST", "Workspace mode does not match the registered workspace.", {
+          executionStarted: false,
+          details: { workspace_id: workspace.workspace_id, requested_mode: request.mode, registered_mode: workspace.mode },
+        });
+      }
+      if (!this.workspaceSelectable(workspace)) {
+        throw new BrokerError("INVALID_REQUEST", "Workspace is no longer configured for new sessions.", {
+          executionStarted: false,
+          retryGuidance: "choose_a_currently_configured_workspace",
+          details: { workspace_id: workspace.workspace_id },
+        });
+      }
+    } else if (request.mode === "worktree" && request.repository_workspace_id) {
+      workspace = getWorkspace(this.db, request.repository_workspace_id);
+      if (!workspace || workspace.project_id !== req.project_id || workspace.mode !== "current") {
+        throw new BrokerError("INVALID_REQUEST", "Unknown repository workspace reference for this project.", { executionStarted: false });
+      }
+      if (!this.workspaceSelectable(workspace)) {
+        throw new BrokerError("INVALID_REQUEST", "Worktree source is no longer configured for new sessions.", {
+          executionStarted: false,
+          retryGuidance: "choose_a_currently_configured_workspace",
+          details: { workspace_id: workspace.workspace_id },
+        });
+      }
+    }
+    if (workspace?.quarantined) {
+      throw new BrokerError("WORKSPACE_BUSY", "Workspace is quarantined.", {
+        executionStarted: false,
+        details: { workspace_id: workspace.workspace_id },
+      });
+    }
+
+    const profileId = workspace?.coverage_profile_id ?? null;
+    let coverage: { version: string; contract_hash: string; config: CoverageConfig } | null = null;
+    if (profileId) {
+      const version = latestCoverageProfileVersion(this.db, profileId);
+      const profile = version ? getCoverageProfile(this.db, profileId, version) : null;
+      if (profile) {
+        try {
+          const config = JSON.parse(profile.config) as CoverageConfig;
+          validateCoverageConfig(config);
+          if (coverageContractHash(config) !== profile.contract_hash) throw new Error("coverage-contract-hash-mismatch");
+          coverage = { version: profile.version, contract_hash: profile.contract_hash, config };
+        } catch {
+          throw new BrokerError("SNAPSHOT_COVERAGE_MISMATCH", "Workspace coverage configuration is invalid.", {
+            executionStarted: false,
+            details: { workspace_id: workspace?.workspace_id ?? null, coverage_profile_id: profileId },
+          });
+        }
+      }
+    }
+
+    const needsCapture = workspace !== null && request.mode !== "review_slot" && req.role !== "reviewer" && workspace.canonical_path !== null;
+    if (needsCapture && !coverage) {
+      throw new BrokerError("SNAPSHOT_COVERAGE_MISMATCH", "Workspace has no usable coverage binding for its initial snapshot.", {
+        executionStarted: false,
+        retryGuidance: "use_covering_workspace_or_spawn_read_only_audit_session",
+        details: { workspace_id: workspace?.workspace_id ?? null, coverage_profile_id: profileId },
+      });
+    }
+    const uncovered = coverage ? uncoveredWriteScope(policy.write_scope, coverage.config) : [];
+    if (uncovered.length > 0) {
+      throw new BrokerError(
+        "SNAPSHOT_COVERAGE_MISMATCH",
+        "The selected workspace coverage does not cover the session's effective write scope. Choose a compatible workspace or narrow the spawn policy to read_only.",
+        {
+          executionStarted: false,
+          retryGuidance: "use_covering_workspace_or_spawn_read_only_audit_session",
+          details: {
+            workspace_id: workspace?.workspace_id ?? request.repository_workspace_id ?? null,
+            coverage_profile_id: profileId,
+            coverage_profile_version: coverage?.version ?? null,
+            coverage_contract_hash: coverage?.contract_hash ?? null,
+            actual_write_scope: [...policy.write_scope],
+            uncovered_write_scope: uncovered,
+            compatible_workspace_ids: this.compatibleWorkspaceIds(req.project_id, req.role, policy),
+          },
+        },
+      );
+    }
+
+    return sha256Hex(JSON.stringify({
+      mode: request.mode,
+      workspace_id: workspace?.workspace_id ?? null,
+      project_id: workspace?.project_id ?? req.project_id,
+      canonical_path: workspace?.canonical_path ?? null,
+      quarantined: workspace?.quarantined ?? false,
+      coverage_profile_id: profileId,
+      coverage_profile_version: coverage?.version ?? null,
+      coverage_contract_hash: coverage?.contract_hash ?? null,
+      workspace_configured: workspace ? this.workspaceSelectable(workspace) : true,
+      source_workspace_id: request.mode === "worktree" && !request.workspace_id ? request.repository_workspace_id ?? null : null,
+    }));
+  }
+
+  private workspaceSelectable(workspace: WorkspaceRecord): boolean {
+    if (this.configuredWorkspaceIds === null || this.configuredWorkspaceIds.has(workspace.workspace_id)) return true;
+    return this.isReadyManagedWorktree(workspace);
+  }
+
+  /** A generated worktree is selectable only when its owned journal proves readiness. */
+  private isReadyManagedWorktree(workspace: WorkspaceRecord): boolean {
+    if (workspace.mode !== "worktree" || workspace.quarantined || !workspace.canonical_path) return false;
+    const owners = this.db.raw.prepare(
+      "SELECT session_id FROM sessions WHERE workspace_id = ? AND workspace_mode = 'worktree' ORDER BY created_at DESC",
+    ).all(workspace.workspace_id) as Array<{ session_id: string }>;
+    for (const { session_id } of owners) {
+      const session = getSession(this.db, session_id);
+      const journal = readOwnedWorktreeJournal(this.db, session_id);
+      if (
+        session?.project_id === workspace.project_id &&
+        session.workspace_id === workspace.workspace_id &&
+        (session.state === "IDLE" || session.state === "CLOSED") &&
+        journal?.workspace_id === workspace.workspace_id &&
+        journal.worktree_path === workspace.canonical_path &&
+        journal.stage === "ready" &&
+        !journal.failure &&
+        !!journal.launch && !!journal.completion && receiptsMatch(journal.launch, journal.completion)
+      ) return true;
+    }
+    return false;
+  }
+
+  private compatibleWorkspaceIds(
+    projectId: string,
+    role: AgentRole,
+    policy: Pick<EffectiveWritePolicy, "access" | "write_scope">,
+  ): string[] {
+    const rows = this.db.raw.prepare("SELECT workspace_id FROM workspaces WHERE project_id = ? ORDER BY workspace_id").all(projectId) as Array<{ workspace_id: string }>;
+    const compatible: string[] = [];
+    for (const { workspace_id } of rows) {
+      const workspace = getWorkspace(this.db, workspace_id);
+      if (!workspace || workspace.quarantined || !this.workspaceSelectable(workspace)) continue;
+      if (role !== "reviewer" && workspace.mode === "review_slot") continue;
+      if (role === "reviewer" && workspace.mode !== "review_slot") {
+        if (policy.access === "read_only") compatible.push(workspace_id);
+        continue;
+      }
+      if (!workspace.coverage_profile_id) continue;
+      const version = latestCoverageProfileVersion(this.db, workspace.coverage_profile_id);
+      const profile = version ? getCoverageProfile(this.db, workspace.coverage_profile_id, version) : null;
+      if (!profile) continue;
+      try {
+        const config = JSON.parse(profile.config) as CoverageConfig;
+        validateCoverageConfig(config);
+        if (coverageContractHash(config) !== profile.contract_hash) continue;
+        if (uncoveredWriteScope(policy.write_scope, config).length === 0) compatible.push(workspace_id);
+      } catch { /* invalid coverage cannot qualify as compatible */ }
+    }
+    return compatible;
+  }
+
+  private routeEffectivePolicy(policyProfileId: string): Pick<EffectiveWritePolicy, "access" | "write_scope"> | null {
+    const profile = getPolicyProfile(this.db, policyProfileId, POLICY_PROFILE_VERSION);
+    if (!profile) return null;
+    const result = computeEffectiveWritePolicy({
+      policy_profile_id: policyProfileId,
+      policy_profile_version: POLICY_PROFILE_VERSION,
+      profileConfigJson: profile.config,
+      requestedRestrictions: undefined,
+    });
+    return result.ok ? { access: result.policy.access, write_scope: [...result.policy.write_scope] } : null;
   }
 
   /**
@@ -3451,16 +3633,35 @@ export class BrokerCore {
       });
     }
     const workspaces = this.db.raw
-      .prepare("SELECT workspace_id, mode, coverage_profile_id, quarantined FROM workspaces WHERE project_id = ?")
-      .all(projectId) as Array<{ workspace_id: string; mode: string; coverage_profile_id: string | null; quarantined: number }>;
-    for (const ws of workspaces) {
+      .prepare("SELECT workspace_id FROM workspaces WHERE project_id = ?")
+      .all(projectId) as Array<{ workspace_id: string }>;
+    for (const { workspace_id } of workspaces) {
+      const ws = getWorkspace(this.db, workspace_id);
+      if (!ws || !this.workspaceSelectable(ws)) continue;
+      const coverageVersion = ws.coverage_profile_id ? latestCoverageProfileVersion(this.db, ws.coverage_profile_id) : null;
+      const coverageProfile = coverageVersion && ws.coverage_profile_id
+        ? getCoverageProfile(this.db, ws.coverage_profile_id, coverageVersion)
+        : null;
+      let sourcePrefixes: string[] | null = null;
+      if (coverageProfile) {
+        try {
+          const config = JSON.parse(coverageProfile.config) as CoverageConfig;
+          validateCoverageConfig(config);
+          sourcePrefixes = [...config.source_prefixes];
+        } catch { /* omit malformed coverage details; spawn rejects the profile */ }
+      }
       entries.push({
         kind: "workspace", id: ws.workspace_id, display_name: ws.workspace_id,
-        mode: ws.mode, coverage_profile_id: ws.coverage_profile_id, quarantined: ws.quarantined === 1,
+        mode: ws.mode, coverage_profile_id: ws.coverage_profile_id, quarantined: ws.quarantined,
+        coverage_profile_version: coverageProfile?.version ?? null,
+        coverage_contract_hash: coverageProfile?.contract_hash ?? null,
+        coverage_source_prefixes: sourcePrefixes,
         // §8.3 additive: eligible registered repository workspace reference
         // for broker-created detached worktrees. Only REGISTERED ids are
         // exposed — never a guessed or caller-supplied path.
-        eligible_worktree_source: ws.mode === "current" && ws.quarantined !== 1 && ws.coverage_profile_id !== null,
+        // This field describes source-repository suitability. Coverage and
+        // policy compatibility are role-specific and reported per route.
+        eligible_worktree_source: ws.mode === "current" && !ws.quarantined && ws.canonical_path !== null,
       });
     }
     const policies = this.db.raw
@@ -3471,6 +3672,10 @@ export class BrokerCore {
     }
     for (const route of this.routes.values()) {
       if (route.project_id !== projectId) continue;
+      const effectivePolicy = this.routeEffectivePolicy(route.policy_profile_id);
+      const compatibleWorkspaceIds = effectivePolicy
+        ? this.compatibleWorkspaceIds(projectId, route.role, effectivePolicy)
+        : [];
       entries.push({
         kind: "route",
         id: route.route_id,
@@ -3485,6 +3690,8 @@ export class BrokerCore {
         effort: route.effort ?? null,
         role: route.role,
         policy_profile_id: route.policy_profile_id,
+        effective_policy: effectivePolicy,
+        compatible_workspace_ids: compatibleWorkspaceIds,
         native_subagents: route.native_subagents ?? { mode: "off", max_agents: 1 },
         native_subagents_enforcement: "advisory",
       });
@@ -3690,6 +3897,7 @@ function spawnCandidateFingerprint(parts: {
   policy: EffectiveWritePolicy;
   observation: ProviderReadinessObservation | null;
   worktreeSource: { source_workspace_id: string; base_commit: string; source_common_dir: string; source_canonical_path: string; source_coverage_profile_id: string | null } | null;
+  workspaceAdmissionFingerprint: string;
 }): string {
   return sha256Hex(JSON.stringify({
     provider: parts.provider,
@@ -3713,6 +3921,7 @@ function spawnCandidateFingerprint(parts: {
     // §8.3: the validated source binding participates — a changed source row
     // or base commit yields a different fingerprint and refuses admission.
     worktree_source: parts.worktreeSource,
+    workspace_admission: parts.workspaceAdmissionFingerprint,
   }));
 }
 

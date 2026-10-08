@@ -77,7 +77,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agents_list",
-      description: "Discover configured adapters, routes, accounts, workspaces, policies and coverage for one allowed project. Follow every next_cursor before choosing an exact enabled route; route presence does not prove inference readiness or quota (§10.1.2).",
+      description: "Discover routes and currently selectable workspaces for one allowed project. Follow every next_cursor. Choose an exact enabled route and a workspace from its compatible_workspace_ids, computed for its displayed effective_policy; historical registrations are not new-spawn candidates. Explicit read_only/scope restrictions may make additional active workspaces compatible; spawn validates the actual policy before creating a session. Discovery does not prove provider readiness or quota (§10.1.2).",
       inputSchema: {
         type: "object",
         properties: { project_id: str, cursor: str, limit: int(1, 100) },
@@ -100,7 +100,7 @@ export function bridgeToolDefs(): McpToolDef[] {
             type: "object",
             properties: {
               mode: { type: "string", enum: ["current", "worktree", "review_slot"], description: "current/worktree bind a registered physical workspace; review_slot selects snapshot review." },
-              workspace_id: { ...str, description: "Registered physical workspace ID for current or existing worktree sessions." },
+              workspace_id: { ...str, description: "Currently selectable workspace ID from discovery; choose from the route's compatible_workspace_ids for its default policy. Historical session workspace IDs are not necessarily selectable." },
               // §8.3 additive: registered source repository reference and the
               // explicit full-hex base commit for a broker-created worktree.
               repository_workspace_id: { ...str, description: "Registered source repository ID used to create a detached worktree." },

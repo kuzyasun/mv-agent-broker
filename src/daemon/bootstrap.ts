@@ -49,6 +49,8 @@ export interface DaemonEnv {
   /** Optional operator-owned registry application after ownership and DB open. */
   configureRegistry?: (db: RegistryDb) => void | Promise<void>;
   routes?: ReadonlyMap<string, OperatorRoute>;
+  /** Active operator workspace registrations; durable history is not admission. */
+  configuredWorkspaceIds?: ReadonlySet<string>;
 }
 
 function assertDirectoryAncestors(directory: string): void {
@@ -150,6 +152,7 @@ export async function startDaemon(env: DaemonEnv): Promise<Daemon> {
     blobStore: blobs,
     worktreesRoot: path.join(stateDir, "worktrees"),
     routes: env.routes,
+    configuredWorkspaceIds: env.configuredWorkspaceIds,
     // §8.3: durable mutation fencing binds to the lifecycle incarnation so a
     // restarted daemon never inherits a dead process's hold identity.
     incarnation: lifecycle.currentIncarnation,

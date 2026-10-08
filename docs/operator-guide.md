@@ -217,6 +217,15 @@ code-folder preset and the advanced fields are deliberate restrictions that
 enumerate explicit coverage and write scopes; use them only when a project
 really must stay narrow. Folder browsing lists names only and does not run an
 agent or spend quota.
+
+MCP discovery lists active workspace registrations and verified managed
+worktrees, rather than every historical registry row. Each route's
+`compatible_workspace_ids` lists workspaces matching its default policy and
+coverage. A narrower explicitly requested policy is checked at spawn. Invalid
+policy/coverage combinations are rejected before creating a session or snapshot.
+Removed registrations stay in the registry for existing sessions and evidence;
+they are not available for new sessions merely because their old IDs still exist.
+
 Creation stages new project, workspace, policy, and coverage IDs locally;
 **Save** writes the configuration. In shared-daemon mode, stop the daemon only
 when there are no active turns or pending intents, then start it again to use

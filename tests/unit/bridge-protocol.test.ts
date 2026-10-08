@@ -413,7 +413,8 @@ describe("agent_session_spawn additive worktree workspace fields (§8.3)", () =>
       type: "string",
       description: expect.stringContaining("Full hexadecimal Git commit ID"),
     });
-    expect(workspace.properties.workspace_id.description).toContain("Registered physical workspace ID");
+    expect(workspace.properties.workspace_id.description).toContain("Currently selectable workspace ID");
+    expect(workspace.properties.workspace_id.description).toContain("compatible_workspace_ids");
     expect(workspace.additionalProperties).toBe(false);
 
     const send = bridgeToolDefs().find((d) => d.name === "agent_session_send")!.inputSchema as {

@@ -9,6 +9,22 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-08: Historical workspace registrations remained selectable
+
+Beehive's active configuration registered project-wide workspace and coverage
+IDs, but discovery also advertised old, narrow workspace rows retained in the
+registry. A new whole-project worker session selected an old ID. Spawn captured
+an initial snapshot successfully; only send rejected its incompatible coverage
+with `SNAPSHOT_COVERAGE_MISMATCH`. No provider inference started.
+
+Workspace history is needed for existing sessions and evidence; it must not
+define the active registrations used for new work. Discovery and new-spawn
+admission now use active operator registrations plus verified, ready managed
+worktrees. Routes advertise workspace IDs compatible with their default policy.
+Spawn validates the actual requested policy and coverage before provider probes,
+session allocation, snapshot capture or worktree creation, and rechecks admission
+inside the transaction. No workspace is silently replaced or its coverage widened.
+
 ## 2026-10-08: UI catalogue refresh consumed the wrong response shape
 
 The models endpoint returned `{observation, options}` correctly, but the UI

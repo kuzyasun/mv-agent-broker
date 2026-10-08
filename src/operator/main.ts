@@ -195,6 +195,7 @@ function daemonEnv(config: OperatorConfig) {
     limits: config.limits,
     ...pins,
     routes: new Map(config.routes.map(route => [route.route_id, route])),
+    configuredWorkspaceIds: new Set(config.workspaces.map(workspace => workspace.workspace_id)),
     configureRegistry: (db: Parameters<typeof applyOperatorConfig>[0]) => {
       applyOperatorConfig(db, config);
     },

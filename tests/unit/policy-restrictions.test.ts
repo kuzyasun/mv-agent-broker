@@ -570,7 +570,7 @@ describe("whole-project default grant", () => {
     }
   });
 
-  it("whole-project scope requires root coverage admission (narrowing and coverage agree)", async () => {
+  it("whole-project scope requires root coverage admission at spawn (narrowing and coverage agree)", async () => {
     const h = createHarness();
     try {
       insertPolicyProfile(h.db, {
@@ -580,21 +580,20 @@ describe("whole-project default grant", () => {
       });
       // Seeded workspace coverage covers src/tests only — the default grant
       // is not admissible there, before any turn is accepted.
-      const spawn = await h.spawnWorkerSession({ policy_profile_id: "pol-root" });
       const before = brokerCounts(h);
       const reservationsBefore = (h.db.raw.prepare("SELECT COUNT(*) c FROM reservations WHERE released_at IS NULL").get() as { c: number }).c;
-      const error = expectBrokerError(() => h.sendTask(spawn.session_id, "t-uncovered"), "SNAPSHOT_COVERAGE_MISMATCH");
+      const error = await expectBrokerErrorAsync(() => h.spawnWorkerSession({ policy_profile_id: "pol-root" }), "SNAPSHOT_COVERAGE_MISMATCH");
       expect(error.executionStarted).toBe(false);
       expect(error.retryGuidance).toBe("use_covering_workspace_or_spawn_read_only_audit_session");
-      expect(error.message).toContain("cannot be selected per send");
-      expect(error.message).toContain("policy_restrictions.access='read_only'");
-      expect(error.details).toEqual({
-        session_id: spawn.session_id,
+      expect(error.message).toContain("effective write scope");
+      expect(error.message).toContain("narrow the spawn policy to read_only");
+      expect(error.details).toMatchObject({
         workspace_id: h.seed.workspaceMain,
         coverage_profile_id: h.seed.coverageProfileId,
         coverage_profile_version: "1",
         actual_write_scope: ["."],
         uncovered_write_scope: ["."],
+        compatible_workspace_ids: [],
       });
       expect(brokerCounts(h)).toEqual(before);
       expect((h.db.raw.prepare("SELECT COUNT(*) c FROM reservations WHERE released_at IS NULL").get() as { c: number }).c)

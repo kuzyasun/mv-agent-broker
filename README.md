@@ -169,6 +169,8 @@ Give the coordinator this prompt, replacing the project ID shown in the UI:
 > Read every agents_list page for project PROJECT_ID. Show the live profiles
 > with provider, model, effort, role, policy and subagent settings before paid
 > work. Choose only my enabled profiles; respect their tags and quota pauses.
+> Select a workspace from the route's compatible_workspace_ids. After spawn,
+> verify effective_policy and use exactly the required_send_binding from status.
 > Use separate worktrees for parallel workers and a separate reviewer profile.
 > Read result artifacts, verify actual changes and checks, and perform final
 > review yourself. Record broker incidents. If the MCP tools are absent or a

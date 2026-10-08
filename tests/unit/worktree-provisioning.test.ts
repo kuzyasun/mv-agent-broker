@@ -22,7 +22,7 @@ import { createHarness, settle, start, COVERAGE_CONFIG, type Harness } from "../
 import { BrokerError } from "../../src/shared/errors.ts";
 import { BrokerCore } from "../../src/core/broker.ts";
 import type { SpawnRequest } from "../../src/core/broker.ts";
-import { insertProject, insertWorkspace } from "../../src/storage/repo.ts";
+import { insertCoverageProfile, insertProject, insertWorkspace } from "../../src/storage/repo.ts";
 import { readSessionPhysicalBinding } from "../../src/workspaces/identity.ts";
 import { computeSourceDigest, takeInventory } from "../../src/workspaces/inventory.ts";
 import {
@@ -343,6 +343,34 @@ function expectBrokerError(fn: () => unknown, code: string): BrokerError {
 // ─── tests ──────────────────────────────────────────────────────────────────
 
 describe("§8.3 broker-created detached worktrees", () => {
+  it("rejects uncovered source scope before provider readiness or Git worktree preflight", () => {
+    const f = makeFixture();
+    try {
+      const coverage = {
+        source_prefixes: ["docs"],
+        non_source_prefixes: ["dist"],
+        excluded_prefixes: [".git", "node_modules"],
+      };
+      insertCoverageProfile(f.h.db, {
+        coverage_profile_id: "cov-docs-only",
+        version: "1",
+        config: JSON.stringify(coverage),
+        contract_hash: coverageContractHash(coverage),
+      });
+      f.h.db.raw.prepare("UPDATE workspaces SET coverage_profile_id = 'cov-docs-only' WHERE workspace_id = 'ws-repo'").run();
+      const providerPreflight = vi.spyOn(f.h.adapter, "preflight");
+      const beforeSessions = Number((f.h.db.raw.prepare("SELECT COUNT(*) AS count FROM sessions").get() as { count: number }).count);
+      const beforeIntents = Number((f.h.db.raw.prepare("SELECT COUNT(*) AS count FROM intents").get() as { count: number }).count);
+      const error = expectBrokerError(() => f.worktreeSpawn("wt-uncovered-source"), "SNAPSHOT_COVERAGE_MISMATCH");
+      expect(error.executionStarted).toBe(false);
+      expect(error.details).toMatchObject({ actual_write_scope: ["src", "tests"], uncovered_write_scope: ["src", "tests"] });
+      expect(providerPreflight).not.toHaveBeenCalled();
+      expect(f.runner.calls).toHaveLength(0);
+      expect(Number((f.h.db.raw.prepare("SELECT COUNT(*) AS count FROM sessions").get() as { count: number }).count)).toBe(beforeSessions);
+      expect(Number((f.h.db.raw.prepare("SELECT COUNT(*) AS count FROM intents").get() as { count: number }).count)).toBe(beforeIntents);
+    } finally { f.cleanup(); }
+  });
+
   it("provisions a detached worktree at the explicit base commit and reports the additive fields", async () => {
     const f = makeFixture();
     try {
@@ -405,6 +433,61 @@ describe("§8.3 broker-created detached worktrees", () => {
       const generatedEntry = entries.find((e) => e.id === resp.worktree!.workspace_id)!;
       expect(generatedEntry.mode).toBe("worktree");
       expect(generatedEntry.eligible_worktree_source).toBe(false);
+
+      // A production-style configured ID set hides stale registry rows while
+      // preserving a ready managed worktree proven by its owned journal.
+      const configuredCore = new BrokerCore({
+        db: f.h.db,
+        clock: f.h.clock,
+        adapters: new Map([["mock", f.h.adapter]]),
+        limits: f.h.limits,
+        deferExecution: true,
+        blobStore: f.h.core.blobStore,
+        worktreesRoot: f.worktreesRoot,
+        worktreeGitRunner: f.runner,
+        configuredWorkspaceIds: new Set(["ws-repo"]),
+      });
+      const configuredEntries = configuredCore.discovery(f.h.seed.coordinatorId, f.h.seed.projectId, null, 100).entries
+        .filter((entry) => entry.kind === "workspace");
+      expect(configuredEntries.map((entry) => entry.id).sort()).toEqual(["ws-repo", resp.worktree!.workspace_id].sort());
+      expect(configuredCore.spawn(f.h.seed.coordinatorId, {
+        project_id: f.h.seed.projectId,
+        idempotency_key: "reuse-ready-managed-worktree",
+        provider: "mock",
+        account_profile_id: f.h.seed.accountMock1,
+        model: "mock-model-1",
+        role: "worker",
+        instructions: "Use the ready managed checkout.",
+        workspace: { mode: "worktree", workspace_id: resp.worktree!.workspace_id },
+        policy_profile_id: "pol-writer",
+      })).toMatchObject({ state: "IDLE" });
+
+      insertWorkspace(f.h.db, {
+        workspace_id: "ws-mode-only-worktree",
+        project_id: f.h.seed.projectId,
+        mode: "worktree",
+        canonical_path: wtPath,
+        quarantined: false,
+        quarantine_reason: null,
+        coverage_profile_id: f.h.seed.coverageProfileId,
+      });
+      const withModeOnly = configuredCore.discovery(f.h.seed.coordinatorId, f.h.seed.projectId, null, 100).entries
+        .filter((entry) => entry.kind === "workspace");
+      expect(withModeOnly.some((entry) => entry.id === "ws-mode-only-worktree")).toBe(false);
+
+      const provisionIntent = f.h.db.raw.prepare("SELECT intent_id, payload FROM intents WHERE kind = 'provision_session' AND session_id = ?")
+        .get(resp.session_id) as { intent_id: string; payload: string };
+      const incompletePayload = JSON.parse(provisionIntent.payload) as { worktree_provisioning: Record<string, unknown> };
+      incompletePayload.worktree_provisioning.stage = "adding";
+      f.h.db.raw.prepare("UPDATE intents SET payload = ? WHERE intent_id = ?").run(JSON.stringify(incompletePayload), provisionIntent.intent_id);
+      const incomplete = configuredCore.discovery(f.h.seed.coordinatorId, f.h.seed.projectId, null, 100).entries
+        .filter((entry) => entry.kind === "workspace");
+      expect(incomplete.some((entry) => entry.id === resp.worktree!.workspace_id)).toBe(false);
+
+      f.h.db.raw.prepare("UPDATE intents SET payload = '{' WHERE intent_id = ?").run(provisionIntent.intent_id);
+      const malformed = configuredCore.discovery(f.h.seed.coordinatorId, f.h.seed.projectId, null, 100).entries
+        .filter((entry) => entry.kind === "workspace");
+      expect(malformed.some((entry) => entry.id === resp.worktree!.workspace_id)).toBe(false);
     } finally {
       f.cleanup();
     }
@@ -1264,8 +1347,8 @@ describe("§8.3 broker-created detached worktrees", () => {
     const workspaceSchema = spawnDef.inputSchema as {
       properties: { workspace: { properties: Record<string, unknown>; additionalProperties: boolean } };
     };
-    expect(workspaceSchema.properties.workspace.properties.repository_workspace_id).toEqual({ type: "string" });
-    expect(workspaceSchema.properties.workspace.properties.base_commit).toEqual({ type: "string" });
+    expect(workspaceSchema.properties.workspace.properties.repository_workspace_id).toMatchObject({ type: "string" });
+    expect(workspaceSchema.properties.workspace.properties.base_commit).toMatchObject({ type: "string" });
     expect(workspaceSchema.properties.workspace.additionalProperties).toBe(false);
   });
 });

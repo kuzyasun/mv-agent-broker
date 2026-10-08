@@ -23,7 +23,14 @@ result reads. Do not infer a route, role, write scope or binding from task wordi
    `agents_list` for the exact selected allowed `project_id`, following every
    `next_cursor` until it is `null`; never choose from a partial page. Choose
    the exact `kind: route` entry with the desired role, model/effort, and
-   tags, and record its `route_id`. Route entries carry the operator's
+   tags, and record its `route_id`. Route entries show `effective_policy` and
+   `compatible_workspace_ids`: choose from that list for the route's default
+   policy. It checks policy/coverage, not provider readiness, quota or filesystem
+   availability. Explicit read-only/scope restrictions may make another active
+   workspace compatible; spawn validates the actual requested policy.
+   Historical registrations are not new-spawn candidates. Check current
+   discovery before selecting a remembered workspace ID; existing compatible
+   sessions can still be continued. Route entries also carry the operator's
    readable `display_name`, an `enabled` flag, and effective `tags`
    (including the derived `multi-agent` tag); they are selection hints, not
    permissions, and never appear in worker prompts. Skip `enabled: false`
@@ -60,9 +67,11 @@ result reads. Do not infer a route, role, write scope or binding from task wordi
    `agent_session_status.effective_policy`: read-only must show `access:
    "read_only"` and `write_scope: []`; null means the binding is unavailable.
    A session's coverage selector comes from its registered workspace and is
-   fixed for that session. A per-send selector cannot replace it. If a writer
-   grants `"."` but its registered coverage lists narrower paths, choose a
-   workspace with covering coverage; for an audit, create a read-only session.
+   fixed for that session. A per-send selector cannot replace it. A writer
+   granting `"."` needs coverage of the project root. Spawn rejects incompatible
+   policy/coverage before creating a session, snapshot or worktree. Choose a
+   compatible workspace; do not reduce authorized writes merely to pass the
+   check. For an authorized read-only audit, request read-only policy.
    Changing the spawn restrictions requires a new idempotency key; do not
    alter an existing session's stored binding.
    Use the MCP tool's advertised fields directly; resource listings and searches
