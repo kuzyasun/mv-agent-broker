@@ -191,10 +191,13 @@ export function ProjectsSection(): JSX.Element {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
             <div>
-              <label className="block font-medium text-[#434655] mb-1">Project ID</label>
+              <label htmlFor="wizard-project-id" className="block font-medium text-[#434655] mb-1">
+                Project ID
+              </label>
               <input
+                id="wizard-project-id"
                 type="text"
-                className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+                className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8]"
                 placeholder="e.g. backend-api"
                 value={wizardProjectId.value}
                 onInput={(e) => {
@@ -204,10 +207,13 @@ export function ProjectsSection(): JSX.Element {
             </div>
 
             <div>
-              <label className="block font-medium text-[#434655] mb-1">Display Name</label>
+              <label htmlFor="wizard-display-name" className="block font-medium text-[#434655] mb-1">
+                Display Name
+              </label>
               <input
+                id="wizard-display-name"
                 type="text"
-                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs focus:border-[#1d4ed8] outline-none"
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs focus:border-[#1d4ed8]"
                 placeholder="e.g. Backend API Repository"
                 value={wizardDisplayName.value}
                 onInput={(e) => {
@@ -219,13 +225,14 @@ export function ProjectsSection(): JSX.Element {
 
           {/* Canonical Workspace Path & Folder Picker */}
           <div>
-            <label className="block font-medium text-[#434655] mb-1 text-xs">
+            <label htmlFor="wizard-canonical-path" className="block font-medium text-[#434655] mb-1 text-xs">
               Canonical Workspace Directory
             </label>
             <div className="flex gap-2">
               <input
+                id="wizard-canonical-path"
                 type="text"
-                className="flex-1 h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+                className="flex-1 h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8]"
                 placeholder="C:\projects\my-repo"
                 value={wizardCanonicalPath.value}
                 onInput={(e) => {
@@ -252,7 +259,7 @@ export function ProjectsSection(): JSX.Element {
                 </span>
                 <button
                   type="button"
-                  className="text-xs text-[#747686] hover:text-[#141b2b] cursor-pointer"
+                  className="text-xs text-[#434655] hover:text-[#141b2b] cursor-pointer"
                   onClick={() => {
                     wizardFolderPickerOpen.value = false;
                   }}
@@ -262,30 +269,32 @@ export function ProjectsSection(): JSX.Element {
               </div>
 
               {folderLoading.value ? (
-                <div className="py-2 text-[#747686]">Scanning directory…</div>
+                <div className="py-2 text-[#434655]">Scanning directory…</div>
               ) : (
                 <div className="space-y-1 max-h-48 overflow-y-auto bg-white border border-[#c4c5d7] p-2">
                   {currentFolderEntry.value?.parent && (
                     <button
                       type="button"
-                      className="w-full text-left font-mono text-xs text-[#1d4ed8] hover:bg-[#e9edff] px-1 py-0.5"
+                      className="w-full text-left font-mono text-xs text-[#1d4ed8] hover:bg-[#e9edff] px-1 py-0.5 flex items-center gap-1.5"
                       onClick={() => openFolderPicker(currentFolderEntry.value!.parent!)}
                     >
-                      📁 .. (parent directory)
+                      <FolderIcon size={14} className="text-[#1d4ed8] shrink-0" />
+                      <span>.. (parent directory)</span>
                     </button>
                   )}
                   {currentFolderEntry.value?.folders.map((f) => (
                     <div key={f.path} className="flex items-center justify-between hover:bg-[#f8f9fa] px-1 py-0.5">
                       <button
                         type="button"
-                        className="text-left font-mono text-xs text-[#141b2b] hover:text-[#1d4ed8] flex-1 truncate"
+                        className="text-left font-mono text-xs text-[#141b2b] hover:text-[#1d4ed8] flex-1 truncate flex items-center gap-1.5"
                         onClick={() => openFolderPicker(f.path)}
                       >
-                        📁 {f.name}
+                        <FolderIcon size={14} className="text-[#1d4ed8] shrink-0" />
+                        <span className="truncate">{f.name}</span>
                       </button>
                       <button
                         type="button"
-                        className="px-2 py-0.5 bg-[#1d4ed8] text-white text-[10px] font-medium ml-2 cursor-pointer"
+                        className="h-7 px-2.5 bg-[#1d4ed8] text-white text-[11px] font-medium ml-2 cursor-pointer flex items-center"
                         onClick={() => handleSelectFolder(f.path)}
                       >
                         Select
@@ -293,7 +302,7 @@ export function ProjectsSection(): JSX.Element {
                     </div>
                   ))}
                   {currentFolderEntry.value && currentFolderEntry.value.folders.length === 0 && (
-                    <div className="text-[#747686] text-xs p-1">No child folders found.</div>
+                    <div className="text-[#434655] text-xs p-1">No child folders found.</div>
                   )}
                 </div>
               )}
@@ -301,7 +310,7 @@ export function ProjectsSection(): JSX.Element {
               {currentFolderEntry.value && (
                 <button
                   type="button"
-                  className="h-7 px-3 bg-[#1d4ed8] text-white text-xs font-medium cursor-pointer"
+                  className="h-8 px-3 bg-[#1d4ed8] text-white text-xs font-medium cursor-pointer"
                   onClick={() => handleSelectFolder(currentFolderEntry.value!.path)}
                 >
                   Use this folder ({currentFolderEntry.value.path})
@@ -313,11 +322,12 @@ export function ProjectsSection(): JSX.Element {
           {/* Copy Profiles Option */}
           {projects.length > 0 && (
             <div>
-              <label className="block font-medium text-[#434655] mb-1 text-xs">
+              <label htmlFor="wizard-copy-from" className="block font-medium text-[#434655] mb-1 text-xs">
                 Copy Agent Profiles From Existing Project
               </label>
               <select
-                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+                id="wizard-copy-from"
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] cursor-pointer"
                 value={wizardCopyFrom.value}
                 onChange={(e) => {
                   wizardCopyFrom.value = (e.target as HTMLSelectElement).value;

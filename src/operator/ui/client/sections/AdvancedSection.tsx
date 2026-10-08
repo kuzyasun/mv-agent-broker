@@ -44,14 +44,14 @@ export function AdvancedSection(): JSX.Element {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="h-7 px-3 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] cursor-pointer"
+              className="h-8 px-3 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] cursor-pointer"
               onClick={cancelAdvancedDraft}
             >
               Reset to draft
             </button>
             <button
               type="button"
-              className="h-7 px-3 bg-[#1d4ed8] text-white text-xs font-medium hover:bg-[#1e40af] flex items-center gap-1.5 cursor-pointer"
+              className="h-8 px-3 bg-[#1d4ed8] text-white text-xs font-medium hover:bg-[#1e40af] flex items-center gap-1.5 cursor-pointer"
               onClick={applyAdvancedDraft}
             >
               <CheckIcon size={14} />
@@ -69,12 +69,13 @@ export function AdvancedSection(): JSX.Element {
         <div className="space-y-4 text-xs">
           {/* State Directory */}
           <div>
-            <label className="block font-medium text-[#434655] mb-1">
+            <label htmlFor="adv-state-dir" className="block font-medium text-[#434655] mb-1">
               Broker State Directory (state_dir)
             </label>
             <input
+              id="adv-state-dir"
               type="text"
-              className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+              className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8]"
               value={draft.stateDir}
               onInput={(e) => updateField("stateDir", (e.target as HTMLInputElement).value)}
             />
@@ -82,11 +83,12 @@ export function AdvancedSection(): JSX.Element {
 
           {/* Accounts JSON */}
           <div>
-            <label className="block font-medium text-[#434655] mb-1">
+            <label htmlFor="adv-accounts-json" className="block font-medium text-[#434655] mb-1">
               Accounts JSON (accounts)
             </label>
             <textarea
-              className="w-full h-36 p-2 font-mono text-[11px] bg-[#f8f9fa] border border-[#c4c5d7] text-[#141b2b] focus:border-[#1d4ed8] outline-none"
+              id="adv-accounts-json"
+              className="w-full h-36 p-2 font-mono text-[11px] bg-[#f8f9fa] border border-[#c4c5d7] text-[#141b2b] focus:border-[#1d4ed8]"
               value={draft.accountsJson}
               onInput={(e) =>
                 updateField("accountsJson", (e.target as HTMLTextAreaElement).value)
@@ -96,11 +98,12 @@ export function AdvancedSection(): JSX.Element {
 
           {/* Native Binary Pins JSON */}
           <div>
-            <label className="block font-medium text-[#434655] mb-1">
+            <label htmlFor="adv-pins-json" className="block font-medium text-[#434655] mb-1">
               Native Binary Pins JSON (native_binary_pins)
             </label>
             <textarea
-              className="w-full h-32 p-2 font-mono text-[11px] bg-[#f8f9fa] border border-[#c4c5d7] text-[#141b2b] focus:border-[#1d4ed8] outline-none"
+              id="adv-pins-json"
+              className="w-full h-32 p-2 font-mono text-[11px] bg-[#f8f9fa] border border-[#c4c5d7] text-[#141b2b] focus:border-[#1d4ed8]"
               value={draft.pinsJson}
               onInput={(e) => updateField("pinsJson", (e.target as HTMLTextAreaElement).value)}
             />
@@ -108,11 +111,12 @@ export function AdvancedSection(): JSX.Element {
 
           {/* Coverage Profiles JSON */}
           <div>
-            <label className="block font-medium text-[#434655] mb-1">
+            <label htmlFor="adv-coverage-json" className="block font-medium text-[#434655] mb-1">
               Coverage Profiles JSON (coverage_profiles)
             </label>
             <textarea
-              className="w-full h-36 p-2 font-mono text-[11px] bg-[#f8f9fa] border border-[#c4c5d7] text-[#141b2b] focus:border-[#1d4ed8] outline-none"
+              id="adv-coverage-json"
+              className="w-full h-36 p-2 font-mono text-[11px] bg-[#f8f9fa] border border-[#c4c5d7] text-[#141b2b] focus:border-[#1d4ed8]"
               value={draft.coverageJson}
               onInput={(e) =>
                 updateField("coverageJson", (e.target as HTMLTextAreaElement).value)

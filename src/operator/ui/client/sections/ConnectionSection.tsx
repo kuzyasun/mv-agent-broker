@@ -46,10 +46,12 @@ export function ConnectionSection(): JSX.Element {
           {/* MCP JSON Snippet */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="font-semibold text-[#434655]">MCP JSON (Claude / Cursor / IDE)</label>
+              <label htmlFor="conn-mcp-json" className="font-semibold text-[#434655]">
+                MCP JSON (Claude / Cursor / IDE)
+              </label>
               <button
                 type="button"
-                className="h-6 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1 cursor-pointer"
+                className="h-7 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1 cursor-pointer"
                 onClick={() => copyToClipboard(snippets?.json ?? "", true)}
               >
                 <CopyIcon size={12} />
@@ -57,8 +59,9 @@ export function ConnectionSection(): JSX.Element {
               </button>
             </div>
             <textarea
+              id="conn-mcp-json"
               readOnly
-              className="w-full h-40 p-2 font-mono text-[11px] bg-[#f1f3f5] border border-[#c4c5d7] text-[#141b2b] outline-none select-all"
+              className="w-full h-40 p-2 font-mono text-[11px] bg-[#f1f3f5] border border-[#c4c5d7] text-[#141b2b] select-all"
               value={snippets?.json ?? "{}"}
             />
           </div>
@@ -66,10 +69,12 @@ export function ConnectionSection(): JSX.Element {
           {/* Codex TOML Snippet */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="font-semibold text-[#434655]">Codex TOML (codex config)</label>
+              <label htmlFor="conn-codex-toml" className="font-semibold text-[#434655]">
+                Codex TOML (codex config)
+              </label>
               <button
                 type="button"
-                className="h-6 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1 cursor-pointer"
+                className="h-7 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1 cursor-pointer"
                 onClick={() => copyToClipboard(snippets?.toml ?? "", false)}
               >
                 <CopyIcon size={12} />
@@ -77,8 +82,9 @@ export function ConnectionSection(): JSX.Element {
               </button>
             </div>
             <textarea
+              id="conn-codex-toml"
               readOnly
-              className="w-full h-36 p-2 font-mono text-[11px] bg-[#f1f3f5] border border-[#c4c5d7] text-[#141b2b] outline-none select-all"
+              className="w-full h-36 p-2 font-mono text-[11px] bg-[#f1f3f5] border border-[#c4c5d7] text-[#141b2b] select-all"
               value={snippets?.toml ?? ""}
             />
           </div>

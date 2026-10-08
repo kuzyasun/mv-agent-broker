@@ -102,9 +102,12 @@ export function StorageSection(): JSX.Element {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
           <div>
-            <label className="block font-medium text-[#434655] mb-1">Project</label>
+            <label htmlFor="storage-project-select" className="block font-medium text-[#434655] mb-1">
+              Project
+            </label>
             <select
-              className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+              id="storage-project-select"
+              className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] cursor-pointer"
               value={selectedProject.value}
               onChange={(e) => {
                 selectedProject.value = (e.target as HTMLSelectElement).value;
@@ -120,14 +123,15 @@ export function StorageSection(): JSX.Element {
           </div>
 
           <div>
-            <label className="block font-medium text-[#434655] mb-1">
+            <label htmlFor="storage-retention-days" className="block font-medium text-[#434655] mb-1">
               Retention Days (keep newer than)
             </label>
             <input
+              id="storage-retention-days"
               type="number"
               min="0"
               max="3650"
-              className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+              className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8]"
               placeholder="30"
               value={retentionDays.value}
               onInput={(e) => {
@@ -158,27 +162,27 @@ export function StorageSection(): JSX.Element {
 
             <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
               <div>
-                <span className="text-[#747686]">Eligible artifacts: </span>
+                <span className="text-[#434655]">Eligible artifacts: </span>
                 <span className="font-semibold text-[#dc2626]">
                   {preview.value.eligible_artifact_count}
                 </span>
               </div>
               <div>
-                <span className="text-[#747686]">Protected artifacts: </span>
+                <span className="text-[#434655]">Protected artifacts: </span>
                 <span className="font-semibold text-[#059669]">
                   {preview.value.protected_artifact_count}
                 </span>
               </div>
               <div>
-                <span className="text-[#747686]">Registered blobs: </span>
+                <span className="text-[#434655]">Registered blobs: </span>
                 <span>{preview.value.registered_blob_count}</span>
               </div>
               <div>
-                <span className="text-[#747686]">Blob bytes: </span>
+                <span className="text-[#434655]">Blob bytes: </span>
                 <span>{formatBytes(preview.value.registered_blob_bytes)}</span>
               </div>
               <div>
-                <span className="text-[#747686]">Retained recent: </span>
+                <span className="text-[#434655]">Retained recent: </span>
                 <span>{preview.value.retained_recent_count}</span>
               </div>
             </div>
@@ -186,7 +190,7 @@ export function StorageSection(): JSX.Element {
             <div className="pt-2">
               <button
                 type="button"
-                className="h-8 px-4 bg-[#dc2626] text-white text-xs font-medium hover:bg-[#b91c1c] cursor-pointer"
+                className="h-8 px-4 bg-[#fef2f2] text-[#dc2626] border border-[#dc2626] text-xs font-medium hover:bg-[#dc2626] hover:text-white cursor-pointer"
                 disabled={isExecuting.value}
                 onClick={handleExecute}
               >

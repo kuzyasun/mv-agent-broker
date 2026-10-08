@@ -30,57 +30,60 @@ export function LimitsSection(): JSX.Element {
         <div className="space-y-4 text-xs">
           {/* Global Unfinished Turns */}
           <div>
-            <label className="block font-medium text-[#434655] mb-1">
+            <label htmlFor="limit-global-unfinished" className="block font-medium text-[#434655] mb-1">
               Global Max Unfinished Turns
             </label>
             <input
+              id="limit-global-unfinished"
               type="number"
               min="1"
               max="64"
-              className="w-full max-w-xs h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+              className="w-full max-w-xs h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8]"
               value={limits.globalUnfinishedTurns ?? 3}
               onInput={(e) => {
                 const val = parseInt((e.target as HTMLInputElement).value, 10);
                 if (!isNaN(val) && val > 0) updateLimit("globalUnfinishedTurns", val);
               }}
             />
-            <p className="text-[11px] text-[#747686] mt-1">
+            <p className="text-[11px] text-[#434655] mt-1">
               Maximum unfinished broker turns running concurrently across all projects.
             </p>
           </div>
 
           {/* Quota Scope Unfinished Turns */}
           <div>
-            <label className="block font-medium text-[#434655] mb-1">
+            <label htmlFor="limit-quota-unfinished" className="block font-medium text-[#434655] mb-1">
               Quota Scope Max Unfinished Turns
             </label>
             <input
+              id="limit-quota-unfinished"
               type="number"
               min="1"
               max="16"
-              className="w-full max-w-xs h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+              className="w-full max-w-xs h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8]"
               value={limits.quotaScopeUnfinishedTurns ?? 1}
               onInput={(e) => {
                 const val = parseInt((e.target as HTMLInputElement).value, 10);
                 if (!isNaN(val) && val > 0) updateLimit("quotaScopeUnfinishedTurns", val);
               }}
             />
-            <p className="text-[11px] text-[#747686] mt-1">
+            <p className="text-[11px] text-[#434655] mt-1">
               Concurrency throttle per quota scope (provider / account group) to prevent rate limit saturation.
             </p>
           </div>
 
           {/* Hard Turn Deadline */}
           <div>
-            <label className="block font-medium text-[#434655] mb-1">
+            <label htmlFor="limit-turn-deadline" className="block font-medium text-[#434655] mb-1">
               Hard Turn Deadline (Minutes)
             </label>
             <div className="flex items-center gap-2">
               <input
+                id="limit-turn-deadline"
                 type="number"
                 min="1"
                 max="1440"
-                className="w-full max-w-xs h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+                className="w-full max-w-xs h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8]"
                 value={deadlineMinutes}
                 onInput={(e) => {
                   const mins = parseInt((e.target as HTMLInputElement).value, 10);
@@ -89,26 +92,27 @@ export function LimitsSection(): JSX.Element {
                   }
                 }}
               />
-              <span className="text-[#747686] text-xs font-mono">
+              <span className="text-[#434655] text-xs font-mono">
                 ({deadlineMs} ms)
               </span>
             </div>
-            <p className="text-[11px] text-[#747686] mt-1">
+            <p className="text-[11px] text-[#434655] mt-1">
               Individual agent turn hard execution deadline before cancellation and timeout enforcement.
             </p>
           </div>
 
           {/* Max Review Diff Bytes */}
           <div>
-            <label className="block font-medium text-[#434655] mb-1">
+            <label htmlFor="limit-review-diff" className="block font-medium text-[#434655] mb-1">
               Max Review Diff Budget (Bytes)
             </label>
             <div className="flex items-center gap-2">
               <input
+                id="limit-review-diff"
                 type="number"
                 min="1048576"
                 step="1048576"
-                className="w-full max-w-xs h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+                className="w-full max-w-xs h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8]"
                 value={limits.maxReviewDiffBytes ?? 33554432}
                 onInput={(e) => {
                   const bytes = parseInt((e.target as HTMLInputElement).value, 10);
@@ -117,7 +121,7 @@ export function LimitsSection(): JSX.Element {
                   }
                 }}
               />
-              <span className="text-[#747686] text-xs font-mono">
+              <span className="text-[#434655] text-xs font-mono">
                 (~{Math.round((limits.maxReviewDiffBytes ?? 33554432) / (1024 * 1024))} MiB)
               </span>
             </div>

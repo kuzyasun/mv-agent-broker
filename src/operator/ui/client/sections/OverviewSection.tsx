@@ -1,3 +1,4 @@
+import { useEffect } from "preact/hooks";
 import type { JSX } from "preact";
 import {
   clearQuotaPauseAction,
@@ -17,6 +18,16 @@ export function OverviewSection(): JSX.Element {
   const status = statusData.value;
   const prefs = displayPreferences.value;
   const errorDetail = selectedTurnError.value;
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && selectedTurnError.value) {
+        closeTurnErrorAction();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const activeTurns = status?.active_turns ?? [];
   const errorTurns = status?.error_turns ?? [];
@@ -39,13 +50,15 @@ export function OverviewSection(): JSX.Element {
                       : "bg-[#fef2f2] border border-[#fecaca] text-[#dc2626]"
                 }`}
               >
-                {status?.readiness || status?.status?.toUpperCase() || "UNKNOWN"}
+                {statusLoading.value && !status
+                  ? "LOADING…"
+                  : status?.readiness || status?.status?.toUpperCase() || "UNKNOWN"}
               </span>
             </div>
 
             <button
               type="button"
-              className="h-7 px-3 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1.5 cursor-pointer"
+              className="h-8 px-3 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1.5 cursor-pointer"
               onClick={() => void refreshStatus()}
               disabled={statusLoading.value}
             >
@@ -54,44 +67,53 @@ export function OverviewSection(): JSX.Element {
             </button>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-            <div className="p-2 bg-[#f8f9fa] border border-[#e5e7eb]">
-              <span className="text-[#747686] block text-[11px]">Daemon PID</span>
-              <span className="font-mono font-semibold text-[#141b2b]">
-                {status?.daemon_pid ?? "None (stopped)"}
-              </span>
+          {statusLoading.value && !status ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs animate-pulse">
+              <div className="h-12 bg-[#e9edff] border border-[#c4c5d7]" />
+              <div className="h-12 bg-[#e9edff] border border-[#c4c5d7]" />
+              <div className="h-12 bg-[#e9edff] border border-[#c4c5d7]" />
+              <div className="h-12 bg-[#e9edff] border border-[#c4c5d7]" />
             </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+              <div className="p-2 bg-[#f8f9fa] border border-[#e5e7eb]">
+                <span className="text-[#434655] block text-[11px]">Daemon PID</span>
+                <span className="font-mono font-semibold text-[#141b2b]">
+                  {status?.daemon_pid ?? "None (stopped)"}
+                </span>
+              </div>
 
-            <div className="p-2 bg-[#f8f9fa] border border-[#e5e7eb]">
-              <span className="text-[#747686] block text-[11px]">Runtime Version</span>
-              <span className="font-mono text-[#141b2b]">
-                {status?.runtime_version ?? "Unknown"}
-              </span>
+              <div className="p-2 bg-[#f8f9fa] border border-[#e5e7eb]">
+                <span className="text-[#434655] block text-[11px]">Runtime Version</span>
+                <span className="font-mono text-[#141b2b]">
+                  {status?.runtime_version ?? "Unknown"}
+                </span>
+              </div>
+
+              <div className="p-2 bg-[#f8f9fa] border border-[#e5e7eb]">
+                <span className="text-[#434655] block text-[11px]">Committed Commit</span>
+                <span className="font-mono text-[#141b2b] truncate block" title={status?.runtime_commit ?? ""}>
+                  {status?.runtime_commit ? status.runtime_commit.slice(0, 10) : "Unknown"}
+                </span>
+              </div>
+
+              <div className="p-2 bg-[#f8f9fa] border border-[#e5e7eb]">
+                <span className="text-[#434655] block text-[11px]">Observation</span>
+                <span className="font-mono text-[#141b2b]">
+                  {status?.runtime_observation ?? "Unknown"}
+                </span>
+              </div>
             </div>
+          )}
 
-            <div className="p-2 bg-[#f8f9fa] border border-[#e5e7eb]">
-              <span className="text-[#747686] block text-[11px]">Committed Commit</span>
-              <span className="font-mono text-[#141b2b] truncate block" title={status?.runtime_commit ?? ""}>
-                {status?.runtime_commit ? status.runtime_commit.slice(0, 10) : "Unknown"}
-              </span>
-            </div>
-
-            <div className="p-2 bg-[#f8f9fa] border border-[#e5e7eb]">
-              <span className="text-[#747686] block text-[11px]">Observation</span>
-              <span className="font-mono text-[#141b2b]">
-                {status?.runtime_observation ?? "Unknown"}
-              </span>
-            </div>
-          </div>
-
-          <div className="text-xs text-[#747686] space-y-1">
+          <div className="text-xs text-[#434655] space-y-1">
             <div>
-              <span className="font-medium text-[#434655]">State Directory: </span>
+              <span className="font-medium text-[#141b2b]">State Directory: </span>
               <span className="font-mono">{status?.state_dir ?? "Unknown"}</span>
             </div>
             {status?.applied_config_fingerprint && (
               <div>
-                <span className="font-medium text-[#434655]">Applied Config Fingerprint: </span>
+                <span className="font-medium text-[#141b2b]">Applied Config Fingerprint: </span>
                 <span className="font-mono">{status.applied_config_fingerprint}</span>
               </div>
             )}
@@ -105,7 +127,7 @@ export function OverviewSection(): JSX.Element {
           </div>
 
           {quotaPauses.length === 0 ? (
-            <div className="p-4 text-xs text-[#747686] font-mono">
+            <div className="p-4 text-xs text-[#434655] font-mono">
               No active quota pauses observed.
             </div>
           ) : (
@@ -116,14 +138,14 @@ export function OverviewSection(): JSX.Element {
                     <div className="font-semibold text-[#d97706]">
                       {pause.provider} ({pause.quota_scope_id})
                     </div>
-                    <div className="text-[11px] text-[#747686]">
+                    <div className="text-[11px] text-[#434655]">
                       Retry after: {formatTimestamp(pause.retry_after, prefs)}
                       {pause.detail && ` — ${pause.detail}`}
                     </div>
                   </div>
                   <button
                     type="button"
-                    className="h-6 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] cursor-pointer"
+                    className="h-7 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] cursor-pointer"
                     onClick={() => void clearQuotaPauseAction(pause.provider, pause.quota_scope_id)}
                   >
                     Clear pause
@@ -141,7 +163,7 @@ export function OverviewSection(): JSX.Element {
           </div>
 
           {activeTurns.length === 0 ? (
-            <div className="p-4 text-xs text-[#747686] font-mono">
+            <div className="p-4 text-xs text-[#434655] font-mono">
               No active turns running currently.
             </div>
           ) : (
@@ -150,7 +172,7 @@ export function OverviewSection(): JSX.Element {
                 <div key={turn.turn_id} className="p-3 flex items-center justify-between gap-3 text-xs">
                   <div className="space-y-0.5">
                     <div className="font-mono font-semibold text-[#141b2b]">{turn.turn_id}</div>
-                    <div className="text-[11px] text-[#747686]">
+                    <div className="text-[11px] text-[#434655]">
                       Started: {formatTimestamp(turn.started_at, prefs)}
                       {turn.model && ` | Model: ${turn.model}`}
                       {turn.role && ` | Role: ${turn.role}`}
@@ -172,7 +194,7 @@ export function OverviewSection(): JSX.Element {
           </div>
 
           {errorTurns.length === 0 ? (
-            <div className="p-4 text-xs text-[#747686] font-mono">
+            <div className="p-4 text-xs text-[#434655] font-mono">
               No recent turn errors recorded.
             </div>
           ) : (
@@ -185,7 +207,7 @@ export function OverviewSection(): JSX.Element {
                 >
                   <div className="space-y-0.5">
                     <div className="font-mono font-semibold text-[#dc2626]">{turn.turn_id}</div>
-                    <div className="text-[11px] text-[#747686]">
+                    <div className="text-[11px] text-[#434655]">
                       Failed: {formatTimestamp(turn.failed_at, prefs)}
                       {turn.error_code && ` | Code: ${turn.error_code}`}
                     </div>
@@ -195,7 +217,7 @@ export function OverviewSection(): JSX.Element {
                   </div>
                   <button
                     type="button"
-                    className="h-6 px-2 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] cursor-pointer"
+                    className="h-7 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] cursor-pointer"
                   >
                     Inspect
                   </button>
@@ -208,14 +230,14 @@ export function OverviewSection(): JSX.Element {
 
       {/* Turn Error Inspector Drawer */}
       {errorDetail && (
-        <aside className="w-[450px] bg-white border-l border-[#c4c5d7] flex flex-col shrink-0 z-20 shadow-[-2px_0_4px_rgba(0,0,0,0.03)]">
+        <aside className="w-[450px] bg-white border-l border-[#c4c5d7] flex flex-col shrink-0 z-20 shadow-none">
           <div className="h-10 px-3 bg-[#f1f3ff] border-b border-[#c4c5d7] flex items-center justify-between">
             <span className="text-xs font-semibold text-[#dc2626]">
               Turn Error: {errorDetail.turn_id}
             </span>
             <button
               type="button"
-              className="p-1 text-[#747686] hover:text-[#141b2b] cursor-pointer"
+              className="p-1 text-[#434655] hover:text-[#141b2b] cursor-pointer"
               onClick={closeTurnErrorAction}
             >
               <XIcon size={16} />
@@ -224,7 +246,7 @@ export function OverviewSection(): JSX.Element {
 
           <div className="flex-1 p-3 overflow-y-auto">
             {turnErrorLoading.value ? (
-              <div className="text-xs text-[#747686]">Loading turn error diagnostics…</div>
+              <div className="text-xs text-[#434655]">Loading turn error diagnostics…</div>
             ) : (
               <pre className="font-mono text-[11px] bg-[#f1f3f5] p-3 border border-[#e5e7eb] overflow-x-auto whitespace-pre-wrap text-[#141b2b]">
                 {JSON.stringify(errorDetail, null, 2)}

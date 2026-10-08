@@ -104,9 +104,9 @@ describe("operator UI Preact components", () => {
 
   it("renders Agent Pools with Workers, Reviewers, and Researchers pools", () => {
     const { getByText } = render(<PoolsSection />);
-    expect(getByText("Workers")).toBeTruthy();
-    expect(getByText("Reviewers")).toBeTruthy();
-    expect(getByText("Researchers")).toBeTruthy();
+    expect(getByText("Workers Pool")).toBeTruthy();
+    expect(getByText("Reviewers Pool")).toBeTruthy();
+    expect(getByText("Researchers Pool")).toBeTruthy();
     expect(getByText("Economical Worker")).toBeTruthy();
     expect(getByText("Independent Reviewer")).toBeTruthy();
   });

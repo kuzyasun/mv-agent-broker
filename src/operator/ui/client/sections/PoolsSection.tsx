@@ -1,3 +1,4 @@
+import { useEffect } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import type { JSX } from "preact";
 import {
@@ -100,20 +101,85 @@ export function PoolsSection(): JSX.Element {
     }
   };
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && routeDraft.value) {
+        if (isRouteDraftDirty.value) {
+          const proceed = window.confirm(
+            "You have unapplied profile edits. Discard them and close?",
+          );
+          if (!proceed) return;
+        }
+        cancelRouteDraft();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const handleSafeCancel = () => {
+    if (isRouteDraftDirty.value) {
+      const proceed = window.confirm(
+        "You have unapplied profile edits. Discard them and close?",
+      );
+      if (!proceed) return;
+    }
+    cancelRouteDraft();
+  };
+
   return (
     <div className="flex-1 flex overflow-hidden">
       {/* Middle Inventory Area */}
       <div className="flex-1 flex flex-col min-w-0 bg-[#f8f9fa] overflow-y-auto">
+        {/* Top Header Summary */}
+        <div className="bg-white border-b border-[#c4c5d7] p-4 space-y-3.5 shrink-0">
+          <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-3">
+                <h1 className="text-[20px] font-semibold text-[#141b2b] tracking-tight">
+                  Agent Pools
+                </h1>
+                <span className="text-[11px] font-mono px-2 py-0.5 bg-[#e9edff] text-[#434655] border border-[#c4c5d7] font-medium uppercase tracking-wider">
+                  {routes.length} Pools Registered
+                </span>
+              </div>
+              <p className="text-[12px] text-[#434655] mt-1.5 max-w-2xl leading-normal">
+                Configured agent execution profiles. Profiles are selected by coordinator by role, task, and tags. Multiple workers run concurrently subject to broker limits.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                className="h-8 px-3 bg-white border border-[#c4c5d7] text-[#141b2b] text-xs font-medium hover:bg-[#e9edff] flex items-center gap-1.5 cursor-pointer"
+                onClick={() => handleRefreshCatalog(routes[0]?.provider || "cursor")}
+                disabled={catalogRefreshing.value}
+              >
+                <RefreshIcon size={14} />
+                <span>Refresh Model Catalogue</span>
+              </button>
+              <button
+                type="button"
+                className="h-8 px-3.5 bg-[#1d4ed8] text-white border border-[#1d4ed8] text-xs font-semibold hover:bg-[#1e40af] flex items-center gap-1.5 cursor-pointer"
+                onClick={() => handleAddProfile("worker")}
+              >
+                <PlusIcon size={14} />
+                <span>+ Add Profile</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Controls Toolbar */}
         <div className="p-3 bg-white border-b border-[#c4c5d7] flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2 flex-1 min-w-[240px] max-w-md">
             <div className="relative w-full">
-              <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-[#747686]">
+              <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-[#434655]">
                 <SearchIcon size={14} />
               </span>
               <input
                 type="text"
-                className="w-full pl-8 pr-3 h-8 bg-white border border-[#c4c5d7] text-xs font-mono text-[#141b2b] placeholder-[#747686] outline-none focus:border-[#1d4ed8]"
+                aria-label="Filter profiles by name, ID or model"
+                className="w-full pl-8 pr-3 h-8 bg-white border border-[#c4c5d7] text-xs font-mono text-[#141b2b] placeholder-[#434655] outline-none focus:border-[#1d4ed8]"
                 placeholder="Filter profiles by name, ID, model..."
                 value={searchQuery.value}
                 onInput={(e) => {
@@ -124,6 +190,7 @@ export function PoolsSection(): JSX.Element {
 
             {/* Tag Filter Dropdown */}
             <select
+              aria-label="Filter profiles by tag"
               className="h-8 px-2 bg-white border border-[#c4c5d7] text-xs text-[#141b2b] outline-none focus:border-[#1d4ed8] cursor-pointer"
               value={tagFilter.value}
               onChange={(e) => {
@@ -197,7 +264,7 @@ export function PoolsSection(): JSX.Element {
       {/* Profile Inspector Drawer / Column */}
       {routeDraft.value && (
         <aside
-          className="w-[420px] bg-white border-l border-[#c4c5d7] flex flex-col shrink-0 z-20 shadow-[-2px_0_4px_rgba(0,0,0,0.03)] overflow-hidden"
+          className="w-full max-w-[450px] md:w-[380px] lg:w-[420px] xl:w-[450px] bg-white border-l border-[#c4c5d7] flex flex-col shrink-0 z-20 shadow-none overflow-hidden"
           aria-label="Profile Inspector"
         >
           {/* Inspector Header */}
@@ -206,14 +273,14 @@ export function PoolsSection(): JSX.Element {
               <span className="text-xs font-semibold uppercase text-[#1d4ed8]">
                 {isNewRoute.value ? "New Profile" : "Edit Profile"}
               </span>
-              <span className="text-xs font-mono text-[#747686] truncate">
+              <span className="text-xs font-mono text-[#434655] truncate">
                 {routeDraft.value.route_id}
               </span>
             </div>
             <button
               type="button"
-              className="p-1 text-[#747686] hover:text-[#141b2b] cursor-pointer"
-              onClick={cancelRouteDraft}
+              className="p-1 text-[#434655] hover:text-[#141b2b] cursor-pointer"
+              onClick={handleSafeCancel}
               title="Close editor"
             >
               <XIcon size={16} />
@@ -224,10 +291,13 @@ export function PoolsSection(): JSX.Element {
           <div className="flex-1 p-3 overflow-y-auto space-y-3 text-xs">
             {/* Route ID */}
             <div>
-              <label className="block font-medium text-[#434655] mb-1">Route ID</label>
+              <label htmlFor="prof-route-id" className="block font-medium text-[#434655] mb-1">
+                Route ID
+              </label>
               <input
+                id="prof-route-id"
                 type="text"
-                className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+                className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8]"
                 value={routeDraft.value.route_id}
                 onInput={(e) =>
                   updateRouteDraftField("route_id", (e.target as HTMLInputElement).value)
@@ -237,10 +307,13 @@ export function PoolsSection(): JSX.Element {
 
             {/* Display Name */}
             <div>
-              <label className="block font-medium text-[#434655] mb-1">Display Name</label>
+              <label htmlFor="prof-display-name" className="block font-medium text-[#434655] mb-1">
+                Display Name
+              </label>
               <input
+                id="prof-display-name"
                 type="text"
-                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs focus:border-[#1d4ed8] outline-none"
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs focus:border-[#1d4ed8]"
                 placeholder="Optional readable profile name"
                 value={routeDraft.value.display_name ?? ""}
                 onInput={(e) =>
@@ -254,9 +327,12 @@ export function PoolsSection(): JSX.Element {
 
             {/* Project */}
             <div>
-              <label className="block font-medium text-[#434655] mb-1">Project</label>
+              <label htmlFor="prof-project-id" className="block font-medium text-[#434655] mb-1">
+                Project
+              </label>
               <select
-                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+                id="prof-project-id"
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] cursor-pointer"
                 value={routeDraft.value.project_id}
                 onChange={(e) =>
                   updateRouteDraftField("project_id", (e.target as HTMLSelectElement).value)
@@ -272,9 +348,12 @@ export function PoolsSection(): JSX.Element {
 
             {/* Role */}
             <div>
-              <label className="block font-medium text-[#434655] mb-1">Role</label>
+              <label htmlFor="prof-role" className="block font-medium text-[#434655] mb-1">
+                Role
+              </label>
               <select
-                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+                id="prof-role"
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] cursor-pointer"
                 value={routeDraft.value.role}
                 onChange={(e) => {
                   const newRole = (e.target as HTMLSelectElement).value as
@@ -299,9 +378,12 @@ export function PoolsSection(): JSX.Element {
 
             {/* Account & Provider */}
             <div>
-              <label className="block font-medium text-[#434655] mb-1">Account & Provider</label>
+              <label htmlFor="prof-account-id" className="block font-medium text-[#434655] mb-1">
+                Account & Provider
+              </label>
               <select
-                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+                id="prof-account-id"
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] cursor-pointer"
                 value={routeDraft.value.account_profile_id}
                 onChange={(e) => {
                   const accId = (e.target as HTMLSelectElement).value;
@@ -337,7 +419,7 @@ export function PoolsSection(): JSX.Element {
                   <span className="text-[#c4c5d7]">|</span>
                   <button
                     type="button"
-                    className="text-[11px] text-[#747686] hover:text-[#141b2b] cursor-pointer"
+                    className="text-[11px] text-[#434655] hover:text-[#141b2b] cursor-pointer"
                     onClick={() => {
                       manualModel.value = !manualModel.value;
                     }}
@@ -350,8 +432,9 @@ export function PoolsSection(): JSX.Element {
               {manualModel.value ? (
                 <div>
                   <input
+                    id="prof-model-manual"
                     type="text"
-                    className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8] outline-none"
+                    className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8]"
                     placeholder="Enter model identifier"
                     value={routeDraft.value.model}
                     onInput={(e) =>
@@ -377,9 +460,12 @@ export function PoolsSection(): JSX.Element {
 
             {/* Policy Profile */}
             <div>
-              <label className="block font-medium text-[#434655] mb-1">Policy Profile</label>
+              <label htmlFor="prof-policy-id" className="block font-medium text-[#434655] mb-1">
+                Policy Profile
+              </label>
               <select
-                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+                id="prof-policy-id"
+                className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white focus:border-[#1d4ed8] cursor-pointer"
                 value={routeDraft.value.policy_profile_id}
                 onChange={(e) =>
                   updateRouteDraftField("policy_profile_id", (e.target as HTMLSelectElement).value)
@@ -401,7 +487,7 @@ export function PoolsSection(): JSX.Element {
                 })}
               </select>
               {isReadOnlyRole(routeDraft.value.role) && (
-                <p className="mt-1 text-[11px] text-[#747686]">
+                <p className="mt-1 text-[11px] text-[#434655]">
                   Reviewers and researchers are restricted to read-only policies.
                 </p>
               )}
@@ -409,12 +495,13 @@ export function PoolsSection(): JSX.Element {
 
             {/* Tags Input */}
             <div>
-              <label className="block font-medium text-[#434655] mb-1">
+              <label htmlFor="prof-tags" className="block font-medium text-[#434655] mb-1">
                 Tags (comma separated)
               </label>
               <input
+                id="prof-tags"
                 type="text"
-                className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8] outline-none"
+                className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs focus:border-[#1d4ed8]"
                 placeholder="default, fast, review..."
                 value={(routeDraft.value.tags ?? []).join(", ")}
                 onInput={(e) => {
@@ -426,7 +513,7 @@ export function PoolsSection(): JSX.Element {
                   updateRouteDraftField("tags", parsed);
                 }}
               />
-              <p className="mt-1 text-[11px] text-[#747686]">
+              <p className="mt-1 text-[11px] text-[#434655]">
                 Multi-agent tag is automatically derived from native delegation mode.
               </p>
             </div>
@@ -436,9 +523,12 @@ export function PoolsSection(): JSX.Element {
               <span className="font-medium text-[#434655]">Native Subagent Delegation</span>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-[11px] text-[#747686] mb-0.5">Mode</label>
+                  <label htmlFor="prof-subagent-mode" className="block text-[11px] text-[#434655] mb-0.5">
+                    Mode
+                  </label>
                   <select
-                    className="w-full h-7 px-1.5 border border-[#c4c5d7] text-xs bg-white outline-none cursor-pointer"
+                    id="prof-subagent-mode"
+                    className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white cursor-pointer"
                     value={routeDraft.value.native_subagents?.mode ?? "off"}
                     onChange={(e) => {
                       const mode = (e.target as HTMLSelectElement).value as
@@ -464,12 +554,15 @@ export function PoolsSection(): JSX.Element {
                 </div>
 
                 <div>
-                  <label className="block text-[11px] text-[#747686] mb-0.5">Max Subagents</label>
+                  <label htmlFor="prof-max-subagents" className="block text-[11px] text-[#434655] mb-0.5">
+                    Max Subagents
+                  </label>
                   <input
+                    id="prof-max-subagents"
                     type="number"
                     min="1"
                     max="10"
-                    className="w-full h-7 px-1.5 border border-[#c4c5d7] text-xs bg-white outline-none disabled:bg-[#f1f3f5] disabled:cursor-not-allowed"
+                    className="w-full h-8 px-2 border border-[#c4c5d7] text-xs bg-white disabled:bg-[#f1f3f5] disabled:cursor-not-allowed"
                     disabled={routeDraft.value.native_subagents?.mode !== "prefer"}
                     value={
                       routeDraft.value.native_subagents &&
@@ -511,21 +604,33 @@ export function PoolsSection(): JSX.Element {
 
           {/* Inspector Footer Actions */}
           <div className="p-3 bg-[#f1f3ff] border-t border-[#c4c5d7] flex items-center justify-between gap-2 shrink-0">
-            <button
-              type="button"
-              className="h-8 px-3 bg-white border border-[#c4c5d7] text-[#141b2b] text-xs font-medium hover:bg-[#e9edff] cursor-pointer"
-              onClick={cancelRouteDraft}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="h-8 px-4 bg-[#1d4ed8] text-white text-xs font-medium hover:bg-[#1e40af] active:bg-[#1e3a8a] cursor-pointer flex items-center gap-1.5"
-              onClick={applyRouteDraft}
-            >
-              <CheckIcon size={14} />
-              <span>Apply to draft</span>
-            </button>
+            <div className="flex items-center gap-1.5 text-[11px] font-mono">
+              {isRouteDraftDirty.value ? (
+                <span className="text-[#d97706] font-medium flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 bg-[#d97706]" />
+                  Unapplied edits in profile
+                </span>
+              ) : (
+                <span className="text-[#434655]">No pending edits</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="h-8 px-3 bg-white border border-[#c4c5d7] text-[#141b2b] text-xs font-medium hover:bg-[#e9edff] cursor-pointer"
+                onClick={handleSafeCancel}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="h-8 px-4 bg-[#1d4ed8] text-white text-xs font-medium hover:bg-[#1e40af] active:bg-[#1e3a8a] cursor-pointer flex items-center gap-1.5"
+                onClick={applyRouteDraft}
+              >
+                <CheckIcon size={14} />
+                <span>Apply to draft</span>
+              </button>
+            </div>
           </div>
         </aside>
       )}
@@ -543,27 +648,41 @@ function PoolCardList(props: {
   onAdd: () => void;
   routes: OperatorRoute[];
 }): JSX.Element {
-  const { title, count, isOpen, onToggle, onAdd, routes } = props;
+  const { title, role, count, isOpen, onToggle, onAdd, routes } = props;
 
   return (
     <div className="border border-[#c4c5d7] bg-white">
       {/* Pool Header */}
-      <div className="h-9 px-3 bg-[#f1f3ff] border-b border-[#c4c5d7] flex items-center justify-between">
-        <button
-          type="button"
-          className="flex items-center gap-2 text-xs font-semibold text-[#141b2b] hover:text-[#1d4ed8] cursor-pointer"
-          onClick={onToggle}
-        >
-          {isOpen ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
-          <span>{title}</span>
-          <span className="text-[11px] font-mono text-[#747686] bg-white px-1.5 py-0.2 border border-[#c4c5d7]">
-            {count} {count === 1 ? "profile" : "profiles"}
+      <div className="h-10 px-3 bg-[#f1f3ff] border-b border-[#c4c5d7] flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            aria-expanded={isOpen}
+            className="flex items-center gap-2 text-xs font-semibold text-[#141b2b] hover:text-[#1d4ed8] cursor-pointer"
+            onClick={onToggle}
+          >
+            {isOpen ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
+            <h2 className="text-[13px] font-semibold text-[#141b2b] tracking-tight m-0 inline">
+              {title} Pool
+            </h2>
+            <span className="text-[11px] font-mono text-[#434655] bg-white px-1.5 py-0.5 border border-[#c4c5d7]">
+              {count} {count === 1 ? "profile" : "profiles"}
+            </span>
+          </button>
+          <span
+            className={`text-[11px] font-mono font-semibold px-2 py-0.5 border ${
+              role === "worker"
+                ? "bg-[#eff6ff] border-[#bfdbfe] text-[#1d4ed8]"
+                : "bg-[#fffbeb] border-[#fde68a] text-[#92400e]"
+            }`}
+          >
+            {role === "worker" ? "WORKSPACE_WRITE" : "READ_ONLY"}
           </span>
-        </button>
+        </div>
 
         <button
           type="button"
-          className="h-6 px-2 bg-white border border-[#c4c5d7] text-[11px] font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1 cursor-pointer"
+          className="h-7 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1 cursor-pointer"
           onClick={onAdd}
         >
           <PlusIcon size={12} />
@@ -575,7 +694,7 @@ function PoolCardList(props: {
       {isOpen && (
         <div className="p-3">
           {routes.length === 0 ? (
-            <div className="py-6 text-center text-xs text-[#747686] font-mono">
+            <div className="py-6 text-center text-xs text-[#434655] font-mono">
               No profiles found in this pool.
             </div>
           ) : (
@@ -596,49 +715,82 @@ function ProfileCard({ route }: { route: OperatorRoute }): JSX.Element {
   const isEditing = editingRouteId.value === route.route_id;
   const isEnabled = route.enabled !== false;
   const tags = effectiveRouteTags(route);
+  const isWorker = route.role === "worker";
 
   return (
     <div
       className={`border p-3 flex flex-col justify-between transition-none ${
         isEditing
-          ? "border-[#1d4ed8] bg-[#eff6ff] shadow-sm"
+          ? "border-l-4 border-l-[#1d4ed8] border-t-[#c4c5d7] border-r-[#c4c5d7] border-b-[#c4c5d7] bg-[#eff6ff]"
           : isEnabled
-            ? "border-[#c4c5d7] bg-white hover:border-[#747686]"
+            ? "border-[#c4c5d7] bg-white hover:border-[#434655]"
             : "border-[#e5e7eb] bg-[#f8f9fa] opacity-75"
       }`}
     >
       <div>
-        {/* Top bar: Provider / Model & Badges */}
-        <div className="flex items-start justify-between gap-2 mb-1.5">
+        {/* Top bar: Name / ID / Badges */}
+        <div className="flex items-start justify-between gap-2 mb-2">
           <div className="min-w-0">
-            <div className="text-[13px] font-semibold text-[#141b2b] truncate" title={route.display_name}>
+            <div
+              className="text-[13px] font-semibold text-[#141b2b] truncate"
+              title={route.display_name}
+            >
               {route.display_name || route.route_id}
             </div>
-            <div className="text-[11px] font-mono text-[#747686] truncate">
+            <div className="text-[11px] font-mono text-[#434655] truncate">
               {route.route_id}
             </div>
           </div>
 
           <div className="flex flex-col items-end gap-1 shrink-0">
+            {isEditing && (
+              <span className="px-1.5 py-0.5 text-[11px] font-mono font-semibold uppercase bg-[#1d4ed8] text-white">
+                Editing
+              </span>
+            )}
             {!isEnabled && (
-              <span className="px-1.5 py-0.5 text-[10px] font-mono uppercase bg-[#fef2f2] border border-[#fecaca] text-[#dc2626]">
+              <span className="px-1.5 py-0.5 text-[11px] font-mono uppercase bg-[#fef2f2] border border-[#fecaca] text-[#dc2626]">
                 Disabled
               </span>
             )}
-            <span className="px-1.5 py-0.5 text-[10px] font-mono bg-[#f1f3ff] border border-[#c4c5d7] text-[#434655]">
+            <span className="px-1.5 py-0.5 text-[11px] font-mono bg-[#f1f3ff] border border-[#c4c5d7] text-[#434655]">
               {route.provider}
             </span>
           </div>
         </div>
 
-        {/* Model and Effort */}
-        <div className="text-xs font-mono text-[#141b2b] bg-[#f8f9fa] border border-[#e5e7eb] px-2 py-1 my-2 flex items-center justify-between">
-          <span className="truncate">{route.model}</span>
-          {route.effort && (
-            <span className="text-[10px] uppercase font-semibold text-[#1d4ed8] ml-1 shrink-0">
-              {route.effort}
+        {/* 4-Column Structured Metadata Matrix */}
+        <div className="grid grid-cols-2 gap-1.5 bg-[#f8f9fa] border border-[#e5e7eb] p-2 text-[11px] font-mono my-2">
+          <div>
+            <span className="text-[#434655] block text-[11px]">Model:</span>
+            <span className="font-semibold text-[#141b2b] truncate block" title={route.model}>
+              {route.model}
             </span>
-          )}
+          </div>
+          <div>
+            <span className="text-[#434655] block text-[11px]">Effort:</span>
+            <span className="text-[#141b2b] uppercase font-semibold">
+              {route.effort || "default"}
+            </span>
+          </div>
+          <div>
+            <span className="text-[#434655] block text-[11px]">Scope:</span>
+            <span
+              className={`font-semibold ${
+                isWorker ? "text-[#1d4ed8]" : "text-[#92400e]"
+              }`}
+            >
+              {isWorker ? "WORKSPACE_WRITE" : "READ_ONLY"}
+            </span>
+          </div>
+          <div>
+            <span className="text-[#434655] block text-[11px]">Subagents:</span>
+            <span className="text-[#141b2b]">
+              {route.native_subagents?.mode === "prefer"
+                ? `prefer (${route.native_subagents.max_agents ?? 2})`
+                : route.native_subagents?.mode ?? "off"}
+            </span>
+          </div>
         </div>
 
         {/* Tags */}
@@ -646,7 +798,7 @@ function ProfileCard({ route }: { route: OperatorRoute }): JSX.Element {
           {tags.map((t) => (
             <span
               key={t}
-              className={`px-1.5 py-0.5 text-[10px] font-mono ${
+              className={`px-1.5 py-0.5 text-[11px] font-mono ${
                 t === "multi-agent"
                   ? "bg-[#dce1ff] text-[#1d4ed8] border border-[#cad3ff]"
                   : "bg-[#f1f3ff] text-[#434655] border border-[#c4c5d7]"
@@ -659,10 +811,10 @@ function ProfileCard({ route }: { route: OperatorRoute }): JSX.Element {
       </div>
 
       {/* Row Actions */}
-      <div className="pt-3 mt-3 border-t border-[#e5e7eb] flex items-center justify-between">
+      <div className="pt-2.5 mt-2.5 border-t border-[#e5e7eb] flex items-center justify-between">
         <button
           type="button"
-          className="text-xs text-[#747686] hover:text-[#141b2b] cursor-pointer"
+          className="text-xs text-[#434655] hover:text-[#141b2b] cursor-pointer"
           onClick={() => toggleRouteEnabledAction(route.route_id)}
           title={isEnabled ? "Disable profile" : "Enable profile"}
         >
@@ -672,7 +824,7 @@ function ProfileCard({ route }: { route: OperatorRoute }): JSX.Element {
         <div className="flex items-center gap-1">
           <button
             type="button"
-            className="p-1 text-[#747686] hover:text-[#1d4ed8] cursor-pointer"
+            className="p-1 text-[#434655] hover:text-[#1d4ed8] cursor-pointer"
             onClick={() => duplicateRouteAction(route)}
             title="Duplicate profile"
           >
@@ -680,7 +832,7 @@ function ProfileCard({ route }: { route: OperatorRoute }): JSX.Element {
           </button>
           <button
             type="button"
-            className="p-1 text-[#747686] hover:text-[#dc2626] cursor-pointer"
+            className="p-1 text-[#434655] hover:text-[#dc2626] cursor-pointer"
             onClick={() => deleteRouteAction(route.route_id)}
             title="Delete profile"
           >
@@ -688,7 +840,7 @@ function ProfileCard({ route }: { route: OperatorRoute }): JSX.Element {
           </button>
           <button
             type="button"
-            className="h-6 px-2 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1 cursor-pointer ml-1"
+            className="h-7 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] flex items-center gap-1 cursor-pointer ml-1"
             onClick={() => startEditRoute(route, false)}
           >
             <EditIcon size={12} />
@@ -724,9 +876,12 @@ function ModelSelector({
   return (
     <div className="space-y-1.5">
       <div>
-        <label className="block text-[11px] text-[#747686] mb-0.5">Model</label>
+        <label htmlFor="prof-model-select" className="block text-[11px] text-[#434655] mb-0.5">
+          Model
+        </label>
         <select
-          className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+          id="prof-model-select"
+          className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8] cursor-pointer"
           value={selectedModel}
           onChange={(e) => {
             const nextModel = (e.target as HTMLSelectElement).value;
@@ -750,9 +905,12 @@ function ModelSelector({
 
       {availableEfforts.length > 1 && (
         <div>
-          <label className="block text-[11px] text-[#747686] mb-0.5">Effort</label>
+          <label htmlFor="prof-effort-select" className="block text-[11px] text-[#434655] mb-0.5">
+            Effort
+          </label>
           <select
-            className="w-full h-7 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8] outline-none cursor-pointer"
+            id="prof-effort-select"
+            className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8] cursor-pointer"
             value={selectedEffort}
             onChange={(e) => onEffortChange((e.target as HTMLSelectElement).value)}
           >

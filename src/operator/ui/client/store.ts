@@ -52,7 +52,14 @@ export const searchQuery = signal<string>("");
 export const savedConfig = signal<OperatorConfig | null>(null);
 export const savedRevision = signal<string>("");
 export const draftConfig = signal<OperatorConfig | null>(null);
-export const connectionSnippets = signal<ConnectionSnippets | null>(null);
+export const connectionSnippets = signal<ConnectionSnippets | null>(
+  typeof window !== "undefined" &&
+    (window as unknown as { __OPERATOR_BOOTSTRAP__?: { snippets?: ConnectionSnippets } })
+      .__OPERATOR_BOOTSTRAP__?.snippets
+    ? (window as unknown as { __OPERATOR_BOOTSTRAP__?: { snippets?: ConnectionSnippets } })
+        .__OPERATOR_BOOTSTRAP__!.snippets!
+    : null,
+);
 export const displayPreferences = signal<HostDisplayPreferences | null>(null);
 
 // Route Profile Inspector state
@@ -177,6 +184,9 @@ export function setSection(section: NavSection): void {
     if (!proceed) return;
     cancelRouteDraft();
     cancelAdvancedDraft();
+  }
+  if (activeSection.value === "advanced" && section !== "advanced" && !isAdvancedDirty.value) {
+    advancedDraft.value = null;
   }
   activeSection.value = section;
   window.location.hash = section;

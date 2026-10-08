@@ -65,6 +65,7 @@ export function NavigationRail(): JSX.Element {
               <button
                 key={item.id}
                 type="button"
+                aria-current={isActive ? "page" : undefined}
                 className={`w-full flex items-center gap-2.5 px-2.5 h-8 text-[13px] whitespace-nowrap text-left transition-none cursor-pointer ${
                   isActive
                     ? "bg-[#d6e0f4] text-[#1d4ed8] font-semibold border-l-[3px] border-[#1d4ed8]"
@@ -74,7 +75,7 @@ export function NavigationRail(): JSX.Element {
               >
                 <IconComponent
                   size={16}
-                  className={isActive ? "text-[#1d4ed8]" : "text-[#747686]"}
+                  className={isActive ? "text-[#1d4ed8]" : "text-[#434655]"}
                 />
                 <span>{item.label}</span>
               </button>
@@ -84,12 +85,27 @@ export function NavigationRail(): JSX.Element {
       </div>
 
       {/* Footer Info */}
-      <div className="p-2.5 border-t border-[#c4c5d7] text-[11px] text-[#747686] font-mono bg-[#f8f9fa]">
-        <div className="truncate" title={statusData.value?.state_dir ?? ""}>
-          STATE: {statusData.value?.state_dir ? "Custom" : "Isolated"}
+      <div className="p-2.5 border-t border-[#c4c5d7] text-[11px] font-mono bg-[#f8f9fa] space-y-1">
+        <div className="flex items-center justify-between text-[#141b2b]">
+          <div className="flex items-center gap-1.5 truncate">
+            <span
+              className={`w-2 h-2 shrink-0 ${
+                statusData.value?.status === "ready" ? "bg-[#059669]" : "bg-[#d97706]"
+              }`}
+            />
+            <span className="font-medium truncate">
+              {statusData.value?.daemon_pid
+                ? `PID ${statusData.value.daemon_pid}: READY`
+                : "Daemon: Stopped"}
+            </span>
+          </div>
+          <span className="text-[#434655]">TCP</span>
         </div>
-        <div className="mt-0.5 text-[10px]">
-          Status: {statusData.value?.status?.toUpperCase() ?? "UNKNOWN"}
+        <div className="flex items-center justify-between text-[#434655]">
+          <span className="truncate">
+            Commit #{statusData.value?.runtime_commit?.slice(0, 7) ?? "local"}
+          </span>
+          <span>{version}</span>
         </div>
       </div>
     </aside>

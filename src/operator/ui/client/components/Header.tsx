@@ -13,6 +13,7 @@ import {
   saveConfiguration,
   selectedProject,
   statusData,
+  statusError,
 } from "../store.ts";
 import { HubIcon, RefreshIcon, RestartIcon, SaveIcon } from "./Icons.tsx";
 
@@ -21,7 +22,21 @@ export function Header(): JSX.Element {
   const status = statusData.value;
 
   let statusBadge: JSX.Element;
-  if (hasUnappliedEditor.value) {
+  if (statusError.value) {
+    statusBadge = (
+      <div className="flex items-center gap-2 px-2.5 h-7 bg-[#fef2f2] border border-[#fecaca] text-[#dc2626] text-xs font-medium whitespace-nowrap">
+        <span className="w-2 h-2 rounded-none bg-[#dc2626] inline-block" />
+        <span>Daemon unreachable</span>
+      </div>
+    );
+  } else if (status?.status === "stopped") {
+    statusBadge = (
+      <div className="flex items-center gap-2 px-2.5 h-7 bg-[#fef2f2] border border-[#fecaca] text-[#dc2626] text-xs font-medium whitespace-nowrap">
+        <span className="w-2 h-2 rounded-none bg-[#dc2626] inline-block" />
+        <span>Daemon stopped</span>
+      </div>
+    );
+  } else if (hasUnappliedEditor.value) {
     statusBadge = (
       <div className="flex items-center gap-2 px-2.5 h-7 bg-[#fffbeb] border border-[#fde68a] text-[#d97706] text-xs font-medium whitespace-nowrap">
         <span className="w-2 h-2 rounded-none bg-[#d97706] inline-block animate-pulse" />
@@ -111,7 +126,7 @@ export function Header(): JSX.Element {
       <div className="flex items-center space-x-2">
         <button
           type="button"
-          className="h-7 px-3 bg-white border border-[#c4c5d7] text-[#141b2b] text-xs font-medium hover:bg-[#e9edff] active:bg-[#e1e8fd] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+          className="h-8 px-3 bg-white border border-[#c4c5d7] text-[#141b2b] text-xs font-medium hover:bg-[#e9edff] active:bg-[#e1e8fd] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
           disabled={isReloading.value || isSaving.value}
           onClick={() => void loadConfiguration()}
           title="Reload configuration from disk"
@@ -122,7 +137,7 @@ export function Header(): JSX.Element {
 
         <button
           type="button"
-          className={`h-7 px-3 border text-xs font-medium flex items-center gap-1.5 whitespace-nowrap transition-none ${
+          className={`h-8 px-3 border text-xs font-medium flex items-center gap-1.5 whitespace-nowrap transition-none ${
             canSave.value
               ? "bg-[#1d4ed8] border-[#1d4ed8] text-white hover:bg-[#1e40af] active:bg-[#1e3a8a] cursor-pointer"
               : "bg-[#f1f3f5] border-[#c4c5d7] text-[#747686] cursor-not-allowed"
@@ -144,7 +159,7 @@ export function Header(): JSX.Element {
         <div className="relative group">
           <button
             type="button"
-            className={`h-7 px-3 border text-xs font-medium flex items-center gap-1.5 whitespace-nowrap transition-none ${
+            className={`h-8 px-3 border text-xs font-medium flex items-center gap-1.5 whitespace-nowrap transition-none ${
               canRestart.value
                 ? "bg-white border-[#c4c5d7] text-[#141b2b] hover:bg-[#e9edff] active:bg-[#e1e8fd] cursor-pointer"
                 : "bg-[#f1f3f5] border-[#c4c5d7] text-[#747686] cursor-not-allowed"
