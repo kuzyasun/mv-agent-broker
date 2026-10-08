@@ -414,7 +414,7 @@ describe("git_review_binding: admission", () => {
     } finally { f.cleanup(); }
   });
 
-  it("rejects wrong role, review-slot and writer bindings for git review", () => {
+  it("explains wrong bindings and accepts corrected dirty Git review in the same session", async () => {
     const f = makeFixture();
     try {
       // A read-only worker session is still not a reviewer.
@@ -440,22 +440,56 @@ describe("git_review_binding: admission", () => {
       const reviewer = f.reviewerReadonlySession();
       const worker = f.spawnWorkerOn("ws-repo");
       const workerStatus = f.h.core.sessionStatus(f.h.seed.coordinatorId, worker.session_id);
-      expect(errorCodeOf(() =>
-        f.h.core.send(f.h.seed.coordinatorId, {
+      const ctx = { coordinatorId: f.h.seed.coordinatorId, core: f.h.core };
+      for (const [session, binding] of [
+        [worker, "workspace_precondition"],
+        [workerReadonly, "workspace_precondition"],
+        [slotReviewer, "review_binding"],
+        [reviewer, "git_review_binding"],
+      ] as const) {
+        const status = await callBridgeTool(ctx, "agent_session_status", { session_id: session.session_id });
+        expect(status).toMatchObject({ required_send_binding: binding });
+      }
+      const wrongBindings = [
+        {
           session_id: reviewer.session_id,
           idempotency_key: "k3",
           task: { goal: "write", acceptance_criteria: [], artifact_refs: [] },
           workspace_precondition: { expected_snapshot_id: workerStatus.initial_snapshot_id! },
-        }),
-      )).toBe("INVALID_REQUEST");
-      expect(errorCodeOf(() =>
-        f.h.core.send(f.h.seed.coordinatorId, {
+        },
+        {
           session_id: reviewer.session_id,
           idempotency_key: "k4",
           task: { goal: "snapshot review", acceptance_criteria: [], artifact_refs: [] },
           review_binding: { baseline_snapshot_id: workerStatus.initial_snapshot_id!, target_snapshot_id: workerStatus.initial_snapshot_id! },
-        }),
-      )).toBe("INVALID_REQUEST");
+        },
+      ];
+      for (const args of wrongBindings) {
+        await expect(callBridgeTool(ctx, "agent_session_send", args)).rejects.toMatchObject({
+          code: "INVALID_REQUEST",
+          executionStarted: false,
+          retryGuidance: "send_git_review_binding_in_same_session",
+          details: { required_send_binding: "git_review_binding", workspace_mode: "current" },
+        });
+      }
+      expect(f.h.db.raw.prepare("SELECT COUNT(*) c FROM turns").get()).toMatchObject({ c: 0 });
+      expect(f.h.core.sessionStatus(f.h.seed.coordinatorId, reviewer.session_id)).toMatchObject({
+        state: "IDLE", active_turn_id: null,
+      });
+      writeFileSync(path.join(f.repo.repoPath, "README.md"), "uncommitted documentation\n", "utf8");
+      const snapshotsBefore = snapshotCount(f.h);
+      const corrected = f.gitReviewSend(reviewer.session_id, "corrected-review", {
+        git_review_binding: {
+          base_commit: f.repo.targetCommit,
+          target_commit: f.repo.targetCommit,
+          include_working_tree: true,
+        },
+      });
+      f.h.adapter.plan(corrected.turn_id, [{ kind: "complete", outcome: "completed" }]);
+      await start(f.h, corrected);
+      await settle(f.h);
+      expect(f.h.core.turnStatus(f.h.seed.coordinatorId, corrected.turn_id).state).toBe("SUCCEEDED");
+      expect(snapshotCount(f.h)).toBe(snapshotsBefore);
     } finally {
       f.cleanup();
     }
@@ -770,13 +804,13 @@ describe("git_review_binding: MCP bridge surface", () => {
       expect(snapshotDef.annotations?.readOnlyHint).toBe(false);
       expect(snapshotDef.annotations?.destructiveHint).toBe(false);
       expect(snapshotDef.description).toMatch(/LOCAL/i);
-      expect(snapshotDef.description).toMatch(/no provider run/i);
+      expect(snapshotDef.description).toMatch(/launches no inference/i);
       expect(sendDef.annotations?.readOnlyHint).toBe(false);
       const gitBindingSchema = (sendDef.inputSchema as { properties: { git_review_binding: { properties: Record<string, unknown>; additionalProperties: boolean } } }).properties.git_review_binding;
-      expect(gitBindingSchema.properties.include_working_tree).toEqual({ type: "boolean" });
+      expect(gitBindingSchema.properties.include_working_tree).toMatchObject({ type: "boolean" });
       expect(gitBindingSchema.additionalProperties).toBe(false);
       const spawnDef = defs.find((d) => d.name === "agent_session_spawn")!;
-      expect(spawnDef.description).toMatch(/launches no provider run/i);
+      expect(spawnDef.description).toMatch(/without provider inference/i);
 
       const ctx = { coordinatorId: f.h.seed.coordinatorId, core: f.h.core };
       const reviewer = f.reviewerReadonlySession();

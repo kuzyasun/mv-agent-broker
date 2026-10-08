@@ -3,6 +3,22 @@
 Use the operator's configured routes; keep task descriptions and final results
 concise. The coordinator owns decomposition, integration and final acceptance.
 
+## MCP run sequence
+
+When starting a delegation, follow this order: call `broker_status` and require
+`daemon_state: READY`; paginate `agents_list` for the exact allowed project
+through its final `next_cursor`; select an enabled configured route authorized
+for the intended role and scope; create a session without inference if no
+compatible session exists, otherwise reuse it; inspect
+`agent_session_status` for `effective_policy` and `required_send_binding`; send
+one task using exactly that binding (this launches inference); consume bounded
+`agent_turn_events` pages from the last numeric cursor until terminal; then read
+`agent_turn_result` once. Route discovery and local snapshots do not launch
+inference. A snapshot reads and stores source locally; a send launches provider
+inference. Subsequent tasks can reuse an idle compatible session with a new
+send key and the appropriate current binding. Do not repeat spawn for event or
+result reads. Do not infer a route, role, write scope or binding from task wording.
+
 1. Call `broker_status` first and require `daemon_state: READY`. Then call
    `agents_list` for the exact selected allowed `project_id`, following every
    `next_cursor` until it is `null`; never choose from a partial page. Choose
@@ -78,11 +94,17 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    subagent smoke evidence exists for Antigravity and Cursor; see
    [native subagent evidence](native-subagents.md). Avoid delegation chains and
    duplicate source investigations.
-4. Send the task with its workspace precondition. `task.artifact_refs` lists only
-   required broker artifact IDs (`art-...`), such as retained findings or reports;
-   use `[]` when there are none. A snapshot ID (`snap-...`) belongs in
-   `workspace_precondition.expected_snapshot_id` or the snapshot `review_binding`,
-   never in `artifact_refs`. A project file path belongs in `relevant_paths`.
+4. Send with exactly the binding returned by `required_send_binding` in session
+   status/list; the API accepts one binding only. Every non-reviewer worker
+   requires `workspace_precondition`, including a worker spawned for a read-only
+   audit. A reviewer in `review_slot` requires `review_binding`; a reviewer in a
+   registered Git `current` or `worktree` requires `git_review_binding` and no
+   snapshot. Never infer the binding from the task text. `task.artifact_refs`
+   lists only required broker artifact IDs (`art-...`), such as retained findings
+   or reports; use `[]` when there are none. A snapshot ID (`snap-...`) belongs
+   only in `workspace_precondition.expected_snapshot_id` or snapshot
+   `review_binding`, never in `artifact_refs`. A project file path belongs in
+   `relevant_paths`.
    Read event deltas with the last
    consumed numeric cursor and `wait_ms: 10000` (or `20000` for a longer bounded
    wait), advancing the cursor from returned rows. Check status as needed; once
@@ -90,6 +112,55 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    A successful turn proves execution, while its reported checks and quality
    remain claims. Inspect the actual changes and run the smallest relevant
    acceptance check; broaden checks for a concrete integration risk.
+
+   Worker task send (including an audit after its spawn-time policy was
+   confirmed read-only):
+
+   ```json
+   {
+     "session_id": "<worker session ID>",
+     "idempotency_key": "<unique send key>",
+     "task": {
+       "goal": "<bounded goal>",
+       "acceptance_criteria": ["<observable acceptance condition>"],
+       "relevant_paths": ["src/example.ts"],
+       "context": "<constraints and sources>",
+       "artifact_refs": [],
+       "checks": ["<small relevant check>"]
+     },
+     "workspace_precondition": {"expected_snapshot_id": "<snap ID>"}
+   }
+   ```
+
+   Dirty Git review send (the reviewer reads the checkout directly; no snapshot
+   is needed. For a purely uncommitted review, use current `HEAD` for both IDs):
+
+   ```json
+   {
+     "session_id": "<Git reviewer session ID>",
+     "idempotency_key": "<unique review key>",
+     "task": {
+       "goal": "Review the staged, unstaged and nonignored untracked changes.",
+       "acceptance_criteria": ["Report actionable findings with file and line."],
+       "relevant_paths": ["src/example.ts"],
+       "context": "Review for correctness and regressions.",
+       "artifact_refs": [],
+       "checks": []
+     },
+     "git_review_binding": {
+       "base_commit": "<full current HEAD object ID>",
+       "target_commit": "<same full current HEAD object ID>",
+       "include_working_tree": true
+     }
+   }
+   ```
+
+   If a submitted operation returns an unknown outcome, inspect the same
+   session/turn and original idempotency key before retrying; repeat only with
+   unchanged arguments. Never create a replacement session or send a duplicate
+   paid turn while execution remains unknown.
+   Use `agent_turn_cancel` to stop an active turn; use `agent_session_stop` only
+   to close an idle or blocked session when it should accept no more turns.
 5. For substantive Git changes, use a separate reviewer profile in the same
    registered physical checkout (`current` or `worktree`). Pause all edits until
    the review finishes; the broker takes an exclusive checkout lease for its

@@ -403,18 +403,34 @@ describe("agent_session_spawn additive worktree workspace fields (§8.3)", () =>
   it("advertises the additive properties in the spawn tool schema (closed object)", () => {
     const def = bridgeToolDefs().find((d) => d.name === "agent_session_spawn")!;
     const workspace = (def.inputSchema as {
-      properties: { workspace: { properties: Record<string, { type: string }>; additionalProperties: boolean } };
+      properties: { workspace: { properties: Record<string, { type: string; description?: string }>; additionalProperties: boolean } };
     }).properties.workspace;
-    expect(workspace.properties.repository_workspace_id).toEqual({ type: "string" });
-    expect(workspace.properties.base_commit).toEqual({ type: "string" });
+    expect(workspace.properties.repository_workspace_id).toMatchObject({
+      type: "string",
+      description: expect.stringContaining("Registered source repository"),
+    });
+    expect(workspace.properties.base_commit).toMatchObject({
+      type: "string",
+      description: expect.stringContaining("Full hexadecimal Git commit ID"),
+    });
+    expect(workspace.properties.workspace_id.description).toContain("Registered physical workspace ID");
     expect(workspace.additionalProperties).toBe(false);
+
+    const send = bridgeToolDefs().find((d) => d.name === "agent_session_send")!.inputSchema as {
+      properties: Record<string, { properties: Record<string, { type: string; description?: string }> }>;
+    };
+    expect(send.properties.git_review_binding.properties.base_commit.description).toContain("Full hexadecimal Git base commit");
+    expect(send.properties.git_review_binding.properties.target_commit.description).toContain("checkout HEAD must match");
+    expect(send.properties.git_review_binding.properties.include_working_tree.description).toContain("staged, unstaged and nonignored untracked");
+    expect(send.properties.workspace_precondition.properties.expected_snapshot_id.description).toContain("snap-");
+    expect(send.properties.review_binding.properties.target_snapshot_id.description).toContain("snap-");
   });
 
   it("describes explicit policy restrictions and status reports the durable effective policy", async () => {
     const h = createHarness();
     try {
       const spawnDef = bridgeToolDefs().find((d) => d.name === "agent_session_spawn")!;
-      expect(spawnDef.description).toContain("Task instructions such as 'read-only' do not set session policy");
+      expect(spawnDef.description).toContain("Task wording, including 'read-only', does not set session policy");
       expect(spawnDef.description).toContain("policy_restrictions.access='read_only'");
       expect(spawnDef.description).toContain("policy_restrictions.write_scope");
       expect(spawnDef.description).toContain("agent_session_status.effective_policy");
@@ -457,6 +473,30 @@ describe("agent_session_spawn additive worktree workspace fields (§8.3)", () =>
         "agent_session_status",
         { session_id: writer.session_id },
       )).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("reports the contract-required send binding in session status and list metadata", async () => {
+    const h = createHarness();
+    try {
+      const session = await h.spawnWorkerSession({ policy_restrictions: { access: "read_only" } });
+      const ctx = { coordinatorId: h.seed.coordinatorId, core: h.core };
+      const status = await callBridgeTool(ctx, "agent_session_status", { session_id: session.session_id }) as Record<string, unknown>;
+      expect(status.required_send_binding).toBe("workspace_precondition");
+      expect(status.effective_policy).toEqual({ access: "read_only", write_scope: [] });
+
+      const page = await callBridgeTool(ctx, "agent_sessions_list", { project_id: h.seed.projectId }) as {
+        sessions: Array<Record<string, unknown>>;
+        next_cursor: string | null;
+      };
+      expect(page.next_cursor).toBeNull();
+      expect(page.sessions.find((item) => item.session_id === session.session_id)).toMatchObject({
+        required_send_binding: "workspace_precondition",
+        role: "worker",
+        workspace_mode: "current",
+      });
     } finally {
       h.cleanup();
     }

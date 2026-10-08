@@ -2507,6 +2507,25 @@ export class BrokerCore {
     // the digest precondition. A Git review binding belongs to read-only
     // reviewer sessions on a registered physical checkout only; a Git
     // reviewer session accepts nothing else (it has no snapshot baseline).
+    if (requiredSendBinding(session) === "git_review_binding" && !("git_review_binding" in req)) {
+      throw new BrokerError(
+        "INVALID_REQUEST",
+        "This reviewer session uses Git in its current/worktree checkout. Send git_review_binding with full base_commit and target_commit IDs. For uncommitted changes, set both IDs to the current HEAD and include_working_tree=true. Omit workspace_precondition and review_binding; no snapshot or replacement session is needed.",
+        {
+          executionStarted: false,
+          retryGuidance: "send_git_review_binding_in_same_session",
+          details: {
+            required_send_binding: "git_review_binding",
+            workspace_mode: session.workspace_mode,
+            uncommitted_changes: {
+              base_commit: "<full current HEAD>",
+              target_commit: "<full current HEAD>",
+              include_working_tree: true,
+            },
+          },
+        },
+      );
+    }
     if ("review_binding" in req && session.workspace_mode !== "review_slot") {
       throw new BrokerError("INVALID_REQUEST", "review_binding requires a review_slot session (§8.1).");
     }
@@ -2517,12 +2536,6 @@ export class BrokerCore {
           "git_review_binding requires a reviewer session in current/worktree physical mode with a registered workspace.",
         );
       }
-    }
-    if ("workspace_precondition" in req && session.role === "reviewer" && session.workspace_mode !== "review_slot") {
-      throw new BrokerError(
-        "INVALID_REQUEST",
-        "A Git reviewer session accepts only git_review_binding turns.",
-      );
     }
     if ("workspace_precondition" in req && session.workspace_mode !== "review_slot") {
       // Writer sessions need a coverage binding to make the precondition
@@ -3565,6 +3578,14 @@ export class BrokerCore {
 }
 
 // ─── small module-local helpers (kept out of class for testability) ─────────
+
+/** Request contract follows the durable session kind, never the task wording. */
+export function requiredSendBinding(
+  session: Pick<SessionRecord, "role" | "workspace_mode">,
+): "workspace_precondition" | "review_binding" | "git_review_binding" {
+  if (session.workspace_mode === "review_slot") return "review_binding";
+  return session.role === "reviewer" ? "git_review_binding" : "workspace_precondition";
+}
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;

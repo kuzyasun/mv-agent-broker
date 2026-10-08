@@ -5,7 +5,7 @@
  * one BrokerCore call, validates its arguments (additionalProperties=false)
  * and shapes the response DTO. Business decisions never live here.
  */
-import type { BrokerCore } from "../core/broker.ts";
+import { requiredSendBinding, type BrokerCore } from "../core/broker.ts";
 import { BrokerError } from "../shared/errors.ts";
 import type { McpToolDef } from "./server.ts";
 import type { SessionRecord, TurnRecord } from "../shared/api-types.ts";
@@ -72,12 +72,12 @@ export function bridgeToolDefs(): McpToolDef[] {
   return [
     {
       name: "broker_status",
-      description: "Daemon readiness, API version, resource summary and the project IDs this bridge may access (§10.1.2). No credentials.",
+      description: "Check broker and bridge readiness first. Require daemon_state=READY before discovery or work; returns API/resource state and allowed project IDs, without credentials (§10.1.2).",
       inputSchema: { type: "object", properties: { limit: int(1, 100) }, additionalProperties: false },
     },
     {
       name: "agents_list",
-      description: "Project bootstrap discovery: adapters, account/workspace/policy IDs, coverage bindings, configuration revision (§10.1.2).",
+      description: "Discover configured adapters, routes, accounts, workspaces, policies and coverage for one allowed project. Follow every next_cursor before choosing an exact enabled route; route presence does not prove inference readiness or quota (§10.1.2).",
       inputSchema: {
         type: "object",
         properties: { project_id: str, cursor: str, limit: int(1, 100) },
@@ -87,7 +87,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_spawn",
-      description: "Create a durable logical session (PROVISIONING→IDLE) without inference — launches no provider run (§6.1). Idempotent. For a configured route, supply project_id, idempotency_key, route_id, instructions and workspace; do not call with {} to inspect the schema. Task instructions such as 'read-only' do not set session policy. Use policy_restrictions.access='read_only' for an audit. Narrow policy_restrictions.write_scope only when the operator explicitly requests it; task paths never imply a file allowlist. A workspace_write profile without an explicit scope grants the whole project. After spawn, check agent_session_status.effective_policy to confirm the durable binding. mode=worktree with repository_workspace_id+base_commit requests a broker-created detached Git worktree (§8.3). role=reviewer with a registered current/worktree workspace is a Git-native read-only reviewer; role=reviewer with review_slot is the explicit snapshot-review alternative.",
+      description: "Create an idempotent durable session without provider inference. After READY and complete project route discovery, spawn with the exact configured route, project, workspace and unique key; use policy_restrictions.access='read_only' for a read-only worker audit. Then inspect agent_session_status.effective_policy and required_send_binding before sending. Task wording, including 'read-only', does not set session policy; task paths do not imply narrower policy_restrictions.write_scope, which is set only at the operator's request. A workspace_write profile without explicit scope covers the project. reviewer/current or worktree uses Git review; reviewer/review_slot uses snapshot review (§6.1, §8.3).",
       inputSchema: {
         type: "object",
         properties: {
@@ -99,12 +99,12 @@ export function bridgeToolDefs(): McpToolDef[] {
           workspace: {
             type: "object",
             properties: {
-              mode: { type: "string", enum: ["current", "worktree", "review_slot"] },
-              workspace_id: str,
+              mode: { type: "string", enum: ["current", "worktree", "review_slot"], description: "current/worktree bind a registered physical workspace; review_slot selects snapshot review." },
+              workspace_id: { ...str, description: "Registered physical workspace ID for current or existing worktree sessions." },
               // §8.3 additive: registered source repository reference and the
               // explicit full-hex base commit for a broker-created worktree.
-              repository_workspace_id: str,
-              base_commit: str,
+              repository_workspace_id: { ...str, description: "Registered source repository ID used to create a detached worktree." },
+              base_commit: { ...str, description: "Full hexadecimal Git commit ID to use as the detached worktree base." },
             },
             required: ["mode"],
             additionalProperties: false,
@@ -130,7 +130,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_workspace_snapshot",
-      description: "Capture a registered workspace's source into LOCAL broker snapshot storage under a read admission (no writer, no quarantine). Reads project files and stores them locally; launches no provider run and sends nothing to any vendor. Idempotent (§10.1.1).",
+      description: "Capture a registered workspace into local broker snapshot storage under read admission; this reads files but launches no inference and sends nothing to a vendor. Use the returned snap ID for a worker precondition or snapshot review binding, never as an artifact_ref. Idempotent (§10.1.1).",
       inputSchema: {
         type: "object",
         properties: { project_id: str, workspace_id: str, idempotency_key: str },
@@ -141,7 +141,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_sessions_list",
-      description: "Sessions owned by this coordinator in a project, compact metadata (§10.1).",
+      description: "List this coordinator's sessions for one project, including role, workspace and required_send_binding metadata. Follow every next_cursor; inspect status for full state and effective_policy before continuing (§10.1).",
       inputSchema: {
         type: "object",
         properties: { project_id: str, cursor: str, limit: int(1, 100) },
@@ -151,12 +151,12 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_status",
-      description: "Session/context/runtime states, active turn, snapshots, block/close state, coverage binding, and effective_policy {access, write_scope} from the immutable spawn-time policy binding (§10.1). effective_policy is null when the binding is absent or malformed. Check it after spawn; task instructions do not determine policy.",
+      description: "Inspect a session before sending: returns state, snapshots, effective_policy {access, write_scope} from the immutable spawn-time policy, and required_send_binding. Match that binding exactly; read-only worker audits still require workspace_precondition. effective_policy is null if unavailable or malformed (§10.1).",
       inputSchema: { type: "object", properties: { session_id: str }, required: ["session_id"], additionalProperties: false },
     },
     {
       name: "agent_session_send",
-      description: "Submit a task turn and LAUNCH one provider inference run; returns turn_id without waiting. Supply exactly one binding: workspace_precondition for workers, review_binding for snapshot review_slot turns, or git_review_binding for read-only Git review in current/worktree (include_working_tree=true for uncommitted changes). Never combine bindings (§7.2).",
+      description: "Send a task and launch one provider inference run; returns turn_id without waiting. First inspect required_send_binding, then provide exactly that one binding: workspace_precondition for every non-reviewer worker (including read-only audits), review_binding for reviewer/review_slot, or git_review_binding for reviewer current/worktree. Git review needs no snapshot; for dirty review set include_working_tree=true and bind both commit IDs to current HEAD. Use snap IDs only in snapshot bindings, artifact_refs only for art IDs, and relevant_paths for file paths. On an unknown response, inspect the same session/turn and retry only with the original key and unchanged arguments (§7.2).",
       inputSchema: {
         type: "object",
         properties: {
@@ -177,21 +177,28 @@ export function bridgeToolDefs(): McpToolDef[] {
           workspace_precondition: {
             type: "object",
             description: "Physical worker workspace only. Omit when supplying another binding.",
-            properties: { expected_snapshot_id: str },
+            properties: { expected_snapshot_id: { ...str, description: "Snapshot ID (snap-...) matching the worker's registered workspace state." } },
             required: ["expected_snapshot_id"],
             additionalProperties: false,
           },
           review_binding: {
             type: "object",
             description: "Snapshot review_slot turns only. Explicit dirty-workspace alternative to Git review.",
-            properties: { baseline_snapshot_id: str, target_snapshot_id: str },
+            properties: {
+              baseline_snapshot_id: { ...str, description: "Baseline broker snapshot ID (snap-...)." },
+              target_snapshot_id: { ...str, description: "Target broker snapshot ID (snap-...)." },
+            },
             required: ["baseline_snapshot_id", "target_snapshot_id"],
             additionalProperties: false,
           },
           git_review_binding: {
             type: "object",
             description: "Read-only Git reviewer turns only: full-hex base_commit and target_commit. By default requires a clean checkout; include_working_tree=true binds an uncommitted checkout digest. The broker delivers no snapshots or diff bytes.",
-            properties: { base_commit: str, target_commit: str, include_working_tree: { type: "boolean" } },
+            properties: {
+              base_commit: { ...str, description: "Full hexadecimal Git base commit object ID." },
+              target_commit: { ...str, description: "Full hexadecimal Git target commit object ID; checkout HEAD must match this commit." },
+              include_working_tree: { type: "boolean", description: "Set true to include staged, unstaged and nonignored untracked changes in the checkout fingerprint. For an uncommitted review, use HEAD for both commit IDs." },
+            },
             required: ["base_commit", "target_commit"],
             additionalProperties: false,
           },
@@ -203,17 +210,17 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_turn_status",
-      description: "Turn state/version, deadline, execution flags (§10.1).",
+      description: "Check turn state, deadline and execution_started after a send; inspect the known turn before any recovery or retry (§10.1).",
       inputSchema: { type: "object", properties: { turn_id: str }, required: ["turn_id"], additionalProperties: false },
     },
     {
       name: "agent_turn_result",
-      description: "Bounded result manifest or RESULT_NOT_READY for nonterminal turns; honest evidence attribution (§11).",
+      description: "Read the bounded terminal result once after events/status show a terminal turn; nonterminal turns return RESULT_NOT_READY (§11).",
       inputSchema: { type: "object", properties: { turn_id: str }, required: ["turn_id"], additionalProperties: false },
     },
     {
       name: "agent_turn_events",
-      description: "Durable bounded event page with monotonic cursor (§10.5). wait_ms waits for new events, terminal state, or timeout.",
+      description: "Read bounded event deltas after the last consumed numeric cursor; use wait_ms for one bounded wait, advance the cursor from returned rows, and repeat until terminal before reading the result (§10.5).",
       inputSchema: {
         type: "object",
         properties: { turn_id: str, after_cursor: int(0, Number.MAX_SAFE_INTEGER), limit: int(1, 200), wait_ms: int(0, 20000) },
@@ -223,7 +230,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_artifact_read",
-      description: "Authorized bounded page of a textual artifact; binary artifacts return metadata only (§10.1).",
+      description: "Read an authorized bounded page of a retained textual artifact by art ID; follow returned offsets for more text. Binary artifacts return metadata only (§10.1).",
       inputSchema: {
         type: "object",
         properties: { artifact_id: str, offset: int(0, Number.MAX_SAFE_INTEGER), max_bytes: int(1, 65536) },
@@ -233,7 +240,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_turn_cancel",
-      description: "Idempotent cancellation request; a terminal result is returned unchanged (§14.6).",
+      description: "Request cancellation of a known turn that should stop executing; this does not close its session. Idempotent; terminal turns are returned unchanged. Inspect status/events/result afterward, and resolve unknown outcomes using the same turn and key (§14.6).",
       inputSchema: {
         type: "object",
         properties: { turn_id: str, idempotency_key: str, reason: str },
@@ -243,7 +250,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_stop",
-      description: "Guarded close of an IDLE/BLOCKED session; native history and worktree are not deleted (§6.4).",
+      description: "Close an idle or blocked session when no more turns should use it; this is session lifecycle cleanup, not turn cancellation, and preserves native history/worktree. Use agent_turn_cancel for active execution (§6.4).",
       inputSchema: {
         type: "object",
         properties: { session_id: str, idempotency_key: str },
@@ -265,6 +272,7 @@ function sessionDto(s: SessionRecord) {
     role: s.role,
     workspace_id: s.workspace_id,
     workspace_mode: s.workspace_mode,
+    required_send_binding: requiredSendBinding(s),
     state: s.state,
     context_status: s.context_status,
     native_conversation_ref: s.native_conversation_ref,
