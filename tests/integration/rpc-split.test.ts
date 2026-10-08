@@ -545,7 +545,6 @@ describe("private-socket daemon/bridge split (ADR-0003, spec §4.1)", () => {
           acceptance_criteria: ["всі тести проходять"],
           artifact_refs: [],
         },
-        workspace_precondition: { expected_snapshot_id: spawn.initial_snapshot_id },
       })) as { turn_id: string; state: string };
       expect(send.state).toBe("ACCEPTED");
       expect(typeof send.turn_id).toBe("string");

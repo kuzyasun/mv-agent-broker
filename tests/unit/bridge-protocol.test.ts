@@ -305,34 +305,31 @@ describe("runStdioBridge transport loop", () => {
 
 // ─── §8.3 additive spawn workspace fields at the bridge boundary ────────────
 
-describe("agent_session_send binding guidance", () => {
-  it.each(["review_binding", "workspace_precondition", "git_review_binding"])("rejects null %s before admission with actionable guidance", async (bindingName) => {
+describe("agent_session_send plain workflow", () => {
+  it("accepts a minimal task and defaults optional artifacts to an empty list", async () => {
+    const send = vi.fn().mockReturnValue({ turn_id: "turn-plain" });
+    await expect(callBridgeTool({ coordinatorId: "coord", core: { send } as unknown as BrokerCore }, "agent_session_send", {
+      session_id: "s", idempotency_key: "k", task: { goal: "review uncommitted changes" },
+    })).resolves.toEqual({ turn_id: "turn-plain" });
+    expect(send).toHaveBeenCalledWith("coord", expect.objectContaining({
+      session_id: "s", task: expect.objectContaining({ goal: "review uncommitted changes", artifact_refs: [] }),
+    }));
+    expect(send.mock.calls[0]![1]).not.toHaveProperty("workspace_precondition");
+  });
+
+  it("validates an explicit manual snapshot review binding", async () => {
     const send = vi.fn();
     await expect(callBridgeTool({ coordinatorId: "coord", core: { send } as unknown as BrokerCore }, "agent_session_send", {
-      session_id: "s", idempotency_key: "k", task: { goal: "review", artifact_refs: [] }, [bindingName]: null,
-    })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringContaining(`${bindingName} must be an object`) });
+      session_id: "s", idempotency_key: "k", task: { goal: "compare snapshots" }, review_binding: null,
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringContaining("review_binding must be an object") });
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("rejects contradictory bindings before admission and explains the one-binding rule", async () => {
+  it("does not silently discard malformed required artifact references", async () => {
     const send = vi.fn();
     await expect(callBridgeTool({ coordinatorId: "coord", core: { send } as unknown as BrokerCore }, "agent_session_send", {
-      session_id: "s", idempotency_key: "k", task: { goal: "review", checks: [], artifact_refs: [] },
-      review_binding: { baseline_snapshot_id: "base", target_snapshot_id: "target" },
-      workspace_precondition: { expected_snapshot_id: "target" },
-    })).rejects.toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("Exactly one of workspace_precondition / review_binding / git_review_binding is required"),
-    });
-    expect(send).not.toHaveBeenCalled();
-    await expect(callBridgeTool({ coordinatorId: "coord", core: { send } as unknown as BrokerCore }, "agent_session_send", {
-      session_id: "s", idempotency_key: "k2", task: { goal: "review", checks: [], artifact_refs: [] },
-      git_review_binding: { base_commit: "a".repeat(40), target_commit: "b".repeat(40) },
-      review_binding: { baseline_snapshot_id: "base", target_snapshot_id: "target" },
-    })).rejects.toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("Git reviewer turns send git_review_binding only"),
-    });
+      session_id: "s", idempotency_key: "k", task: { goal: "inspect", artifact_refs: "art-invalid" },
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
     expect(send).not.toHaveBeenCalled();
   });
 });
@@ -420,10 +417,8 @@ describe("agent_session_spawn additive worktree workspace fields (§8.3)", () =>
     const send = bridgeToolDefs().find((d) => d.name === "agent_session_send")!.inputSchema as {
       properties: Record<string, { properties: Record<string, { type: string; description?: string }> }>;
     };
-    expect(send.properties.git_review_binding.properties.base_commit.description).toContain("Full hexadecimal Git base commit");
-    expect(send.properties.git_review_binding.properties.target_commit.description).toContain("checkout HEAD must match");
-    expect(send.properties.git_review_binding.properties.include_working_tree.description).toContain("staged, unstaged and nonignored untracked");
-    expect(send.properties.workspace_precondition.properties.expected_snapshot_id.description).toContain("snap-");
+    expect(send.properties).not.toHaveProperty("git_review_binding");
+    expect(send.properties).not.toHaveProperty("workspace_precondition");
     expect(send.properties.review_binding.properties.target_snapshot_id.description).toContain("snap-");
   });
 
@@ -431,15 +426,15 @@ describe("agent_session_spawn additive worktree workspace fields (§8.3)", () =>
     const h = createHarness();
     try {
       const spawnDef = bridgeToolDefs().find((d) => d.name === "agent_session_spawn")!;
-      expect(spawnDef.description).toContain("Task wording, including 'read-only', does not set session policy");
-      expect(spawnDef.description).toContain("policy_restrictions.access='read_only'");
-      expect(spawnDef.description).toContain("policy_restrictions.write_scope");
-      expect(spawnDef.description).toContain("agent_session_status.effective_policy");
+      expect(spawnDef.description).toContain("access=read_only");
+      const props = spawnDef.inputSchema.properties as Record<string, unknown>;
+      expect(props).toHaveProperty("access");
+      expect(props).not.toHaveProperty("policy_restrictions");
       const statusDef = bridgeToolDefs().find((d) => d.name === "agent_session_status")!;
-      expect(statusDef.description).toContain("effective_policy {access, write_scope}");
+      expect(statusDef.description).toContain("required_send_binding=none");
 
       const writer = await h.spawnWorkerSession();
-      const reader = await h.spawnWorkerSession({ policy_restrictions: { access: "read_only" } });
+      const reader = await h.spawnWorkerSession({ access: "read_only" });
       h.db.raw.prepare("UPDATE policy_profiles SET config=? WHERE policy_profile_id='pol-writer' AND version='1'")
         .run(JSON.stringify({ access: "read_only" }));
 
@@ -449,11 +444,11 @@ describe("agent_session_spawn additive worktree workspace fields (§8.3)", () =>
         { session_id: sessionId },
       ) as Promise<Record<string, unknown>>;
       const writerStatus = await status(writer.session_id);
-      expect(writerStatus.effective_policy).toEqual({ access: "workspace_write", write_scope: ["src", "tests"] });
-      ((writerStatus.effective_policy as { write_scope: string[] }).write_scope)[0] = "tampered";
-      expect((await status(writer.session_id)).effective_policy).toEqual({ access: "workspace_write", write_scope: ["src", "tests"] });
+      expect(writerStatus.effective_policy).toEqual({ access: "workspace_write" });
+      (writerStatus.effective_policy as { access: string }).access = "read_only";
+      expect((await status(writer.session_id)).effective_policy).toEqual({ access: "workspace_write" });
       const readerStatus = await status(reader.session_id);
-      expect(readerStatus.effective_policy).toEqual({ access: "read_only", write_scope: [] });
+      expect(readerStatus.effective_policy).toEqual({ access: "read_only" });
       expect(JSON.stringify(writerStatus)).not.toContain("profile_config");
 
       const legacy = await h.spawnWorkerSession();
@@ -482,11 +477,11 @@ describe("agent_session_spawn additive worktree workspace fields (§8.3)", () =>
   it("reports the contract-required send binding in session status and list metadata", async () => {
     const h = createHarness();
     try {
-      const session = await h.spawnWorkerSession({ policy_restrictions: { access: "read_only" } });
+      const session = await h.spawnWorkerSession({ access: "read_only" });
       const ctx = { coordinatorId: h.seed.coordinatorId, core: h.core };
       const status = await callBridgeTool(ctx, "agent_session_status", { session_id: session.session_id }) as Record<string, unknown>;
-      expect(status.required_send_binding).toBe("workspace_precondition");
-      expect(status.effective_policy).toEqual({ access: "read_only", write_scope: [] });
+      expect(status.required_send_binding).toBe("none");
+      expect(status.effective_policy).toEqual({ access: "read_only" });
 
       const page = await callBridgeTool(ctx, "agent_sessions_list", { project_id: h.seed.projectId }) as {
         sessions: Array<Record<string, unknown>>;
@@ -494,7 +489,7 @@ describe("agent_session_spawn additive worktree workspace fields (§8.3)", () =>
       };
       expect(page.next_cursor).toBeNull();
       expect(page.sessions.find((item) => item.session_id === session.session_id)).toMatchObject({
-        required_send_binding: "workspace_precondition",
+        required_send_binding: "none",
         role: "worker",
         workspace_mode: "current",
       });

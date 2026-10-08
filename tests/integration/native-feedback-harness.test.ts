@@ -190,7 +190,7 @@ describe("Native feedback harness integration", () => {
     expect(evidence.turns[3].native_ref_observed).toBe("mock-native-reviewer-ref");
     expect(evidence.turns[2].session_id).toBe(evidence.turns[0].session_id);
     expect(evidence.turns[3].session_id).toBe(evidence.turns[1].session_id);
-    expect(evidence.turns[2].result.broker_observed.baseline_snapshot_id).toBe(s1);
+    expect(evidence.turns[2].result.broker_observed.baseline_snapshot_id).toBeNull();
 
     // 5. Offline fixture checks: S1 deliberate failure, S2 pass, untouched baseline
     expect(evidence.s1_deliberate_failure_verified).toBe(true);
@@ -257,8 +257,8 @@ describe("Native feedback harness integration", () => {
     expect(evidence.sameWorkerConversation).toBeFalsy();
     expect(evidence.sameReviewerConversation).toBeFalsy();
 
-    // FIX still pinned to the same sealed S1; R2 binds the same S1 -> S2 slot
-    expect(evidence.turns[2].result.broker_observed.baseline_snapshot_id).toBe(evidence.snapshots.s1);
+    // FIX uses the current checkout; explicit snapshot R2 binds S1 -> S2.
+    expect(evidence.turns[2].result.broker_observed.baseline_snapshot_id).toBeNull();
     expect(evidence.turns[3].result.broker_observed.baseline_snapshot_id).toBe(evidence.snapshots.s1);
     expect(evidence.r2_slot_s2_verified).toBe(true);
     expect(evidence.s1_deliberate_failure_verified).toBe(true);
@@ -300,7 +300,7 @@ describe("Native feedback harness integration", () => {
     expect(evidence.fresh_worker.session_id).not.toBe(evidence.turns[0].session_id);
     expect(evidence.fresh_worker.native_ref_observed).not.toBe(evidence.workerNativeRef);
     expect(evidence.fresh_reviewer.native_ref_observed).not.toBe(evidence.reviewerNativeRef);
-    expect(evidence.turns[2].result.broker_observed.baseline_snapshot_id).toBe(evidence.snapshots.s1);
+    expect(evidence.turns[2].result.broker_observed.baseline_snapshot_id).toBeNull();
 
     // Public assessment carries the handoff artifact ID and mode honestly
     const assessment = JSON.parse(readFileSync(path.join(res.root, "assessment.json"), "utf8"));
@@ -499,7 +499,6 @@ describe("Native feedback harness integration", () => {
           session_id: worker.session_id,
           idempotency_key: "send-unknown-art",
           task: { goal: "Task", artifact_refs: ["art-does-not-exist"] },
-          workspace_precondition: { expected_snapshot_id: s0 },
         });
       }).toThrow();
 
@@ -512,7 +511,6 @@ describe("Native feedback harness integration", () => {
           session_id: worker.session_id,
           idempotency_key: "send-expired-art",
           task: { goal: "Task with expired", artifact_refs: [published.artifact_id] },
-          workspace_precondition: { expected_snapshot_id: s0 },
         });
         expect.unreachable("expected ARTIFACT_EXPIRED");
       } catch (err: unknown) {

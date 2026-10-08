@@ -21,7 +21,7 @@ Readiness records no current ZCode CLI-version observation.
 | Readonly Web/Agent/Task/Skill | - | Whole-tool lists | - | Exact Read boundary; Shell write |
 | Agy mode/sandbox/skip / print-timeout 0 | Help seen; adapter skip-permissions + timeout 0 (wait TURN) | Adapter argv | Resume smoke; owned Job | Full schema; OS sandbox from flag; hosted quiescence |
 | Cursor outside-Read | Adapter hooks | Reviewer config | Limited 0.2.4 probe | Fresh S1/S2+inputs+quiescence |
-| Broker write_scope | Core | policy-restrictions.md | Offline mocks | Native mandatory |
+| Broker access | Read-only or whole-project write | policy-restrictions.md | Offline execution mocks | Native OS confinement unverified |
 
 ## Refuse / open
 

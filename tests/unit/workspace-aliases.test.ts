@@ -288,7 +288,7 @@ describe("A05: real checkout alias exclusion", () => {
     } finally { h.cleanup(); }
   });
 
-  it("known native completion cannot seal a different checkout as the final source", async () => {
+  it("known completion retains its report without capturing a newly retargeted source", async () => {
     const h = createHarness({ limits: ALIAS_LIMITS });
     try {
       const s = await h.spawnWorkerSession();
@@ -301,10 +301,10 @@ describe("A05: real checkout alias exclusion", () => {
       h.adapter.releaseBarrier("completion-retarget");
       await settle(h);
       const result = h.core.turnStatus(h.seed.coordinatorId, t.turn_id);
-      expect(result.state).toBe("FAILED");
+      expect(result.state).toBe("SUCCEEDED");
       expect(result.native_outcome).toBe("completed");
       expect(result.execution_started).toBe(true);
-      expect(result.error_code).toBe("EVIDENCE_CAPTURE_FAILED");
+      expect(result.error_code).toBeNull();
       expect(result.final_snapshot_id).toBeNull();
     } finally { h.cleanup(); }
   });

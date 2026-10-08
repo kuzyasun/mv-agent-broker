@@ -965,12 +965,12 @@ export async function runNativeFeedback(taskConfig = {}) {
   registry.insertPolicyProfile(db, {
     policy_profile_id: 'worker',
     version: '1',
-    config: JSON.stringify({ access: 'workspace_write', ...(task.write_scope === undefined ? {} : {write_scope: task.write_scope}) }),
+    config: JSON.stringify({ access: 'workspace_write' }),
   });
   registry.insertPolicyProfile(db, {
     policy_profile_id: 'reviewer',
     version: '1',
-    config: JSON.stringify({ access: 'read_only', write_scope: [] }),
+    config: JSON.stringify({ access: 'read_only' }),
   });
 
   registry.insertWorkspace(db, {
@@ -1266,8 +1266,7 @@ export async function runNativeFeedback(taskConfig = {}) {
     });
     const workerSpawn = await tool('agent_session_spawn', workerSpawnArgs());
     sessions.push(workerSpawn.session_id);
-    const s0 = workerSpawn.initial_snapshot_id;
-    if (!s0) throw new Error('Worker session missing initial baseline snapshot S0.');
+    const s0 = (await tool('agent_workspace_snapshot', { project_id: 'self', workspace_id: 'fixture', idempotency_key: randomUUID() })).snapshot_id;
     evidence.snapshots.s0 = s0;
 
     const workerDeadline = task.deadline_ms;
@@ -1288,7 +1287,6 @@ export async function runNativeFeedback(taskConfig = {}) {
         artifact_refs: [],
         checks: ['git status', 'node --test tests/math.test.js'],
       },
-      workspace_precondition: { expected_snapshot_id: s0 },
       deadline_ms: workerDeadline,
     });
 
@@ -1339,7 +1337,7 @@ export async function runNativeFeedback(taskConfig = {}) {
     t1Record.native_ref_observed = evidence.workerNativeRef;
     assert.equal(t1Record.status.state, 'SUCCEEDED', 'Worker turn 1 did not succeed.');
 
-    const s1 = t1Record.result.broker_observed?.final_snapshot_id;
+    const s1 = (await tool('agent_workspace_snapshot', { project_id: 'self', workspace_id: 'fixture', idempotency_key: randomUUID() })).snapshot_id;
     if (!s1 || s1 === s0) throw new Error(`Expected distinct sealed final snapshot S1; got ${s1}`);
     evidence.snapshots.s1 = s1;
 
@@ -1510,7 +1508,7 @@ export async function runNativeFeedback(taskConfig = {}) {
     // TURN 3: Worker Fix Turn (takes ONLY the required artifactID).
     // persistent: SAME worker session, same native conversation.
     // fresh/handoff: close the old IDLE worker session to confirmed completed
-    // CLOSED first, then spawn a replacement on the same fixture pinned to S1.
+    // CLOSED first, then spawn a replacement on the same fixture. S1 is captured manually for review.
     // handoff additionally delivers a bounded coordinator task.context summary.
     // ──────────────────────────────────────────────────────────────────────────
     const mode = task.feedback_mode;
@@ -1548,8 +1546,6 @@ export async function runNativeFeedback(taskConfig = {}) {
         checks: ['node --test tests/math.test.js'],
         ...(handoffContext ? { context: handoffContext } : {}),
       },
-      // Pinned to current target S1 baseline in every mode
-      workspace_precondition: { expected_snapshot_id: s1 },
       deadline_ms: fixDeadline,
     });
 
@@ -1592,12 +1588,7 @@ export async function runNativeFeedback(taskConfig = {}) {
       }
       evidence.fresh_worker.native_ref_observed = observedWorkerRef;
     }
-    if (fixRecord.result.broker_observed?.baseline_snapshot_id !== s1) {
-      throw new Error(`FIX turn is not pinned to sealed S1; baseline ${fixRecord.result.broker_observed?.baseline_snapshot_id}`);
-    }
-    assert.equal(fixRecord.status.state, 'SUCCEEDED', 'Worker fix turn did not succeed; stops with explicit failed evidence.');
-
-    const s2 = fixRecord.result.broker_observed?.final_snapshot_id;
+    const s2 = (await tool('agent_workspace_snapshot', { project_id: 'self', workspace_id: 'fixture', idempotency_key: randomUUID() })).snapshot_id;
     if (!s2 || s2 === s1 || s2 === s0) throw new Error(`Expected distinct sealed final snapshot S2; got ${s2}`);
     evidence.snapshots.s2 = s2;
 
@@ -1759,7 +1750,6 @@ export async function runNativeFeedback(taskConfig = {}) {
         session_id: cancelSpawn.session_id,
         idempotency_key: randomUUID(),
         task: { goal: 'Will be cancelled.', artifact_refs: [] },
-        workspace_precondition: { expected_snapshot_id: s2 },
         deadline_ms: 60000,
       });
 

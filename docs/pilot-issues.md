@@ -9,6 +9,21 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-08: Shared-checkout edits misreported as read-only scope violations
+
+A read-only worker audit completed natively, but the coordinator edited a proposal
+in the same checkout during the turn. The final filesystem delta was classified
+as `SCOPE_VIOLATION`, despite containing no evidence of which process wrote it.
+
+Resolution: remove automatic source snapshots and post-run file-scope/digest
+vetoes from ordinary execution. A completed native run retains `SUCCEEDED` and
+its report, with quality still `unreviewed`. Read-only agents can share a checkout
+with editors and writers; the coordinator decides whether later edits need a
+follow-up review. Physical task admission no longer requires source coverage or
+snapshot/Git bindings. CLI/catalogue changes no longer invalidate sessions;
+dispatch performs one current provider preflight. Permissions are access-only.
+Manual diagnostic snapshots and explicit snapshot review slots remain optional.
+
 ## 2026-10-08: Historical workspace registrations remained selectable
 
 Beehive's active configuration registered project-wide workspace and coverage

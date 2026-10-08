@@ -1,5 +1,9 @@
 # Opt-in Native Feedback Harness (MVP v0.2)
 
+This is an opt-in test of the advanced snapshot review_slot feature. The harness
+manually captures S0 before the worker, S1 after its first turn, and S2 after the
+fix. Ordinary current/worktree tasks and reviewers need none of these snapshots.
+
 ## Overview
 
 The native feedback harness (`scripts/native-feedback.mjs`) provides an opt-in, caller-independent Node Model Context Protocol (MCP) client driving a four-turn feedback workflow. In its default `persistent` mode:
@@ -32,9 +36,9 @@ see the explicit mode table below. Snapshot and artifact bindings stay the same.
 
 | Phase | Session | Workspace Mode | Invariant / Precondition | Output / Artifact |
 |---|---|---|---|---|
-| **Turn 1: Worker** | `sess-worker` | `current` (`ws-fixture`) | Expected snapshot: $S_0$ (baseline) | Adds `src/calc.js`, removes `src/obsolete.js`, introduces benign defect in `src/math.js`. Final snapshot: $S_1$. Acquires native worker conversation ID. |
+| **Turn 1: Worker** | `sess-worker` | `current` (`ws-fixture`) | Plain task; S0 captured manually before the turn | Adds `src/calc.js`, removes `src/obsolete.js`, introduces benign defect in `src/math.js`. S1 captured manually after completion. Acquires native worker conversation ID. |
 | **Turn 2: Reviewer (R1)** | `sess-reviewer` | `review_slot` (`ws-review`) | `review_binding: { baseline: S0, target: S1 }` | Review slot materialized with $S_1$ tree. Inspects diff, produces findings. Broker seals findings as an artifact (`kind: "findings"`). Acquires reviewer native conversation ID. |
-| **Turn 3: Fix Turn** | **SAME** `sess-worker` | `current` (`ws-fixture`) | Expected snapshot: $S_1$. `artifact_refs: [findingsArtifactId]` | Consumes findings artifact by ID only (**never copied reviewer prose**). Asserts identical native conversation ref. Fixes defect in `src/math.js`. Final snapshot: $S_2$. |
+| **Turn 3: Fix Turn** | **SAME** `sess-worker` | `current` (`ws-fixture`) | Expected snapshot: $S_1$. `artifact_refs: [findingsArtifactId]` | Consumes findings artifact by ID only (**never copied reviewer prose**). Asserts identical native conversation ref. Fixes defect in `src/math.js`. S2 captured manually after completion. |
 | **Turn 4: Reviewer (R2)** | **SAME** `sess-reviewer` | `review_slot` (`ws-review`) | `review_binding: { baseline: S1, target: S2 }` | Review slot cwd rebound to $S_2$ current files: deleted files absent, new files readable, fixed code present. Asserts identical native conversation ref. Confirms resolution. |
 
 ### 4. Artifact Transport & Large Findings (>16 KiB)
@@ -98,7 +102,7 @@ node --experimental-transform-types scripts/native-feedback.mjs --mock --feedbac
 ### Independent Coordinator Checks
 Coordinator-owned offline checks run directly against the fixture repository:
 1. `node --test tests/math.test.js`: Validates function correctness after fix.
-2. `git status --porcelain`: Checks the expected three-path fixture outcome. This is a controlled test acceptance check, not a worker file allowlist. Worker authorization defaults to the entire project with root source coverage; only an explicit `write_scope` restricts it. Worker changes remain uncommitted; baseline tests and package hashes must match.
+2. `git status --porcelain`: Checks the expected three-path fixture outcome. This is a controlled test acceptance check, not a worker file allowlist. Worker write access covers the whole project. The fixture harness captures manual snapshots only for its explicit review_slot comparison; ordinary worker sends need no snapshots. Worker changes remain uncommitted; baseline tests and package hashes must match.
 
 ---
 

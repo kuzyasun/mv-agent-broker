@@ -38,7 +38,7 @@ export function AdvancedSection(): JSX.Element {
               Advanced Raw Configuration
             </h2>
             <p className="text-xs text-[#747686]">
-              Low-level configuration of accounts, binary pins, state directory, and workspace coverage rules.
+              Low-level configuration of accounts, binary pins, state directory, and manual snapshot coverage.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -112,7 +112,7 @@ export function AdvancedSection(): JSX.Element {
           {/* Coverage Profiles JSON */}
           <div>
             <label htmlFor="adv-coverage-json" className="block font-medium text-[#434655] mb-1">
-              Coverage Profiles JSON (coverage_profiles)
+              Manual Snapshot Coverage Profiles JSON (coverage_profiles)
             </label>
             <textarea
               id="adv-coverage-json"

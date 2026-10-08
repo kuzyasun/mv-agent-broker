@@ -116,7 +116,7 @@ describe("f4 guards: incarnation fencing, adapter drift, discovery pagination", 
     }
   });
 
-  it("A32: adapter version drift rejects send with PROVIDER_INCOMPATIBLE (§13.3)", async () => {
+  it("A32: adapter upgrades do not invalidate a reusable session (§13.3)", async () => {
     const h = createHarness();
     try {
       const spawn = await h.spawnWorkerSession();
@@ -128,7 +128,10 @@ describe("f4 guards: incarnation fencing, adapter drift, discovery pagination", 
       // CLI upgrade / version drift: simulate session recorded with older adapter version
       h.db.raw.prepare("UPDATE sessions SET adapter_version = '0.0.9-old' WHERE session_id = ?").run(spawn.session_id);
 
-      expectBrokerError(() => h.sendTask(spawn.session_id, "t2"), "PROVIDER_INCOMPATIBLE");
+      const t2 = h.sendTask(spawn.session_id, "t2");
+      await start(h, t2);
+      await settle(h);
+      expect(h.core.turnStatus(h.seed.coordinatorId, t2.turn_id).state).toBe("SUCCEEDED");
 
       // Restore adapter_version to the real value ('0.1.0')
       const realVersion = h.adapter.adapterVersion;

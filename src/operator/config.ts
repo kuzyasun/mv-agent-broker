@@ -305,6 +305,10 @@ export function validateOperatorConfig(input: unknown, baseDir = process.cwd()):
   }
   for (const profile of policies) {
     if (!profile.config || typeof profile.config !== "object" || Array.isArray(profile.config)) fail(`policy ${profile.policy_profile_id}.config must be an object`);
+    if (Object.keys(profile.config).some(key => key !== "access")) fail(`policy ${profile.policy_profile_id}.config may contain only access`);
+    if (profile.config.access !== "read_only" && profile.config.access !== "workspace_write") {
+      fail(`policy ${profile.policy_profile_id}.config.access must be 'read_only' or 'workspace_write'`);
+    }
     profile.version ??= "1";
   }
   for (const profile of coverages) {
@@ -468,7 +472,7 @@ export function applyOperatorConfig(db: RegistryDb, config: OperatorConfig): App
       const old = getPolicyProfile(db, profile.policy_profile_id, version);
       if (!old) insertPolicyProfile(db, { policy_profile_id: profile.policy_profile_id, version, config: serialized });
       else {
-        rejectBoundChange(db, "policy profile", profile.policy_profile_id, stableJson(JSON.parse(old.config)) !== serialized, "policy_profile_id");
+        // Existing sessions retain their captured permission; this affects new sessions.
         db.raw.prepare("UPDATE policy_profiles SET config = ? WHERE policy_profile_id = ? AND version = ?").run(serialized, profile.policy_profile_id, version);
       }
     }

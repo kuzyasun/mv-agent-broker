@@ -12,7 +12,6 @@ import type {
   OperatorProject,
   OperatorWorkspace,
   OperatorPolicyProfile,
-  OperatorCoverageProfile,
   OperatorRoute,
 } from "../types.ts";
 
@@ -81,17 +80,6 @@ export function ProjectsSection(): JSX.Element {
       project_id: id,
       mode: "current",
       canonical_path: folder || null,
-      coverage_profile_id: `${id}-coverage`,
-    };
-
-    const newCoverage: OperatorCoverageProfile = {
-      coverage_profile_id: `${id}-coverage`,
-      version: "1",
-      config: {
-        source_prefixes: ["."],
-        non_source_prefixes: [],
-        excluded_prefixes: [".git", ".state", "node_modules", "dist"],
-      },
     };
 
     const newPolicyWrite: OperatorPolicyProfile = {
@@ -113,7 +101,9 @@ export function ProjectsSection(): JSX.Element {
         ...JSON.parse(JSON.stringify(r)),
         route_id: `${id}-${r.provider}-${r.role}-${idx + 1}`,
         project_id: id,
-        policy_profile_id: r.role === "worker" ? `${id}-worker` : `${id}-read-only`,
+        policy_profile_id: config?.policy_profiles.find(
+          (policy) => policy.policy_profile_id === r.policy_profile_id,
+        )?.config.access === "workspace_write" ? `${id}-worker` : `${id}-read-only`,
       }));
     }
 
@@ -123,7 +113,6 @@ export function ProjectsSection(): JSX.Element {
       ...draftConfig.value,
       projects: [...projects, newProject],
       workspaces: [...workspaces, newWorkspace],
-      coverage_profiles: [...(config?.coverage_profiles ?? []), newCoverage],
       policy_profiles: [...(config?.policy_profiles ?? []), newPolicyWrite, newPolicyRead],
       routes: [...routes, ...copiedRoutes],
     };
@@ -171,7 +160,7 @@ export function ProjectsSection(): JSX.Element {
         <div>
           <h2 className="text-base font-semibold text-[#141b2b]">Registered Projects</h2>
           <p className="text-xs text-[#747686]">
-            Manage project repositories, canonical workspace locations, and scope permissions.
+            Register project checkouts and choose agent profiles with read-only or whole-project write access.
           </p>
         </div>
         <button

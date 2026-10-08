@@ -9,7 +9,7 @@
  * idempotent same-key provisions incl. crash windows; repository-level
  * mutation serialization keyed by the shared Git common dir (aliases cannot
  * bypass it); injected Git failures and foreign paths preserving data; stop
- * preserving the dirty worktree; capture/coverage behavior; discovery
+ * preserving the dirty worktree; discovery
  * exposing eligible registered references. No inference anywhere (mock).
  */
 import { describe, expect, it, vi } from "vitest";
@@ -18,13 +18,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { createHarness, settle, start, COVERAGE_CONFIG, type Harness } from "../helpers/harness.ts";
+import { createHarness, settle, start, type Harness } from "../helpers/harness.ts";
 import { BrokerError } from "../../src/shared/errors.ts";
 import { BrokerCore } from "../../src/core/broker.ts";
 import type { SpawnRequest } from "../../src/core/broker.ts";
-import { insertCoverageProfile, insertProject, insertWorkspace } from "../../src/storage/repo.ts";
+import { insertProject, insertWorkspace } from "../../src/storage/repo.ts";
 import { readSessionPhysicalBinding } from "../../src/workspaces/identity.ts";
-import { computeSourceDigest, takeInventory } from "../../src/workspaces/inventory.ts";
 import {
   createRealWorktreeGitRunner,
   worktreeAddDetached,
@@ -34,7 +33,6 @@ import {
   type WorktreeCompletionReceipt,
 } from "../../src/workspaces/worktree.ts";
 import { sha256Hex } from "../../src/shared/ids.ts";
-import { coverageContractHash } from "../../src/workspaces/coverage.ts";
 import { callBridgeTool, bridgeToolDefs } from "../../src/bridge/tools.ts";
 
 // ─── disposable Git fixtures (offline, plain git args, own temp dirs) ───────
@@ -138,7 +136,7 @@ function makeFixture(opts: { withJunctionAlias?: boolean } = {}): WorktreeFixtur
     canonical_path: repoPath,
     quarantined: false,
     quarantine_reason: null,
-    coverage_profile_id: h.seed.coverageProfileId,
+    coverage_profile_id: null,
   });
   let junctionOk = true;
   if (opts.withJunctionAlias) {
@@ -152,7 +150,7 @@ function makeFixture(opts: { withJunctionAlias?: boolean } = {}): WorktreeFixtur
         canonical_path: aliasPath,
         quarantined: false,
         quarantine_reason: null,
-        coverage_profile_id: h.seed.coverageProfileId,
+        coverage_profile_id: null,
       });
     } catch {
       junctionOk = false;
@@ -324,7 +322,7 @@ function registerOtherRepo(f: WorktreeFixture, id: string): { repoPath: string; 
     canonical_path: repoPath,
     quarantined: false,
     quarantine_reason: null,
-    coverage_profile_id: f.h.seed.coverageProfileId,
+    coverage_profile_id: null,
   });
   return { repoPath, head };
 }
@@ -343,35 +341,7 @@ function expectBrokerError(fn: () => unknown, code: string): BrokerError {
 // ─── tests ──────────────────────────────────────────────────────────────────
 
 describe("§8.3 broker-created detached worktrees", () => {
-  it("rejects uncovered source scope before provider readiness or Git worktree preflight", () => {
-    const f = makeFixture();
-    try {
-      const coverage = {
-        source_prefixes: ["docs"],
-        non_source_prefixes: ["dist"],
-        excluded_prefixes: [".git", "node_modules"],
-      };
-      insertCoverageProfile(f.h.db, {
-        coverage_profile_id: "cov-docs-only",
-        version: "1",
-        config: JSON.stringify(coverage),
-        contract_hash: coverageContractHash(coverage),
-      });
-      f.h.db.raw.prepare("UPDATE workspaces SET coverage_profile_id = 'cov-docs-only' WHERE workspace_id = 'ws-repo'").run();
-      const providerPreflight = vi.spyOn(f.h.adapter, "preflight");
-      const beforeSessions = Number((f.h.db.raw.prepare("SELECT COUNT(*) AS count FROM sessions").get() as { count: number }).count);
-      const beforeIntents = Number((f.h.db.raw.prepare("SELECT COUNT(*) AS count FROM intents").get() as { count: number }).count);
-      const error = expectBrokerError(() => f.worktreeSpawn("wt-uncovered-source"), "SNAPSHOT_COVERAGE_MISMATCH");
-      expect(error.executionStarted).toBe(false);
-      expect(error.details).toMatchObject({ actual_write_scope: ["src", "tests"], uncovered_write_scope: ["src", "tests"] });
-      expect(providerPreflight).not.toHaveBeenCalled();
-      expect(f.runner.calls).toHaveLength(0);
-      expect(Number((f.h.db.raw.prepare("SELECT COUNT(*) AS count FROM sessions").get() as { count: number }).count)).toBe(beforeSessions);
-      expect(Number((f.h.db.raw.prepare("SELECT COUNT(*) AS count FROM intents").get() as { count: number }).count)).toBe(beforeIntents);
-    } finally { f.cleanup(); }
-  });
-
-  it("provisions a detached worktree at the explicit base commit and reports the additive fields", async () => {
+  it("provisions a detached worktree at the explicit base commit without snapshot capture", async () => {
     const f = makeFixture();
     try {
       const branchesBefore = git(f.repoPath, ["branch", "--list"]);
@@ -388,13 +358,12 @@ describe("§8.3 broker-created detached worktrees", () => {
       expect(session.state).toBe("IDLE");
       expect(session.workspace_id).toBe(resp.worktree!.workspace_id);
       expect(session.workspace_mode).toBe("worktree");
-      expect(session.initial_snapshot_id).toBeTruthy();
+      expect(session.initial_snapshot_id).toBeNull();
 
       // Generated workspace row: registered worktree mode, hashed managed path.
       const row = f.h.db.raw.prepare("SELECT * FROM workspaces WHERE workspace_id=?").get(resp.worktree!.workspace_id) as Record<string, unknown>;
       expect(row.mode).toBe("worktree");
       expect(row.project_id).toBe(f.h.seed.projectId);
-      expect(String(row.coverage_profile_id)).toBe(f.h.seed.coverageProfileId);
       const wtPath = String(row.canonical_path);
       expect(wtPath.startsWith(realpathSync(f.worktreesRoot))).toBe(true);
       expect(path.basename(wtPath)).toBe(`wt-${sha256Hex(resp.session_id)}`);
@@ -408,12 +377,6 @@ describe("§8.3 broker-created detached worktrees", () => {
       expect(git(f.repoPath, ["rev-parse", "HEAD"])).toBe(f.head); // source untouched
       const porcelain = git(f.repoPath, ["worktree", "list", "--porcelain"]).replace(/\\/g, "/");
       expect(porcelain.toLowerCase()).toContain(wtPath.replace(/\\/g, "/").toLowerCase());
-
-      // Initial snapshot captures exactly the new worktree.
-      const snap = f.h.db.raw.prepare("SELECT * FROM snapshot_records WHERE snapshot_id=?").get(session.initial_snapshot_id) as Record<string, unknown>;
-      expect(snap.state).toBe("SEALED");
-      expect(snap.workspace_id).toBe(resp.worktree!.workspace_id);
-      expect(snap.git_head).toBe(f.head);
 
       // Dispatch binding pins the physical worktree cwd.
       const binding = readSessionPhysicalBinding(f.h.db, resp.session_id);
@@ -469,7 +432,7 @@ describe("§8.3 broker-created detached worktrees", () => {
         canonical_path: wtPath,
         quarantined: false,
         quarantine_reason: null,
-        coverage_profile_id: f.h.seed.coverageProfileId,
+        coverage_profile_id: null,
       });
       const withModeOnly = configuredCore.discovery(f.h.seed.coordinatorId, f.h.seed.projectId, null, 100).entries
         .filter((entry) => entry.kind === "workspace");
@@ -508,14 +471,7 @@ describe("§8.3 broker-created detached worktrees", () => {
       expect(existsSync(path.join(wtPath, "src", "untracked.txt"))).toBe(false);
       expect(resp.worktree).toMatchObject({ current_checkout_changes_copied: false });
 
-      // The sealed initial snapshot describes the committed tree only.
-      const expected = computeSourceDigest(takeInventory(wtPath, COVERAGE_CONFIG).entries, {
-        profile_id: f.h.seed.coverageProfileId,
-        version: "1",
-        contract_hash: coverageContractHash(COVERAGE_CONFIG),
-      });
-      const snap = f.h.db.raw.prepare("SELECT source_digest FROM snapshot_records WHERE snapshot_id=?").get(session.initial_snapshot_id) as { source_digest: string };
-      expect(snap.source_digest).toBe(expected);
+      expect(session.initial_snapshot_id).toBeNull();
     } finally {
       f.cleanup();
     }
@@ -565,7 +521,7 @@ describe("§8.3 broker-created detached worktrees", () => {
       expect(runner2.addCalls()).toHaveLength(1); // exactly one real add ever
       expect(f.runner.addCalls()).toHaveLength(0); // the parked one never dispatched
       expect(git(wtPath, ["rev-parse", "HEAD"])).toBe(f.head);
-      expect(session.initial_snapshot_id).toBeTruthy();
+      expect(session.initial_snapshot_id).toBeNull();
       const j = rawJournal(f, resp.session_id);
       expect(j.stage).toBe("ready");
       expect(j.launch).not.toBeNull(); // the NEW dispatch recorded its receipt
@@ -653,7 +609,7 @@ describe("§8.3 broker-created detached worktrees", () => {
       expect(rawJournal(f, resp.session_id).stage).toBe("ready");
       const j = rawJournal(f, resp.session_id);
       expect(j.launch).toEqual(launch); // the original owned receipt survives
-      expect(session.initial_snapshot_id).toBeTruthy();
+      expect(session.initial_snapshot_id).toBeNull();
 
       // A whole-daemon restart after FULL completion replays one ID, one add.
       const runner3 = new RecordingRunner();
@@ -988,7 +944,7 @@ describe("§8.3 broker-created detached worktrees", () => {
         canonical_path: otherDir,
         quarantined: false,
         quarantine_reason: null,
-        coverage_profile_id: f.h.seed.coverageProfileId,
+        coverage_profile_id: null,
       });
       expectBrokerError(
         () =>
@@ -1241,31 +1197,6 @@ describe("§8.3 broker-created detached worktrees", () => {
     }
   });
 
-  it("initial capture excludes later new untracked files; explicit snapshot policy respects them", async () => {
-    const f = makeFixture();
-    try {
-      const resp = f.worktreeSpawn("wt-capture-later");
-      await f.drain();
-      const session = f.h.core.sessionStatus(f.h.seed.coordinatorId, resp.session_id);
-      const wtPath = f.journalPath(resp.session_id);
-      writeFileSync(path.join(wtPath, "src", "later.txt"), "new local file\n", "utf8");
-
-      const snap = f.core.snapshot(f.h.seed.coordinatorId, {
-        project_id: f.h.seed.projectId,
-        workspace_id: resp.worktree!.workspace_id,
-        idempotency_key: "wt-explicit-capture",
-      });
-      expect(snap.capture_state).toBe("SEALED");
-      expect(snap.snapshot_id).not.toBe(session.initial_snapshot_id);
-      const initialDigest = (f.h.db.raw.prepare("SELECT source_digest FROM snapshot_records WHERE snapshot_id=?").get(session.initial_snapshot_id) as { source_digest: string }).source_digest;
-      expect(snap.source_digest).not.toBe(initialDigest);
-      const inventory = takeInventory(wtPath, COVERAGE_CONFIG);
-      expect(inventory.entries.some((e) => e.path === "src/later.txt")).toBe(true);
-    } finally {
-      f.cleanup();
-    }
-  });
-
   it("accepts a full 64-hex (SHA-256 repository) base commit", async () => {
     const f = makeFixture();
     try {
@@ -1278,7 +1209,7 @@ describe("§8.3 broker-created detached worktrees", () => {
         canonical_path: shaDir,
         quarantined: false,
         quarantine_reason: null,
-        coverage_profile_id: f.h.seed.coverageProfileId,
+        coverage_profile_id: null,
       });
       const resp = f.worktreeSpawn("wt-sha256", {
         workspace: { mode: "worktree", workspace_id: null, repository_workspace_id: "ws-sha256-repo", base_commit: shaHead },

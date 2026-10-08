@@ -1,9 +1,8 @@
 /**
  * Regression tests for the second P2 review pass:
  * - failed explicit capture is a durable idempotent operation (§10.1.1)
- * - .git metadata writes are protected-area violations (§8.7)
- * - external drift between admission and STARTING fails pre-dispatch (§7.2 step 7)
- * - accepted turns pin their expected snapshot (§15.3.1)
+ * - external file edits do not veto trusted local execution
+ * - ordinary turns pin task inputs without source snapshots
  */
 import { describe, expect, it } from "vitest";
 import path from "node:path";
@@ -69,36 +68,7 @@ describe("P2 review-fix regressions", () => {
     }
   });
 
-  it("write into .git metadata → SCOPE_VIOLATION (§8.7 protected area)", async () => {
-    const h = createHarness();
-    try {
-      const spawn = await h.spawnWorkerSession();
-      const t1 = h.sendTask(spawn.session_id, "t1");
-      h.adapter.plan(t1.turn_id, [
-        {
-          kind: "workspace_write",
-          files: [
-            { path: ".git/index", content: "evil git metadata" },
-            { path: "src/ok.c", content: "fine" },
-          ],
-        },
-        { kind: "complete", outcome: "completed" },
-      ]);
-      await start(h, t1);
-      await settle(h);
-
-      const turn = h.core.turnStatus(h.seed.coordinatorId, t1.turn_id);
-      expect(turn.state).toBe("FAILED");
-      expect(turn.error_code).toBe("SCOPE_VIOLATION");
-      expect(turn.final_snapshot_id).toBeNull();
-      expect(h.core.sessionStatus(h.seed.coordinatorId, spawn.session_id).state).toBe("IDLE");
-      void path;
-    } finally {
-      h.cleanup();
-    }
-  });
-
-  it("external drift between admission and STARTING fails pre-dispatch, zero inference (§7.2 step 7)", async () => {
+  it("external file edits do not veto a trusted physical turn", async () => {
     const h = createHarness();
     try {
       const spawn = await h.spawnWorkerSession();
@@ -111,18 +81,17 @@ describe("P2 review-fix regressions", () => {
       await settle(h);
 
       const turn = h.core.turnStatus(h.seed.coordinatorId, t1.turn_id);
-      expect(turn.state).toBe("FAILED");
-      expect(turn.error_code).toBe("WORKSPACE_CHANGED");
-      expect(turn.execution_started).toBe(false);
-      expect(turn.termination_reason).toBe("startup_failure");
-      expect(h.adapter.dispatchPermissionAcquired(t1.turn_id)).toBeFalsy();
+      expect(turn.state).toBe("SUCCEEDED");
+      expect(turn.error_code).toBeNull();
+      expect(turn.execution_started).toBe(true);
+      expect(h.adapter.dispatchPermissionAcquired(t1.turn_id)).toBe(true);
       expect(h.core.sessionStatus(h.seed.coordinatorId, spawn.session_id).state).toBe("IDLE");
     } finally {
       h.cleanup();
     }
   });
 
-  it("accepted turn pins its expected snapshot; terminal commit releases it (§15.3.1)", async () => {
+  it("physical turn pins only its input manifest and releases it at completion", async () => {
     const h = createHarness();
     try {
       const spawn = await h.spawnWorkerSession();
@@ -138,9 +107,9 @@ describe("P2 review-fix regressions", () => {
           .prepare("SELECT COUNT(*) c FROM artifact_pins WHERE owner_turn_id = ? AND root_kind = 'active_turn'")
           .get(t1.turn_id) as { c: number }).c;
 
-      // §15.3.1: while nonterminal the turn pins its expected snapshot AND its
-      // sealed input manifest (both root_kind active_turn).
-      expect(pinCount()).toBe(2);
+      // Ordinary turns seal the task input without capturing project files.
+      expect(pinCount()).toBe(1);
+      expect(h.db.raw.prepare("SELECT COUNT(*) c FROM snapshot_records").get()?.c).toBe(0);
 
       h.adapter.releaseBarrier("hold-pin");
       await settle(h);

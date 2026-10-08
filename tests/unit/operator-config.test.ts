@@ -63,28 +63,44 @@ describe("operator configuration", () => {
       .toThrow(/unknown native binary pin/);
   });
 
-  it("applies operator ACL changes and preserves bound settings despite JSON key order", async () => {
+  it("updates access profiles for new sessions while preserving existing session bindings", async () => {
     const h = createHarness();
     try {
       const spawned = await h.spawnWorkerSession();
       h.db.raw.prepare("UPDATE policy_profiles SET config = ? WHERE policy_profile_id = ?")
-        .run(JSON.stringify({ write_scope: ["src", "tests"], access: "workspace_write" }), "pol-writer");
+        .run(JSON.stringify({ access: "workspace_write" }), "pol-writer");
       const applied = applyOperatorConfig(h.db, {
         version: 1, state_dir: "./state", coordinator_id: h.seed.coordinatorId,
         projects: [{ project_id: h.seed.projectId, display_name: "Main" }],
         coordinators: [{ coordinator_id: h.seed.coordinatorId, display_name: "Renamed", allowed_project_ids: [h.seed.projectId], revoked: true }],
         accounts: [{ account_profile_id: h.seed.accountMock1, provider: "mock", quota_scope_id: "qs-shared", auth_mode: "native" }],
         workspaces: [{ workspace_id: h.seed.workspaceMain, project_id: h.seed.projectId, mode: "current", canonical_path: h.workspaceRoot, coverage_profile_id: h.seed.coverageProfileId }],
-        policy_profiles: [{ policy_profile_id: "pol-writer", config: { access: "workspace_write", write_scope: ["src", "tests"] } }],
+        policy_profiles: [{ policy_profile_id: "pol-writer", config: { access: "read_only" } }],
         coverage_profiles: [{ coverage_profile_id: h.seed.coverageProfileId, config: COVERAGE_CONFIG }],
         routes: [{ route_id: "route-main", project_id: h.seed.projectId, provider: "mock", account_profile_id: h.seed.accountMock1, model: "new-model", role: "worker", policy_profile_id: "pol-writer" }],
       });
       expect(applied.routes.get("route-main")?.model).toBe("new-model");
+      expect(JSON.parse(h.db.raw.prepare("SELECT config FROM policy_profiles WHERE policy_profile_id = ?").get("pol-writer")!.config as string))
+        .toEqual({ access: "read_only" });
       expect(h.db.raw.prepare("SELECT requested_model FROM sessions WHERE session_id = ?").get(spawned.session_id))
         .toMatchObject({ requested_model: "mock-model-1" });
       expect(() => h.core.discovery(h.seed.coordinatorId, h.seed.projectId, null, 10))
         .toThrowError(expect.objectContaining({ code: "UNAUTHORIZED" }));
     } finally { h.cleanup(); }
+  });
+
+  it("accepts only project-wide access choices in policy profiles", () => {
+    const withPolicy = (config: Record<string, unknown>) => ({
+      ...validConfig(),
+      policy_profiles: [{ policy_profile_id: "policy-main", config }],
+    });
+    expect(() => validateOperatorConfig(withPolicy({ access: "read_only" }))).not.toThrow();
+    expect(() => validateOperatorConfig(withPolicy({ access: "workspace_write" }))).not.toThrow();
+    expect(() => validateOperatorConfig(withPolicy({ access: "workspace_write", write_scope: ["src"] })))
+      .toThrow(/may contain only access/);
+    expect(() => validateOperatorConfig(withPolicy({ access: "workspace_write", source_prefixes: ["src"] })))
+      .toThrow(/may contain only access/);
+    expect(() => validateOperatorConfig(withPolicy({}))).toThrow(/access must be/);
   });
 
   it("loads relative state paths and validates references before applying", () => {

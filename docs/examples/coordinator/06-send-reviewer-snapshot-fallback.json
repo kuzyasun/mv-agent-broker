@@ -1,6 +1,6 @@
 {
   "tool": "agent_session_send",
-  "note": "Explicit snapshot review for non-Git sources: spawn a review_slot reviewer and send only review_binding. The broker materializes the target locally and delivers a complete text diff; binary changes can block that diff. Git review is the default for both committed and uncommitted Git work.",
+  "note": "Advanced manual snapshot review for non-Git sources or a deliberately captured comparison: register a review_slot, capture baseline and target explicitly, then send review_binding. Ordinary physical-checkout review uses Git directly with no binding.",
   "arguments": {
     "session_id": "<review-slot-reviewer-session-id>",
     "idempotency_key": "<new-unique-key>",

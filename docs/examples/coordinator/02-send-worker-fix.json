@@ -1,6 +1,6 @@
 {
   "tool": "agent_session_send",
-  "note": "Fix task to the same worker session. Exactly one binding: workspace_precondition. The sealed findings artifact is a required input; old materialized input paths from earlier turns are not reused.",
+  "note": "Send a follow-up task to the same worker session. Ordinary sends need only the session ID, a new idempotency key, and the task. Retained artifacts can be supplied as useful context; no snapshot precondition is needed.",
   "arguments": {
     "session_id": "<same-worker-session-id>",
     "idempotency_key": "<new-unique-key>",
@@ -22,9 +22,6 @@
       "checks": [
         "Run the documented offline checks for the touched module and report exact commands and results."
       ]
-    },
-    "workspace_precondition": {
-      "expected_snapshot_id": "<latest-usable-workspace-snapshot-id>"
     }
   }
 }

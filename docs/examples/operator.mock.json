@@ -18,14 +18,12 @@
     { "account_profile_id": "mock-account", "provider": "mock", "quota_scope_id": "mock", "auth_mode": "cli-owned" }
   ],
   "workspaces": [
-    { "workspace_id": "demo-current", "project_id": "demo", "mode": "current", "canonical_path": "../..", "coverage_profile_id": "demo-source" }
+    { "workspace_id": "demo-current", "project_id": "demo", "mode": "current", "canonical_path": "../.." }
   ],
   "policy_profiles": [
     { "policy_profile_id": "demo-read-only", "version": "1", "config": { "access": "read_only" } }
   ],
-  "coverage_profiles": [
-    { "coverage_profile_id": "demo-source", "config": { "source_prefixes": ["."], "non_source_prefixes": [], "excluded_prefixes": [".git", ".state", "node_modules", "dist", "coverage"] } }
-  ],
+  "coverage_profiles": [],
   "routes": [
     {
       "route_id": "mock-worker",

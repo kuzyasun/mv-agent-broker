@@ -154,6 +154,10 @@ describe("Cursor adapter", () => {
       workspace_path: f.root, effective_policy: policy }), gate(), () => {});
     const inspection = JSON.parse(result.agent_reported!.summary);
     expect(inspection.args.includes("--force")).toBe(mode === "worker");
+    if (mode === "read-only-worker") {
+      expect(inspection.args).toEqual(expect.arrayContaining(["--mode", "ask"]));
+      expect(inspection.cursorConfig).toBeTruthy();
+    }
     expect(inspection.args).not.toContain("--approve-mcps");
   });
   it("uses ask mode for reviewer reports and leaves worker mode unchanged", async () => {

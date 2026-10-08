@@ -12,11 +12,10 @@
  * - zcode config-catalog observation with ZERO subprocess (never /model):
  *   bundle metadata version, null unknowns, cache invalidation on config
  *   fingerprint change,
- * - core: observation bound durably into the provision intent, observed
- *   cli_version persisted truthfully, account/quota/readiness drift refused
- *   before acceptance with zero resources, idempotent replay bypasses
- *   readiness, unknown stays null, failed-first-turn continuation is the
- *   requested route (not ref presence).
+ * - core: adapter probing happens once at dispatch, actual account/route
+ *   errors refuse inference, installation/catalog changes do not invalidate
+ *   idle sessions, idempotent replay bypasses duplicate work, and unknown
+ *   metadata stays null.
  */
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -36,7 +35,6 @@ import {
   assertProbeArgvSafe,
   fingerprintBinaryTarget,
   hashFileBounded,
-  fingerprintReadinessObservation,
   readReadinessObservation,
   runMetadataProbe,
   isProviderReadinessObservation,
@@ -159,7 +157,7 @@ describe("cursor readiness probes", () => {
     expect(readInvocations(f.logFile).some((i) => i.args.some((a) => a === "--print"))).toBe(false);
   });
 
-  it("broker forwards the requested model and effort to preflight before creating a session", async () => {
+  it("spawns without probing and forwards the requested model/effort to dispatch preflight", async () => {
     const f = cursorFixture();
     const h = createHarness();
     try {
@@ -170,8 +168,7 @@ describe("cursor readiness probes", () => {
         quota_scope_id: "qs-shared",
         auth_mode: "native",
       });
-      const before = brokerCounts(h);
-      expect(() => h.core.spawn(h.seed.coordinatorId, {
+      const spawn = h.core.spawn(h.seed.coordinatorId, {
         project_id: h.seed.projectId,
         idempotency_key: "cursor-unavailable-effort",
         provider: "cursor",
@@ -182,8 +179,15 @@ describe("cursor readiness probes", () => {
         instructions: "test",
         workspace: { mode: "current", workspace_id: h.seed.workspaceMain },
         policy_profile_id: "pol-writer",
-      })).toThrow(expect.objectContaining({ code: "MODEL_UNAVAILABLE" }));
-      expect(brokerCounts(h)).toEqual(before);
+      });
+      expect(spawn.state).toBe("IDLE");
+      expect(existsSync(f.logFile)).toBe(false);
+      const sent = h.sendTask(spawn.session_id, "cursor-unavailable-effort-send");
+      await start(h, sent);
+      await settle(h);
+      expect(h.core.turnStatus(h.seed.coordinatorId, sent.turn_id)).toMatchObject({
+        state: "FAILED", error_code: "MODEL_UNAVAILABLE", execution_started: false,
+      });
       expect(readInvocations(f.logFile).some((i) => i.args.some((a) => a === "--print"))).toBe(false);
     } finally {
       h.cleanup();
@@ -529,19 +533,19 @@ function brokerCounts(h: Harness): { sessions: number; turns: number; idempotenc
   };
 }
 
-/** core.send is synchronous: capture its BrokerError refusal directly. */
+/** Capture synchronous send rejections that must happen before acceptance. */
 function sendError(h: Harness, sessionId: string, key: string): BrokerError {
   try {
     h.sendTask(sessionId, key);
-  } catch (e) {
-    expect(e).toBeInstanceOf(BrokerError);
-    return e as BrokerError;
+  } catch (error) {
+    expect(error).toBeInstanceOf(BrokerError);
+    return error as BrokerError;
   }
   throw new Error("expected send to refuse");
 }
 
-describe("core durable provider binding", () => {
-  it("seals the observed readiness + registered account tuple into the provision intent and persists observed cli_version truthfully", async () => {
+describe("core provider dispatch checks", () => {
+  it("does not probe during spawn and retains the registered account tuple", async () => {
     const h = createHarness();
     try {
       const spy = installSpy(h, observation());
@@ -556,21 +560,24 @@ describe("core durable provider binding", () => {
         quota_scope_id: "qs-shared",
       });
       expect(binding!.adapter_version).toBe("0.1.0");
-      expect(binding!.cli_version).toBe("1.2.3");
-      const readiness = binding!.readiness as Record<string, unknown>;
-      expect(readiness.source).toBe("cli_metadata_probe");
-      expect(readiness.authenticated).toBe(true);
-      expect(typeof readiness.fingerprint).toBe("string");
+      expect(binding!.cli_version).toBeNull();
+      expect(binding!.readiness).toBeNull();
 
       const session = h.core.sessionStatus(h.seed.coordinatorId, spawn.session_id);
-      expect(session.cli_version).toBe("1.2.3"); // observed, not fabricated
+      expect(session.cli_version).toBeNull(); // no spawn-time probe
       expect(session.effective_model).toBeNull(); // never a request echo
 
       const bindingStatus = h.core.sessionProviderBinding(h.seed.coordinatorId, spawn.session_id);
       expect(bindingStatus.account).toEqual(binding!.account);
-      expect(bindingStatus.authenticated).toBe(true);
-      expect(bindingStatus.readiness_source).toBe("cli_metadata_probe");
-      expect(spy.preflightCalls).toHaveLength(1); // spawn only
+      expect(bindingStatus.authenticated).toBeNull();
+      expect(bindingStatus.readiness_source).toBeNull();
+      expect(spy.preflightCalls).toHaveLength(0);
+
+      const sent = h.sendTask(spawn.session_id, "dispatch-probe");
+      h.adapter.plan(sent.turn_id, [{ kind: "complete", outcome: "completed" }]);
+      await start(h, sent);
+      await settle(h);
+      expect(spy.preflightCalls).toHaveLength(1);
     } finally {
       h.cleanup();
     }
@@ -579,7 +586,7 @@ describe("core durable provider binding", () => {
   it("keeps unknown readiness null (void-compatible adapters) and still sends", async () => {
     const h = createHarness();
     try {
-      installSpy(h, null);
+      const spy = installSpy(h, null);
       const spawn = await h.spawnWorkerSession();
       const binding = provisionBinding(h, spawn.session_id);
       expect(binding!.readiness).toBeNull(); // no observed readiness for void-compatible adapters
@@ -589,6 +596,7 @@ describe("core durable provider binding", () => {
       const bindingStatus = h.core.sessionProviderBinding(h.seed.coordinatorId, spawn.session_id);
       expect(bindingStatus.authenticated).toBeNull(); // unknown — never false
       expect(bindingStatus.readiness_fingerprint).toBeNull();
+      expect(spy.preflightCalls).toHaveLength(0);
 
       const sent = h.sendTask(spawn.session_id, "void-send");
       h.adapter.plan(sent.turn_id, [{ kind: "complete", outcome: "completed" }]);
@@ -600,64 +608,48 @@ describe("core durable provider binding", () => {
     }
   });
 
-  it("refuses a turn when the live account row drifts from the durable tuple (quota alias or auth mode): zero accepted resources", async () => {
+  it("refuses acceptance when the live account row drifts from the registered tuple", async () => {
     const h = createHarness();
     try {
       installSpy(h, observation());
       const spawn = await h.spawnWorkerSession();
       const before = brokerCounts(h);
-
       h.db.raw.prepare("UPDATE account_profiles SET quota_scope_id='qs-drifted' WHERE account_profile_id=?").run(h.seed.accountMock1);
-      const quotaError = sendError(h, spawn.session_id, "drift-quota");
-      expect(quotaError.executionStarted).toBe(false);
+      expect(sendError(h, spawn.session_id, "drift-quota").code).toBe("PROVIDER_INCOMPATIBLE");
       expect(brokerCounts(h)).toEqual(before);
 
-      // Key freed as a mutable rejection; restored binding admits the retry.
+      // The rejected key is reusable after restoring the account tuple.
       h.db.raw.prepare("UPDATE account_profiles SET quota_scope_id='qs-shared' WHERE account_profile_id=?").run(h.seed.accountMock1);
       h.db.raw.prepare("UPDATE account_profiles SET auth_mode='api-key' WHERE account_profile_id=?").run(h.seed.accountMock1);
-      const authError = sendError(h, spawn.session_id, "drift-auth");
-      expect(authError.code).toBe("PROVIDER_INCOMPATIBLE");
+      expect(sendError(h, spawn.session_id, "drift-auth").code).toBe("PROVIDER_INCOMPATIBLE");
       expect(brokerCounts(h)).toEqual(before);
 
       h.db.raw.prepare("UPDATE account_profiles SET auth_mode='native' WHERE account_profile_id=?").run(h.seed.accountMock1);
-      const sent = h.sendTask(spawn.session_id, "drift-quota"); // same freed key
+      const sent = h.sendTask(spawn.session_id, "drift-quota");
       expect(sent.state).toBe("ACCEPTED");
     } finally {
       h.cleanup();
     }
   });
 
-  it("refuses a turn when observed readiness drifts from the durable fingerprint — before acceptance", async () => {
-    const h = createHarness();
-    try {
-      const spy = installSpy(h, observation());
-      const spawn = await h.spawnWorkerSession();
-      const before = brokerCounts(h);
-      spy.observation = observation({ cli_version: "9.9.9", input_fingerprint: "b".repeat(64) });
-      const error = sendError(h, spawn.session_id, "readiness-drift");
-      expect(error.code).toBe("PROVIDER_INCOMPATIBLE");
-      expect(error.message).toMatch(/replacement session/);
-      expect(brokerCounts(h)).toEqual(before); // zero accepted resources
-    } finally {
-      h.cleanup();
-    }
-  });
-
-  it("forwards requested model/effort preflight refusal before accepting an existing-session turn", async () => {
+  it("forwards a current model/effort preflight refusal before inference", async () => {
     const h = createHarness();
     try {
       const spy = installSpy(h, observation());
       const spawn = await h.spawnWorkerSession({ model: "mock-model-1", effort: "high" });
-      const before = brokerCounts(h);
+      expect(spy.preflightCalls).toHaveLength(0);
 
       spy.preflightError = new BrokerError("MODEL_UNAVAILABLE", "requested model-effort route is unavailable", {
         executionStarted: false,
       });
-      const error = sendError(h, spawn.session_id, "unavailable-route-send");
-      expect(error.code).toBe("MODEL_UNAVAILABLE");
-      expect(error.executionStarted).toBe(false);
+      const sent = h.sendTask(spawn.session_id, "unavailable-route-send");
+      await start(h, sent);
+      await settle(h);
+      expect(h.core.turnStatus(h.seed.coordinatorId, sent.turn_id)).toMatchObject({
+        state: "FAILED", error_code: "MODEL_UNAVAILABLE", execution_started: false,
+      });
+      expect(h.adapter.dispatchPermissionAcquired(sent.turn_id)).toBe(false);
       expect(spy.preflightCalls.at(-1)).toMatchObject({ model: "mock-model-1", effort: "high" });
-      expect(brokerCounts(h)).toEqual(before);
     } finally {
       h.cleanup();
     }
@@ -671,20 +663,19 @@ describe("core durable provider binding", () => {
       const spawn = await h.spawnWorkerSession();
 
       // A newly available or reordered catalog remains useful to route checks,
-      // but does not alter durable CLI/config/account identity.
+      // but does not alter this session's captured access or account grant.
       spy.observation = observation({ model_catalog: ["new-model", "mock-model-1"] });
-      expect(fingerprintReadinessObservation(spy.observation)).toBe(
-        fingerprintReadinessObservation(initialObservation),
-      );
       const sent = h.sendTask(spawn.session_id, "catalog-change-send");
       expect(sent.state).toBe("ACCEPTED");
 
-      // The dispatch recheck sees a further catalog change after admission.
+      // Dispatch probes the current installation once; catalog drift itself
+      // does not invalidate an otherwise available selected model.
       spy.observation = observation({ model_catalog: ["mock-model-1", "new-model"] });
       h.adapter.plan(sent.turn_id, [{ kind: "complete", outcome: "completed" }]);
       await start(h, sent);
       await settle(h);
       expect(h.core.turnStatus(h.seed.coordinatorId, sent.turn_id).state).toBe("SUCCEEDED");
+      expect(spy.preflightCalls).toHaveLength(1);
       expect(spy.preflightCalls.at(-1)).toMatchObject({ model: "mock-model-1", effort: null });
     } finally {
       h.cleanup();
@@ -703,6 +694,13 @@ describe("core durable provider binding", () => {
       expect(replay.replayed_request).toBe(true);
       expect(replay.turn_id).toBe(sent.turn_id);
       expect(spy.preflightCalls.length).toBe(callsAfterAccept);
+      expect(callsAfterAccept).toBe(0);
+      await start(h, sent);
+      await settle(h);
+      expect(spy.preflightCalls).toHaveLength(1);
+      expect(h.core.turnStatus(h.seed.coordinatorId, sent.turn_id)).toMatchObject({
+        state: "FAILED", error_code: "AUTH_REQUIRED", execution_started: false,
+      });
     } finally {
       h.cleanup();
     }
@@ -740,7 +738,7 @@ describe("core durable provider binding", () => {
     }
   });
 
-  it("refuses native legacy sessions without bound tuple before admission: replacement required", async () => {
+  it("refuses native legacy sessions without a bound account tuple before inference", async () => {
     const f = cursorFixture();
     const h = createHarness();
     try {
@@ -763,7 +761,7 @@ describe("core durable provider binding", () => {
     }
   });
 
-  it("PATH retarget invalidates cached readiness and refuses durable session", async () => {
+  it("PATH retarget does not invalidate an idle session; dispatch checks the current adapter", async () => {
     const fA = cursorFixture();
     const fB = cursorFixture();
 
@@ -777,14 +775,13 @@ describe("core durable provider binding", () => {
         auth_mode: "native",
       });
       const spawn = await h.spawnWorkerSession({ provider: "cursor", model: "auto", account_profile_id: "acct-cursor-path" });
-      const binding = provisionBinding(h, spawn.session_id);
-      expect(binding).toBeDefined();
-
       // Now swap adapter to the retargeted binary location
       h.core.adapters.set("cursor", fB.adapter);
-      const err = sendError(h, spawn.session_id, "path-drift-send");
-      expect(err.code).toBe("PROVIDER_INCOMPATIBLE");
-      expect(err.message).toMatch(/Observed provider readiness drifted from the session's durable binding/);
+      const sent = h.sendTask(spawn.session_id, "path-change-send");
+      await start(h, sent);
+      await settle(h);
+      expect(h.core.turnStatus(h.seed.coordinatorId, sent.turn_id)).toMatchObject({ state: "SUCCEEDED" });
+      expect(readInvocations(fB.logFile).length).toBeGreaterThan(0);
     } finally {
       h.cleanup();
     }
@@ -886,7 +883,7 @@ describe("primary readiness regression checks", () => {
     mkdirSync(sameDate);
     expect(()=>fingerprintBinaryTarget(wrapper)).toThrow(/ambiguous/);
   });
-  it("malformed, foreign and missing native observations cannot bypass binding", () => {
+  it("validates observation records and does not probe during spawn", async () => {
     expect(()=>readReadinessObservation({},"mock")).toThrow(/invalid/);
     expect(()=>readReadinessObservation(observation(),"cursor")).toThrow(/invalid/);
     expect(()=>readReadinessObservation(undefined,"cursor")).toThrow(/no readiness/);
@@ -894,10 +891,8 @@ describe("primary readiness regression checks", () => {
     const h=createHarness();
     try {
       const spy=installSpy(h,observation());
-      spy.observation={} as ProviderReadinessObservation;
-      const before=brokerCounts(h);
-      expect(()=>h.core.spawn(h.seed.coordinatorId,{project_id:h.seed.projectId,idempotency_key:"bad-obs",provider:"mock",account_profile_id:h.seed.accountMock1,model:"mock-model-1",role:"worker",instructions:"test",workspace:{mode:"current",workspace_id:h.seed.workspaceMain},policy_profile_id:"pol-writer"})).toThrow(/invalid readiness/);
-      expect(brokerCounts(h)).toEqual(before);
+      const spawn=await h.spawnWorkerSession();
+      expect(spy.preflightCalls).toHaveLength(0);
     } finally {h.cleanup();}
   });
   it("metadata limits must be finite and positive before any subprocess", () => {
@@ -918,7 +913,7 @@ describe("primary readiness regression checks", () => {
       expect(h.adapter.dispatchPermissionAcquired(sent.turn_id)).toBe(false);
     } finally {h.cleanup();}
   });
-  it("persisted null quota binding refuses live non-null scope without reinterpretation", async () => {
+  it("persisted null quota binding refuses admission without reinterpretation", async () => {
     const h=createHarness();
     try {
       installSpy(h,observation());
@@ -946,7 +941,9 @@ it("corrupt persisted binding metadata refuses instead of fabricating version or
       const payload=JSON.parse(row.payload);
       Object.assign(payload.provider_binding,change);
       h.db.raw.prepare("UPDATE intents SET payload=? WHERE intent_id=?").run(JSON.stringify(payload),row.intent_id);
+      const counts=brokerCounts(h);
       expect(sendError(h,spawn.session_id,"corrupt-"+JSON.stringify(change)).code).toBe("POLICY_UNSUPPORTED");
+      expect(brokerCounts(h)).toEqual(counts);
     }
   } finally {h.cleanup();}
 });

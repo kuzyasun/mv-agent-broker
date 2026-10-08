@@ -25,6 +25,14 @@ function simulate(records: unknown[] = [thread, message, completed], processOver
 const gate = () => ({ acquireDispatchPermission: vi.fn(), cancellationRequested: () => null });
 
 describe("Codex JSONL adapter", () => {
+  it("uses read-only sandbox for a worker audit narrowed by effective access", async () => {
+    const runner = simulate();
+    await new CodexAdapter({ binary: "codex" }).executeTurn(request({
+      role: "worker", effective_policy: { access: "read_only" } as NonNullable<TurnExecutionRequest["effective_policy"]>,
+    }), gate(), () => {});
+    expect(runner.mock.calls[0]![0].args.slice(0, 3)).toEqual(["exec", "--sandbox", "read-only"]);
+  });
+
   it("replays the retained native process streams without inference", async () => {
     const evidence = JSON.parse(readFileSync(new URL("../../docs/native-smoke/2026-09-30-codex/mcp-resume.evidence.json", import.meta.url), "utf8"));
     for (let i = 0; i < 2; i++) {

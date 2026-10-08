@@ -77,7 +77,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agents_list",
-      description: "Discover routes and currently selectable workspaces for one allowed project. Follow every next_cursor. Choose an exact enabled route and a workspace from its compatible_workspace_ids, computed for its displayed effective_policy; historical registrations are not new-spawn candidates. Explicit read_only/scope restrictions may make additional active workspaces compatible; spawn validates the actual policy before creating a session. Discovery does not prove provider readiness or quota (§10.1.2).",
+      description: "Discover enabled profiles and healthy workspaces for one project; follow every next_cursor. Choose an exact route_id and compatible_workspace_id. Profile access is read-only or write all project. Multiple agents may run in separate checkouts, subject to concurrency and shared provider quotas.",
       inputSchema: {
         type: "object",
         properties: { project_id: str, cursor: str, limit: int(1, 100) },
@@ -87,7 +87,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_spawn",
-      description: "Create an idempotent durable session without provider inference. After READY and complete project route discovery, spawn with the exact configured route, project, workspace and unique key; use policy_restrictions.access='read_only' for a read-only worker audit. Then inspect agent_session_status.effective_policy and required_send_binding before sending. Task wording, including 'read-only', does not set session policy; task paths do not imply narrower policy_restrictions.write_scope, which is set only at the operator's request. A workspace_write profile without explicit scope covers the project. reviewer/current or worktree uses Git review; reviewer/review_slot uses snapshot review (§6.1, §8.3).",
+      description: "Create a reusable session without inference. Select the discovered project, route and current/worktree workspace; access=read_only can narrow a write profile for an audit. Omit access to use the profile setting. Reviewers and researchers inspect the same checkout using files and Git. No snapshot is needed. Use separate worktrees for parallel writers. A session can be closed and recreated on the same route when needed.",
       inputSchema: {
         type: "object",
         properties: {
@@ -110,15 +110,7 @@ export function bridgeToolDefs(): McpToolDef[] {
             additionalProperties: false,
           },
           policy_profile_id: str,
-          policy_restrictions: {
-            type: "object",
-            description: "Optional narrowing of the configured policy. For a read-only audit on a worker route, set access to read_only; this grants no writes.",
-            properties: {
-              access: { type: "string", enum: ["read_only", "workspace_write"] },
-              write_scope: { type: "array", items: str, description: "Explicit operator-requested write prefixes only; [] denies writes. Task paths do not imply a scope restriction." },
-            },
-            additionalProperties: false,
-          },
+          access: { type: "string", enum: ["read_only", "workspace_write"], description: "Omit for profile access; read_only narrows a write profile. No file allowlists." },
         },
         required: ["project_id", "idempotency_key", "instructions", "workspace"],
         // Keep fields visible to MCP clients that flatten root unions into opaque
@@ -130,7 +122,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_workspace_snapshot",
-      description: "Capture a registered workspace into local broker snapshot storage under read admission; this reads files but launches no inference and sends nothing to a vendor. Use the returned snap ID for a worker precondition or snapshot review binding, never as an artifact_ref. Idempotent (§10.1.1).",
+      description: "Optional manual local snapshot for diagnostics or explicit review_slot snapshot comparison. Reads files into local broker storage; launches no inference. Ordinary current/worktree tasks and Git reviews do not need snapshots. Snapshot IDs are not artifact IDs.",
       inputSchema: {
         type: "object",
         properties: { project_id: str, workspace_id: str, idempotency_key: str },
@@ -151,12 +143,12 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_status",
-      description: "Inspect a session before sending: returns state, snapshots, effective_policy {access, write_scope} from the immutable spawn-time policy, and required_send_binding. Match that binding exactly; read-only worker audits still require workspace_precondition. effective_policy is null if unavailable or malformed (§10.1).",
+      description: "Inspect state, active turn and captured profile access. required_send_binding=none for ordinary current/worktree sessions; only an explicit snapshot review_slot requires review_binding. CLI or catalogue updates do not invalidate the session.",
       inputSchema: { type: "object", properties: { session_id: str }, required: ["session_id"], additionalProperties: false },
     },
     {
       name: "agent_session_send",
-      description: "Send a task and launch one provider inference run; returns turn_id without waiting. First inspect required_send_binding, then provide exactly that one binding: workspace_precondition for every non-reviewer worker (including read-only audits), review_binding for reviewer/review_slot, or git_review_binding for reviewer current/worktree. Git review needs no snapshot; for dirty review set include_working_tree=true and bind both commit IDs to current HEAD. Use snap IDs only in snapshot bindings, artifact_refs only for art IDs, and relevant_paths for file paths. On an unknown response, inspect the same session/turn and retry only with the original key and unchanged arguments (§7.2).",
+      description: "Run a task in the session checkout. For current/worktree, send only session_id, idempotency_key and task with a goal; no snapshot or review binding. Review instructions can name Git commits or uncommitted changes. relevant_paths are guidance, not permissions. artifact_refs is optional and accepts only art IDs. Only explicit review_slot requires baseline/target review_binding. Returns turn_id; wait for terminal events then read the result. If a response is unknown, inspect the same turn and reuse the original key before creating another paid run.",
       inputSchema: {
         type: "object",
         properties: {
@@ -168,22 +160,15 @@ export function bridgeToolDefs(): McpToolDef[] {
               acceptance_criteria: { type: "array", items: str },
               relevant_paths: { type: "array", items: str },
               context: str,
-              artifact_refs: { type: "array", items: str, description: "Required artifact IDs from this project's broker results (art-...), not snapshot IDs or file paths. Use [] when none. Snapshot IDs belong in workspace_precondition or review_binding." },
+              artifact_refs: { type: "array", items: str, description: "Optional artifact IDs from this project (art-...). Omit when none; file paths belong in relevant_paths." },
               checks: { type: "array", items: str },
             },
-            required: ["goal", "artifact_refs"],
-            additionalProperties: false,
-          },
-          workspace_precondition: {
-            type: "object",
-            description: "Physical worker workspace only. Omit when supplying another binding.",
-            properties: { expected_snapshot_id: { ...str, description: "Snapshot ID (snap-...) matching the worker's registered workspace state." } },
-            required: ["expected_snapshot_id"],
+            required: ["goal"],
             additionalProperties: false,
           },
           review_binding: {
             type: "object",
-            description: "Snapshot review_slot turns only. Explicit dirty-workspace alternative to Git review.",
+            description: "Required only for an explicit manual snapshot review_slot; omit for current/worktree.",
             properties: {
               baseline_snapshot_id: { ...str, description: "Baseline broker snapshot ID (snap-...)." },
               target_snapshot_id: { ...str, description: "Target broker snapshot ID (snap-...)." },
@@ -191,17 +176,7 @@ export function bridgeToolDefs(): McpToolDef[] {
             required: ["baseline_snapshot_id", "target_snapshot_id"],
             additionalProperties: false,
           },
-          git_review_binding: {
-            type: "object",
-            description: "Read-only Git reviewer turns only: full-hex base_commit and target_commit. By default requires a clean checkout; include_working_tree=true binds an uncommitted checkout digest. The broker delivers no snapshots or diff bytes.",
-            properties: {
-              base_commit: { ...str, description: "Full hexadecimal Git base commit object ID." },
-              target_commit: { ...str, description: "Full hexadecimal Git target commit object ID; checkout HEAD must match this commit." },
-              include_working_tree: { type: "boolean", description: "Set true to include staged, unstaged and nonignored untracked changes in the checkout fingerprint. For an uncommitted review, use HEAD for both commit IDs." },
-            },
-            required: ["base_commit", "target_commit"],
-            additionalProperties: false,
-          },
+
         },
         required: ["session_id", "idempotency_key", "task"],
         additionalProperties: false,
@@ -215,7 +190,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_turn_result",
-      description: "Read the bounded terminal result once after events/status show a terminal turn; nonterminal turns return RESULT_NOT_READY (§11).",
+      description: "Read the terminal execution result and retained report after events/status show a terminal turn. SUCCEEDED means the native run completed; quality_status=unreviewed means the coordinator still decides whether to accept the work. No automatic workspace snapshot or file-change attribution is performed.",
       inputSchema: { type: "object", properties: { turn_id: str }, required: ["turn_id"], additionalProperties: false },
     },
     {
@@ -309,9 +284,6 @@ function turnDto(t: TurnRecord) {
     input_manifest_id: t.input_manifest_id,
     baseline_snapshot_id: t.baseline_snapshot_id,
     review_target_snapshot_id: t.review_target_snapshot_id,
-    git_base_commit: t.git_base_commit,
-    git_target_commit: t.git_target_commit,
-    git_working_tree_digest: t.git_working_tree_digest,
     final_snapshot_id: t.final_snapshot_id,
     continuation: t.continuation,
     created_at: t.created_at,
@@ -364,9 +336,6 @@ function turnResultDto(core: BrokerCore, coordinatorId: string, turn: TurnRecord
       input_manifest_id: turn.input_manifest_id,
       baseline_snapshot_id: turn.baseline_snapshot_id,
       review_target_snapshot_id: turn.review_target_snapshot_id,
-      git_base_commit: turn.git_base_commit,
-      git_target_commit: turn.git_target_commit,
-      git_working_tree_digest: turn.git_working_tree_digest,
       final_snapshot_id: turn.final_snapshot_id,
       error_code: turn.error_code,
     },
@@ -401,7 +370,7 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
     case "agent_session_spawn": {
       rejectUnknownKeys(rawArgs, [
         "project_id", "idempotency_key", "route_id", "provider", "account_profile_id", "model", "effort",
-        "role", "instructions", "workspace", "policy_profile_id", "policy_restrictions",
+        "role", "instructions", "workspace", "policy_profile_id", "access",
       ]);
       const rawRole = optionalString(rawArgs, "role");
       if (rawRole !== undefined && rawRole !== "worker" && rawRole !== "reviewer" && rawRole !== "researcher") {
@@ -439,9 +408,7 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
         ...(effort !== undefined ? { effort } : {}),
         ...(rawRole !== undefined ? { role: rawRole } : {}),
         ...(policyProfileId !== undefined ? { policy_profile_id: policyProfileId } : {}),
-        ...(rawArgs.policy_restrictions !== undefined
-          ? { policy_restrictions: rawArgs.policy_restrictions as Record<string, unknown> }
-          : {}),
+        ...(rawArgs.access !== undefined ? { access: requireString(rawArgs, "access") as "read_only" | "workspace_write" } : {}),
       });
     }
     case "agent_workspace_snapshot": {
@@ -475,35 +442,18 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
       };
     }
     case "agent_session_send": {
-      rejectUnknownKeys(rawArgs, [
-        "session_id", "idempotency_key", "task", "workspace_precondition", "review_binding",
-        "git_review_binding", "deadline_ms", "retry_of_turn_id",
-      ]);
+      rejectUnknownKeys(rawArgs, ["session_id", "idempotency_key", "task", "review_binding", "deadline_ms", "retry_of_turn_id"]);
       const task = rawArgs.task as Record<string, unknown> | undefined;
-      if (!task) throw new BrokerError("INVALID_REQUEST", "Argument 'task' is required.");
-      if (!Array.isArray(task.artifact_refs)) {
-        throw new BrokerError("INVALID_REQUEST", "task.artifact_refs must be an array.");
+      if (!task || typeof task !== "object" || Array.isArray(task)) throw new BrokerError("INVALID_REQUEST", "Argument 'task' must be an object.");
+      rejectUnknownKeys(task, ["goal", "acceptance_criteria", "relevant_paths", "context", "artifact_refs", "checks"]);
+      let reviewBinding: { baseline_snapshot_id: string; target_snapshot_id: string } | undefined;
+      if (rawArgs.review_binding !== undefined) {
+        const binding = rawArgs.review_binding;
+        if (!binding || typeof binding !== "object" || Array.isArray(binding)) throw new BrokerError("INVALID_REQUEST", "review_binding must be an object.");
+        const record = binding as Record<string, unknown>;
+        rejectUnknownKeys(record, ["baseline_snapshot_id", "target_snapshot_id"]);
+        reviewBinding = { baseline_snapshot_id: requireString(record, "baseline_snapshot_id"), target_snapshot_id: requireString(record, "target_snapshot_id") };
       }
-      const bindingNames = ["workspace_precondition", "review_binding", "git_review_binding"] as const;
-      const presentBindings = bindingNames.filter((name) => rawArgs[name] !== undefined);
-      if (presentBindings.length !== 1) {
-        throw new BrokerError("INVALID_REQUEST", "Exactly one of workspace_precondition / review_binding / git_review_binding is required. Physical worker turns send workspace_precondition only; review_slot turns send review_binding only; Git reviewer turns send git_review_binding only.");
-      }
-      const bindingName = presentBindings[0]!;
-      const binding = rawArgs[bindingName];
-      if (binding === null || typeof binding !== "object" || Array.isArray(binding)) {
-        throw new BrokerError("INVALID_REQUEST", `${bindingName} must be an object.`);
-      }
-      const bindingRecord = binding as Record<string, unknown>;
-      rejectUnknownKeys(bindingRecord, bindingName === "git_review_binding"
-        ? ["base_commit", "target_commit", "include_working_tree"]
-        : bindingName === "review_binding"
-          ? ["baseline_snapshot_id", "target_snapshot_id"]
-          : ["expected_snapshot_id"]);
-      if (bindingName === "git_review_binding" && bindingRecord.include_working_tree !== undefined && typeof bindingRecord.include_working_tree !== "boolean") {
-        throw new BrokerError("INVALID_REQUEST", "Argument 'include_working_tree' must be a boolean.");
-      }
-      const requireBindingString = (name: string): string => requireString(binding as Record<string, unknown>, name);
       return core.send(ctx.coordinatorId, {
         session_id: requireString(rawArgs, "session_id"),
         idempotency_key: requireString(rawArgs, "idempotency_key"),
@@ -512,27 +462,10 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
           acceptance_criteria: optionalStringArray(task, "acceptance_criteria"),
           relevant_paths: optionalStringArray(task, "relevant_paths"),
           context: optionalString(task, "context"),
-          artifact_refs: task.artifact_refs as string[],
+          artifact_refs: optionalStringArray(task, "artifact_refs") ?? [],
           checks: optionalStringArray(task, "checks"),
         },
-        ...(bindingName === "workspace_precondition"
-          ? { workspace_precondition: { expected_snapshot_id: requireBindingString("expected_snapshot_id") } }
-          : bindingName === "review_binding"
-            ? {
-                review_binding: {
-                  baseline_snapshot_id: requireBindingString("baseline_snapshot_id"),
-                  target_snapshot_id: requireBindingString("target_snapshot_id"),
-                },
-              }
-            : {
-                git_review_binding: {
-                  base_commit: requireBindingString("base_commit"),
-                  target_commit: requireBindingString("target_commit"),
-                  ...(typeof (binding as Record<string, unknown>).include_working_tree === "boolean"
-                    ? { include_working_tree: (binding as Record<string, unknown>).include_working_tree as boolean }
-                    : {}),
-                },
-              }),
+        ...(reviewBinding ? { review_binding: reviewBinding } : {}),
         ...(optionalInt(rawArgs, "deadline_ms", 1000, 86_400_000) !== undefined
           ? { deadline_ms: optionalInt(rawArgs, "deadline_ms", 1000, 86_400_000) }
           : {}),

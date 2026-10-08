@@ -52,15 +52,17 @@ relevant paths, inputs, baseline, checks and deadline. Task paths guide the
 worker; they do not impose a file permission allowlist. Use isolated worktrees
 for parallel writes. Spawn using project_id, route_id, instructions, workspace
 and unique idempotency key; omit raw provider/model/account/role/policy fields.
-Send with the initial/latest sealed snapshot as workspace precondition. Read
+Send session_id, idempotency_key and task.goal directly; no snapshot or special binding is required. Read
 bounded event deltas with the last consumed numeric cursor and waits/backoff;
 retrieve result once after terminal status. SUCCEEDED proves execution, not
 quality. Do not replace UNKNOWN turns or replay lost responses with new keys.
 
-Use a separate reviewer profile in the author's registered checkout, with
-`git_review_binding` (full base/target commit IDs). Add `include_working_tree: true` for uncommitted changes and pause writes until review ends. To keep
-authoring in parallel, review the committed target in a separate worktree.
-`dmp-review-project` and snapshot `review_binding` are explicit alternatives.
+Use a separate read-only reviewer profile in the selected current/worktree
+checkout. It reads Git and project files, including uncommitted changes, from a
+plain task send. Read-only does not freeze the checkout or block a writer; use
+an isolated worktree when an unchanged review target matters.
+`dmp-review-project` with manual snapshot `review_binding` is optional advanced
+comparison, not the ordinary workflow.
 Inspect actual diffs and run relevant
 acceptance checks yourself. Follow DMP ownership boundaries for public
 interfaces, shared build files, profiles and normative documents.

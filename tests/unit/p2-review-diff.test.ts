@@ -26,9 +26,9 @@ describe("review turn derived inputs (§7.1.1, §9.4)", () => {
       insertWorkspace(h.db, { workspace_id: "ws-review-limit", project_id: h.seed.projectId,
         mode: "review_slot", canonical_path: null, quarantined: false, quarantine_reason: null,
         coverage_profile_id: h.seed.coverageProfileId });
-      const reviewer = await h.spawnWorkerSession({ role: "reviewer", workspace: { mode: "review_slot", workspace_id: "ws-review-limit" } });
+      const reviewer = await h.spawnWorkerSession({ role: "reviewer", access: "read_only", workspace: { mode: "review_slot", workspace_id: "ws-review-limit" } });
       const worker = await h.spawnWorkerSession();
-      const baseline = h.core.sessionStatus(h.seed.coordinatorId, worker.session_id).initial_snapshot_id!;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-review-baseline" }).snapshot_id;
       h.writeWorkspaceFile("src/main.c", "int main(){return 42;}\n");
       const target = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId,
         workspace_id: h.seed.workspaceMain, idempotency_key: "limit-target" });
@@ -62,7 +62,7 @@ describe("review turn derived inputs (§7.1.1, §9.4)", () => {
 
       // 3. Spawn the reviewer session (metadata-only provisioning for review slots)
       const reviewer = await h.spawnWorkerSession({
-        role: "reviewer",
+        role: "reviewer", access: "read_only",
         workspace: { mode: "review_slot", workspace_id: "ws-review" },
       });
       expect(reviewer.state).toBe("IDLE");
@@ -70,7 +70,7 @@ describe("review turn derived inputs (§7.1.1, §9.4)", () => {
       // 5. Worker snapshot baseline taken before workspace file is changed
       const workerSpawn = await h.spawnWorkerSession();
       const workerStatus = h.core.sessionStatus(h.seed.coordinatorId, workerSpawn.session_id);
-      const baseline = workerStatus.initial_snapshot_id;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-review-baseline" }).snapshot_id;
       expect(baseline).toBeTruthy();
 
       // 4. Worker changes the code so a diff exists
@@ -171,13 +171,13 @@ describe("review turn derived inputs (§7.1.1, §9.4)", () => {
       });
 
       const reviewer = await h.spawnWorkerSession({
-        role: "reviewer",
+        role: "reviewer", access: "read_only",
         workspace: { mode: "review_slot", workspace_id: "ws-review-large" },
       });
 
       const workerSpawn = await h.spawnWorkerSession();
       const workerStatus = h.core.sessionStatus(h.seed.coordinatorId, workerSpawn.session_id);
-      const baseline = workerStatus.initial_snapshot_id;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-review-baseline" }).snapshot_id;
       expect(baseline).toBeTruthy();
 
       // Write >256KiB of changed code (~300KiB)
@@ -268,12 +268,12 @@ describe("review turn derived inputs (§7.1.1, §9.4)", () => {
       });
 
       const reviewer = await h.spawnWorkerSession({
-        role: "reviewer",
+        role: "reviewer", access: "read_only",
         workspace: { mode: "review_slot", workspace_id: "ws-review-oversize" },
       });
 
       const workerSpawn = await h.spawnWorkerSession();
-      const baseline = h.core.sessionStatus(h.seed.coordinatorId, workerSpawn.session_id).initial_snapshot_id!;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-review-baseline" }).snapshot_id;
       expect(baseline).toBeTruthy();
 
       // ~9.5 MiB of changed text in ONE file: the complete diff tail and the
@@ -355,11 +355,11 @@ describe("review turn derived inputs (§7.1.1, §9.4)", () => {
         coverage_profile_id: h.seed.coverageProfileId,
       });
       const reviewer = await h.spawnWorkerSession({
-        role: "reviewer",
+        role: "reviewer", access: "read_only",
         workspace: { mode: "review_slot", workspace_id: "ws-review-capped" },
       });
       const workerSpawn = await h.spawnWorkerSession();
-      const baseline = h.core.sessionStatus(h.seed.coordinatorId, workerSpawn.session_id).initial_snapshot_id!;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-review-baseline" }).snapshot_id;
       h.writeWorkspaceFile("src/main.c", `int main(){return 42;} /* ${"x".repeat(2048)} */\n`);
       const target = h.core.snapshot(h.seed.coordinatorId, {
         project_id: h.seed.projectId,

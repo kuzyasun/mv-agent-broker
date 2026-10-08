@@ -23,17 +23,17 @@ describe("named operator routes", () => {
       const schema = bridgeToolDefs().find(def => def.name === "agent_session_spawn")!.inputSchema;
       expect(schema.oneOf).toBeUndefined();
       expect(schema.properties).toHaveProperty("route_id");
-      expect(schema.properties).toHaveProperty("policy_restrictions.properties.access.enum", ["read_only", "workspace_write"]);
+      expect(schema.properties).toHaveProperty("access.enum", ["read_only", "workspace_write"]);
       const ctx = { coordinatorId: h.seed.coordinatorId, core: h.core };
       const args = {
         project_id: h.seed.projectId, route_id: route.route_id,
         idempotency_key: "scoped-audit", instructions: "Read-only audit.",
         workspace: { mode: "current", workspace_id: h.seed.workspaceMain },
-        policy_restrictions: { access: "read_only" },
+        access: "read_only",
       };
       const spawned = await callBridgeTool(ctx, "agent_session_spawn", args) as { session_id: string };
       const status = await callBridgeTool(ctx, "agent_session_status", { session_id: spawned.session_id });
-      expect(status).toMatchObject({ provider: "mock", model: route.model, role: "worker", effective_policy: { access: "read_only", write_scope: [] } });
+      expect(status).toMatchObject({ provider: "mock", model: route.model, role: "worker", effective_policy: { access: "read_only" } });
 
       // The flat advertised schema must not weaken runtime binding validation.
       await expect(callBridgeTool(ctx, "agent_session_spawn", { ...args, idempotency_key: "mixed-audit", model: "raw-model" }))
@@ -318,12 +318,13 @@ describe("named operator routes", () => {
   it("repeats the enabled admission check inside the authoritative transaction after its replay lookup", async () => {
     const routes = new Map<string, OperatorRoute>([[route.route_id, { ...route }]]);
     const h = createHarness({ routes });
-    // The preflight observation runs BEFORE the authoritative transaction:
-    // disabling the route there models a config swap during admission.
-    const inner = h.adapter.preflight.bind(h.adapter);
-    h.adapter.preflight = (config) => {
+    // Disable the route after policy lookup but before the authoritative transaction.
+    const core = h.core as unknown as { spawnPolicyPreflight: (...args: unknown[]) => unknown };
+    const inner = core.spawnPolicyPreflight.bind(core);
+    core.spawnPolicyPreflight = (...args) => {
+      const policy = inner(...args);
       routes.set(route.route_id, { ...route, enabled: false });
-      return inner(config);
+      return policy;
     };
     try {
       await expect(h.spawnWorkerSession({

@@ -100,7 +100,7 @@ describe("A25: agent claims tests passed while evidence is absent → claims sta
       const turn = h.core.turnStatus(h.seed.coordinatorId, t1.turn_id);
       expect(turn.state).toBe("SUCCEEDED");
       expect(turn.error_code).toBeNull();
-      expect(turn.final_snapshot_id).not.toBeNull();
+      expect(turn.final_snapshot_id).toBeNull();
 
       // Nothing marks quality: there is no quality field on the turn record.
       // (Single documented `any` cast as required by specification).

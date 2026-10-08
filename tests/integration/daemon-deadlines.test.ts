@@ -189,7 +189,6 @@ describe("daemon deadline supervision (spec §14.6)", () => {
         idempotency_key: "send-auto-dl",
         task: { goal: "Long running parser under deadline", acceptance_criteria: ["none"], artifact_refs: [] },
         deadline_ms: 100, // 100ms wall-clock deadline
-        workspace_precondition: { expected_snapshot_id: spawn.initial_snapshot_id },
       });
 
       // Turn starts and begins running
@@ -304,7 +303,6 @@ describe("daemon deadline supervision (spec §14.6)", () => {
         idempotency_key: "send-quiesce",
         task: { goal: "Long task with delayed quiescence", acceptance_criteria: ["none"], artifact_refs: [] },
         deadline_ms: 80,
-        workspace_precondition: { expected_snapshot_id: spawn.initial_snapshot_id },
       });
 
       // Wait for turn to enter RUNNING
@@ -382,7 +380,6 @@ describe("daemon deadline supervision (spec §14.6)", () => {
         idempotency_key: "send-drain-dl",
         task: { goal: "Hanging task during drain", acceptance_criteria: ["none"], artifact_refs: [] },
         deadline_ms: 100,
-        workspace_precondition: { expected_snapshot_id: spawn.initial_snapshot_id },
       });
 
       // Wait for turn to start
@@ -408,13 +405,12 @@ describe("daemon deadline supervision (spec §14.6)", () => {
       expect(() => daemon.core.send("coord-dl", {
         session_id: spawn.session_id, idempotency_key: "send-after-stop",
         task: { goal: "must not start", artifact_refs: [] },
-        workspace_precondition: { expected_snapshot_id: spawn.initial_snapshot_id },
       })).toThrowError(expect.objectContaining({ code: "DAEMON_NOT_READY" }));
       // Already accepted operations remain replayable during drain.
       expect(daemon.core.send("coord-dl", {
         session_id: spawn.session_id, idempotency_key: "send-drain-dl",
         task: { goal: "Hanging task during drain", acceptance_criteria: ["none"], artifact_refs: [] },
-        deadline_ms: 100, workspace_precondition: { expected_snapshot_id: spawn.initial_snapshot_id },
+        deadline_ms: 100,
       }).turn_id).toBe(send.turn_id);
       await expect(startDaemon({ stateDir: fixture.stateDir, coordinatorId: "second" }))
         .rejects.toMatchObject({ code: "DAEMON_ALREADY_RUNNING" });

@@ -45,7 +45,7 @@ describe("stable review slot (§9.3)", () => {
 
       // 2. Spawn the reviewer session
       const reviewer = await h.spawnWorkerSession({
-        role: "reviewer",
+        role: "reviewer", access: "read_only",
         workspace: { mode: "review_slot", workspace_id: "ws-review" },
       });
       expect(reviewer.state).toBe("IDLE");
@@ -53,7 +53,7 @@ describe("stable review slot (§9.3)", () => {
       // 3. Spawn worker session and get baseline snapshot
       const workerSpawn = await h.spawnWorkerSession();
       const workerStatus = h.core.sessionStatus(h.seed.coordinatorId, workerSpawn.session_id);
-      const baseline = workerStatus.initial_snapshot_id;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-review-baseline" }).snapshot_id;
       expect(baseline).toBeTruthy();
 
       // 4. Worker changes code so target1 snapshot can be taken

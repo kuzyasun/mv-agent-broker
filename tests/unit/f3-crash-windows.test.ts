@@ -147,7 +147,7 @@ describe("crash windows: A18 and A19 (spec §18, §14.3)", () => {
       const turnAfterReconcile = h.core.turnStatus(h.seed.coordinatorId, t1.turn_id);
       expect(turnAfterReconcile.state).toBe("SUCCEEDED");
       expect(turnAfterReconcile.execution_started).toBe(true);
-      expect(turnAfterReconcile.final_snapshot_id).toBeTruthy();
+      expect(turnAfterReconcile.final_snapshot_id).toBeNull();
 
       const evidenceAfter = h.db.raw
         .prepare("SELECT applied FROM turn_outcome_evidence WHERE turn_id = ?")

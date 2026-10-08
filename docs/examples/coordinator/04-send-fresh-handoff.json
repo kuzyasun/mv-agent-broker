@@ -1,6 +1,6 @@
 {
   "tool": "agent_session_send",
-  "note": "Explicit fresh-session handoff: the new session was spawned separately; this send carries the compact handoff in task.context plus retained required artifact IDs. Old materialized input paths are not reused. Use only after the old execution is terminal/quiescent and UNKNOWN/quarantine is resolved.",
+  "note": "Explicit fresh-session handoff: the new session was spawned separately; this ordinary send carries the compact handoff plus retained artifact IDs. It has no snapshot precondition.",
   "arguments": {
     "session_id": "<fresh-worker-session-id>",
     "idempotency_key": "<new-unique-key>",
@@ -8,21 +8,18 @@
       "goal": "Continue the bounded package from the compact handoff and resolve the remaining findings.",
       "acceptance_criteria": [
         "Every remaining finding ID is fixed, contradicted with evidence, or escalated.",
-        "The bound snapshot state is preserved; no unrelated changes."
+        "No unrelated changes are introduced."
       ],
       "relevant_paths": [
         "src/<module>/"
       ],
-      "context": "# Compact handoff\nReason for a new session: <why the old session is not continued>\nPrevious session/turn IDs: <ids>\nCurrent workspace and snapshot binding: <current-source-snapshot-id>\nNext goal and acceptance criteria: <as in the task fields>\nFixed decisions and constraints: <each with its source/version>\nBroker-observed state: <outcome, snapshots, available evidence>\nAgent-reported (unverified): <claims not independently confirmed>\nAlready done (do not repeat): <actions>\nRemaining work: <finding IDs, open questions, needed checks>\nSources for this turn: retained artifact IDs below; old input paths are invalid\nBoundaries: <what not to change; what needs a separate coordinator decision>",
+      "context": "# Compact handoff\nReason for a new session: <why the old session is not continued>\nPrevious session/turn IDs: <ids>\nCurrent registered workspace ID and checkout: <workspace-id and physical path>\nNext goal and acceptance criteria: <as in the task fields>\nFixed decisions and constraints: <each with its source/version>\nBroker-observed state: <outcome and available reports>\nAgent-reported (unverified): <claims not independently confirmed>\nAlready done (do not repeat): <actions>\nRemaining work: <finding IDs, open questions, needed checks>\nSources for this turn: retained artifact IDs below\nBoundaries: <what not to change; what needs a separate coordinator decision>",
       "artifact_refs": [
         "<retained-required-artifact-id>"
       ],
       "checks": [
         "Re-verify the actual diff and the documented offline checks; report exact results."
       ]
-    },
-    "workspace_precondition": {
-      "expected_snapshot_id": "<current-source-snapshot-id>"
     }
   }
 }

@@ -43,7 +43,6 @@ import {
   listPinsByOwner,
   updateIntentState,
   updateSessionFields,
-  updateSnapshotState,
   updateTurnFields,
   updateWorkspaceQuarantine,
   SqliteConstraintError,
@@ -89,20 +88,11 @@ import {
 } from "./transitions.ts";
 import type { TurnExecutor } from "./execution.ts";
 import { activeQuotaCooldown, listActiveQuotaCooldowns } from "./quotaCooldown.ts";
-import { computeEffectiveWritePolicy, loadSessionWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
-import {
-  cloneFrozenPolicy,
-  type AdapterPreflightContext,
-  type ProviderAdapter,
-} from "../runtime/adapter.ts";
-import {
-  fingerprintReadinessObservation,
-  readReadinessObservation,
-  type ProviderReadinessObservation,
-} from "../providers/common/readiness.ts";
+import { computeEffectiveWritePolicy, loadSessionWritePolicy, sessionWriteScope, type EffectiveWritePolicy, type PolicyAccess } from "./policy.ts";
+import type { ProviderAdapter } from "../runtime/adapter.ts";
 import type { BlobStore } from "../snapshots/blobs.ts";
 import { captureSnapshot, CaptureError } from "../snapshots/capture.ts";
-import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
+import { takeInventory } from "../workspaces/inventory.ts";
 import {
   PHYSICAL_CWD_BINDING_VERSION,
   readSessionPhysicalBinding,
@@ -110,13 +100,7 @@ import {
   type PhysicalCheckoutIdentity,
   type SessionPhysicalCwdBinding,
 } from "../workspaces/identity.ts";
-import { CoverageError, coverageContractHash, uncoveredWriteScope, validateCoverageConfig, type CoverageConfig } from "../workspaces/coverage.ts";
-import {
-  GIT_REVIEW_COMMIT_PATTERN,
-  GitReviewPreflightError,
-  preflightGitReview,
-  resolveGitReviewRoot,
-} from "../workspaces/gitReview.ts";
+import { validateCoverageConfig, type CoverageConfig } from "../workspaces/coverage.ts";
 import {
   WORKTREE_PROVISION_BINDING_VERSION,
   RepositoryMutationLock,
@@ -169,7 +153,7 @@ export interface SpawnRequest {
     base_commit?: string | null;
   };
   policy_profile_id?: string;
-  policy_restrictions?: Record<string, unknown>;
+  access?: PolicyAccess;
 }
 
 type ResolvedSpawnRequest = Omit<SpawnRequest, "provider" | "account_profile_id" | "model" | "effort" | "role" | "policy_profile_id"> & {
@@ -186,22 +170,19 @@ export interface TaskContract {
   acceptance_criteria?: string[];
   relevant_paths?: string[];
   context?: string;
-  artifact_refs: string[];
+  artifact_refs?: string[];
   checks?: string[];
 }
 
-export type WorkspaceBinding =
-  | { workspace_precondition: { expected_snapshot_id: string } }
-  | { review_binding: { baseline_snapshot_id: string; target_snapshot_id: string } }
-  | { git_review_binding: { base_commit: string; target_commit: string; include_working_tree?: boolean } };
-
-export type SendRequest = {
+export interface SendRequest {
   session_id: string;
   idempotency_key: string;
   task: TaskContract;
   deadline_ms?: number;
   retry_of_turn_id?: string;
-} & WorkspaceBinding;
+  /** Explicit manual snapshot comparison, only for review_slot sessions. */
+  review_binding?: { baseline_snapshot_id: string; target_snapshot_id: string };
+}
 
 export interface CancelRequest {
   turn_id: string;
@@ -214,23 +195,12 @@ export interface StopRequest {
   idempotency_key: string;
 }
 
-/**
- * Everything the non-authoritative spawn preflight observed about external
- * state (§7.2 step 3): the adapter version, the registered account binding,
- * the narrowed effective policy and the adapter's optional readiness
- * observation (observed CLI version/catalog/auth — void-compatible adapters
- * leave it null). Carried into the authoritative transaction where a pure
- * fingerprint re-comparison decides whether the observations are still fresh
- * — stale observations are rejected, never admitted.
- */
+/** Values whose registry identity is rechecked inside the spawn transaction. */
 interface SpawnPreflightCandidate {
-  adapter: ProviderAdapter;
-  provider: string;
   adapterVersion: string;
   account: AccountProfileRecord;
   policy: EffectiveWritePolicy;
-  observation: ProviderReadinessObservation | null;
-  fingerprint: string;
+  workspaceAdmissionFingerprint: string;
   /** §8.3: validated worktree source binding (broker-created worktrees). */
   worktreeSource?: {
     source_workspace_id: string;
@@ -239,31 +209,15 @@ interface SpawnPreflightCandidate {
     source_common_dir: string;
     /** Registered canonical path observed at preflight (drift check). */
     source_canonical_path: string;
-    /** Coverage binding observed at preflight (drift check); null for Git reviewers. */
-    source_coverage_profile_id: string | null;
   };
-}
-
-/**
- * Durable provider binding sealed into the provision_session intent (§12.1,
- * §13.3): the REGISTERED account tuple, the adapter version and the observed
- * readiness evidence at admission. Later turns re-validate live rows against
- * this immutable grant — drift refuses instead of migrating.
- */
-interface DurableReadinessMetadata {
-  fingerprint: string;
-  observed_at: number;
-  source: string;
-  authenticated: boolean | null;
-  model_catalog_size: number | null;
 }
 
 export interface DurableProviderBinding {
   binding_version: number;
   account: { account_profile_id: string; provider: string; auth_mode: string; quota_scope_id: string | null };
   adapter_version: string | null;
-  cli_version: string | null;
-  readiness: DurableReadinessMetadata | null;
+  cli_version: null;
+  readiness: null;
 }
 
 export type ProviderBindingLookup =
@@ -923,10 +877,10 @@ export class BrokerCore {
   private assertRouteAdmission(req: ResolvedSpawnRequest): void {
     if (req.route_id === undefined) return;
     const route = this.routes.get(req.route_id);
-    if (route && route.enabled === false) {
+    if (!route || route.project_id !== req.project_id || route.enabled === false) {
       throw new BrokerError(
         "INVALID_REQUEST",
-        `Route '${route.route_id}' is disabled; new sessions are refused.`,
+        `Route '${req.route_id}' is unavailable or disabled; new sessions are refused.`,
         { executionStarted: false },
       );
     }
@@ -935,6 +889,9 @@ export class BrokerCore {
   // ─── spawn (§6.1, §7.3) ───────────────────────────────────────────────────
 
   private resolveSpawnRequest(req: SpawnRequest): ResolvedSpawnRequest {
+    if ("policy_restrictions" in (req as unknown as Record<string, unknown>)) {
+      throw new BrokerError("INVALID_REQUEST", "policy_restrictions was removed; use access.", { executionStarted: false });
+    }
     if (typeof req.instructions !== "string") {
       throw new BrokerError("INVALID_REQUEST", "instructions must be a string.", { executionStarted: false });
     }
@@ -1028,9 +985,8 @@ export class BrokerCore {
     this.assertRouteAdmission(req);
     this.assertAdmissionOpen();
 
-    // Step 3: non-authoritative preflight (no inference): account binding,
-    // policy narrowing, adapter.preflight. Any failure here creates no
-    // accepted state and leaves the key free for a corrected retry (§7.3).
+    // Step 3: registry-only validation. Any failure here creates no accepted
+    // state and leaves the key free for a corrected retry (§7.3).
     const candidate = this.spawnPreflight(req);
 
     // Steps 4–6: authoritative serialized decision + effects in one tx.
@@ -1141,10 +1097,8 @@ export class BrokerCore {
 
   /**
    * Non-authoritative spawn preflight (§7.2 step 3, §13.2): input shape,
-   * provider availability, registered account binding, §12.1 policy
-   * narrowing, then adapter.preflight WITHOUT inference — always OUTSIDE the
-   * admission transaction (no external process inside a tx). Returns the
-   * candidate binding the transaction must revalidate.
+   * provider availability, registered account binding and §12 policy
+   * narrowing. Spawn is registry-only; dispatch checks the adapter.
    */
   private spawnPreflight(req: ResolvedSpawnRequest): SpawnPreflightCandidate {
     if (Buffer.byteLength(req.instructions, "utf8") > 64 * 1024) {
@@ -1158,52 +1112,8 @@ export class BrokerCore {
     if (!adapter) {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", `Provider '${req.provider}' is not available.`);
     }
-    // Reviewer sessions: review_slot keeps the explicit snapshot review
-    // alternative (dirty workspace); current/worktree physical reviewers are
-    // Git-native — they bind a REGISTERED workspace and review exact clean
-    // commits with their own Git tooling (no arbitrary caller path).
-    if (req.role === "reviewer") {
-      if (req.workspace.mode === "review_slot") {
-        // snapshot reviewer: unchanged contract
-      } else if (req.workspace.mode === "current") {
-        if (!req.workspace.workspace_id) {
-          throw new BrokerError(
-            "INVALID_REQUEST",
-            "A Git reviewer session requires a registered workspace reference (workspace.workspace_id).",
-            { executionStarted: false },
-          );
-        }
-      } else if (
-        req.workspace.mode === "worktree" &&
-        !req.workspace.workspace_id &&
-        (req.workspace.repository_workspace_id === undefined || req.workspace.repository_workspace_id === null ||
-          req.workspace.base_commit === undefined || req.workspace.base_commit === null)
-      ) {
-        throw new BrokerError(
-          "INVALID_REQUEST",
-          "A broker-created reviewer worktree requires workspace.repository_workspace_id and workspace.base_commit (§8.3).",
-          { executionStarted: false },
-        );
-      }
-    }
-    // §12.1 policy preflight and workspace admission are pure registry checks.
-    // Run them before provider readiness and before worktree preflight can
-    // create its managed root or perform Git reads.
-    const policy = cloneFrozenPolicy(this.spawnPolicyPreflight(req));
-    // Git reviewers must be effectively read-only: no write-enabled session
-    // may review a real checkout (reject before workspace/Git/provider work).
-    if (req.role === "reviewer" && req.workspace.mode !== "review_slot" && policy.access !== "read_only") {
-      throw new BrokerError(
-        "INVALID_REQUEST",
-        "Git reviewer sessions require an effective read_only policy; narrow the profile with policy_restrictions.access='read_only'.",
-        { executionStarted: false },
-      );
-    }
+    const policy = this.spawnPolicyPreflight(req);
     const workspaceAdmissionFingerprint = this.validateSpawnWorkspace(req, policy);
-    // §8.3 workspace field contract, decided BEFORE any accepted resource:
-    // broker-created detached worktrees need a registered same-project source
-    // repository reference plus an explicit full-hex commit; contradictory or
-    // missing fields are rejected here and leave the idempotency key free.
     const worktreeSource = this.worktreeSpawnPreflight(req);
     // §13.3 account binding: a registered account of the matching provider is
     // required BEFORE any accepted session/reservation exists.
@@ -1223,60 +1133,11 @@ export class BrokerCore {
       );
     }
     const candidate: SpawnPreflightCandidate = {
-      adapter,
-      provider: req.provider,
       adapterVersion: adapter.adapterVersion,
       account,
       policy,
-      observation: null,
-      fingerprint: "",
-    };
-
-    // §13.2 provider readiness: the adapter decides from the broker-supplied
-    // context (model/effort/role/workspace/account/policy) with zero
-    // inference. Known no-dispatch failures keep their code/message with
-    // executionStarted=false; anything unexpected is PROVIDER_INCOMPATIBLE.
-    // A returned readiness observation is validated defensively; malformed non-void
-    // returns refuse admission rather than dropping required evidence.
-    try {
-      const returned = adapter.preflight({
-        provider: req.provider,
-        model: req.model,
-        effort: req.effort,
-        role: req.role,
-        workspace_mode: req.workspace.mode,
-        account: {
-          account_profile_id: account.account_profile_id,
-          auth_mode: account.auth_mode,
-          quota_scope_id: account.quota_scope_id,
-        },
-        effective_policy: candidate.policy,
-      } satisfies AdapterPreflightContext);
-      candidate.observation = readReadinessObservation(returned, adapter.providerId);
-    } catch (e) {
-      if (e instanceof BrokerError) {
-        throw new BrokerError(e.code, e.message, {
-          phase: e.phase,
-          retryGuidance: e.retryGuidance,
-          executionStarted: false,
-          details: e.details,
-        });
-      }
-      throw new BrokerError(
-        "PROVIDER_INCOMPATIBLE",
-        `Provider preflight failed: ${e instanceof Error ? e.message : String(e)}`,
-        { executionStarted: false },
-      );
-    }
-    candidate.fingerprint = spawnCandidateFingerprint({
-      provider: req.provider,
-      adapterVersion: adapter.adapterVersion,
-      account,
-      policy,
-      observation: candidate.observation,
-      worktreeSource,
       workspaceAdmissionFingerprint,
-    });
+    };
     if (worktreeSource) candidate.worktreeSource = worktreeSource;
     return candidate;
   }
@@ -1349,14 +1210,6 @@ export class BrokerCore {
         executionStarted: false,
       });
     }
-    if (!source.coverage_profile_id && req.role !== "reviewer") {
-      // Writer sends require a coverage binding (§8.7); a source without one
-      // could never satisfy the initial snapshot contract — reject up front.
-      // Git reviewers skip snapshot capture entirely and need no coverage.
-      throw new BrokerError("INVALID_REQUEST", "Worktree source workspace has no coverage binding (§8.7).", {
-        executionStarted: false,
-      });
-    }
     if (!this.worktreesRoot) {
       throw new BrokerError(
         "INVALID_REQUEST",
@@ -1375,7 +1228,6 @@ export class BrokerCore {
         base_commit: baseCommit,
         source_common_dir: identity.commonDir,
         source_canonical_path: source.canonical_path,
-        source_coverage_profile_id: source.coverage_profile_id,
       };
     } catch (e) {
       if (e instanceof WorktreePreflightError) {
@@ -1389,25 +1241,14 @@ export class BrokerCore {
   }
 
   /**
-   * Authoritative revalidation INSIDE the admission transaction (§7.2): pure
-   * record reads and in-memory adapter fields compared against the captured
-   * candidate fingerprint. adapter.preflight (external process) is never
-   * re-run here; drifted configuration is rejected rather than admitted with
-   * stale observations.
+   * Authoritative revalidation INSIDE the admission transaction (§7.2):
+   * registry identity and selected workspace/access are re-read before writes.
    */
   private revalidateSpawnCandidate(req: ResolvedSpawnRequest, candidate: SpawnPreflightCandidate): void {
-    const adapter = this.adapters.get(req.provider);
-    if (!adapter) {
+    if (!this.adapters.has(req.provider)) {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", `Provider '${req.provider}' is not available.`, {
         executionStarted: false,
       });
-    }
-    if (adapter !== candidate.adapter || adapter.adapterVersion !== candidate.adapterVersion) {
-      throw new BrokerError(
-        "PROVIDER_INCOMPATIBLE",
-        `Provider adapter instance or version changed during admission ('${candidate.adapterVersion}' → '${adapter.adapterVersion}'); preflight observations are stale.`,
-        { executionStarted: false },
-      );
     }
     const account = getAccount(this.db, req.account_profile_id);
     if (!account) {
@@ -1422,19 +1263,18 @@ export class BrokerCore {
         { executionStarted: false },
       );
     }
-    // Re-derive the effective policy from the live profile row (pure DB read);
-    // a changed config yields a different fingerprint and refuses admission.
-    // The readiness observation is the CAPTURED preflight return (pure
-    // in-memory comparison; no external process runs here). The §8.3 worktree
-    // source binding is re-read from the live registry rows — drift refuses.
-    const policy = cloneFrozenPolicy(this.spawnPolicyPreflight(req));
+    const policy = this.spawnPolicyPreflight(req);
     const workspaceAdmissionFingerprint = this.validateSpawnWorkspace(req, policy);
     const worktreeSource = this.revalidateWorktreeSource(req, candidate);
-    const fresh = spawnCandidateFingerprint({ provider: req.provider, adapterVersion: adapter.adapterVersion, account, policy, observation: candidate.observation, worktreeSource, workspaceAdmissionFingerprint });
-    if (fresh !== candidate.fingerprint) {
+    if (
+      account.auth_mode !== candidate.account.auth_mode || account.quota_scope_id !== candidate.account.quota_scope_id ||
+      JSON.stringify(policy) !== JSON.stringify(candidate.policy) ||
+      workspaceAdmissionFingerprint !== candidate.workspaceAdmissionFingerprint ||
+      JSON.stringify(worktreeSource) !== JSON.stringify(candidate.worktreeSource ?? null)
+    ) {
       throw new BrokerError(
-        "POLICY_UNSUPPORTED",
-        "Provider account or policy configuration changed during admission; refusing stale preflight observations.",
+        "WORKSPACE_CHANGED",
+        "Workspace, account, or access policy changed during session admission.",
         { executionStarted: false },
       );
     }
@@ -1468,7 +1308,7 @@ export class BrokerCore {
       source.mode !== "current" ||
       source.quarantined ||
       source.canonical_path !== bound.source_canonical_path ||
-      source.coverage_profile_id !== bound.source_coverage_profile_id
+      source.canonical_path !== bound.source_canonical_path
     ) {
       throw new BrokerError("INVALID_REQUEST", "Worktree source workspace changed during admission (§8.3).", {
         executionStarted: false,
@@ -1482,13 +1322,7 @@ export class BrokerCore {
     return bound;
   }
 
-  /**
-   * Effective write policy for a spawn (§12.1): narrow the operator profile
-   * by the requested restrictions. Unknown mandatory restrictions are
-   * POLICY_UNSUPPORTED, malformed values INVALID_REQUEST, widening rejected.
-   * Throws instead of returning the error union — admission never continues
-   * on a policy failure.
-   */
+  /** Resolve the profile access and apply the optional access-only narrowing. */
   private spawnPolicyPreflight(req: ResolvedSpawnRequest): EffectiveWritePolicy {
     const profile = getPolicyProfile(this.db, req.policy_profile_id, POLICY_PROFILE_VERSION);
     if (!profile) {
@@ -1502,13 +1336,13 @@ export class BrokerCore {
       policy_profile_id: req.policy_profile_id,
       policy_profile_version: POLICY_PROFILE_VERSION,
       profileConfigJson: profile.config,
-      requestedRestrictions: req.policy_restrictions,
+      requestedAccess: req.access,
     });
     if (!narrowed.ok) throw new BrokerError(narrowed.code, narrowed.reason, { executionStarted: false });
     return narrowed.policy;
   }
 
-  /** Pure workspace and coverage admission, repeated inside the spawn transaction. */
+  /** Validate configured workspace selection and stable physical cwd identity. */
   private validateSpawnWorkspace(req: ResolvedSpawnRequest, policy: EffectiveWritePolicy): string {
     const request = req.workspace;
     let workspace: WorkspaceRecord | null = null;
@@ -1549,54 +1383,21 @@ export class BrokerCore {
         details: { workspace_id: workspace.workspace_id },
       });
     }
-
-    const profileId = workspace?.coverage_profile_id ?? null;
-    let coverage: { version: string; contract_hash: string; config: CoverageConfig } | null = null;
-    if (profileId) {
-      const version = latestCoverageProfileVersion(this.db, profileId);
-      const profile = version ? getCoverageProfile(this.db, profileId, version) : null;
-      if (profile) {
-        try {
-          const config = JSON.parse(profile.config) as CoverageConfig;
-          validateCoverageConfig(config);
-          if (coverageContractHash(config) !== profile.contract_hash) throw new Error("coverage-contract-hash-mismatch");
-          coverage = { version: profile.version, contract_hash: profile.contract_hash, config };
-        } catch {
-          throw new BrokerError("SNAPSHOT_COVERAGE_MISMATCH", "Workspace coverage configuration is invalid.", {
-            executionStarted: false,
-            details: { workspace_id: workspace?.workspace_id ?? null, coverage_profile_id: profileId },
-          });
-        }
-      }
+    if (req.role === "reviewer" && policy.access !== "read_only") {
+      throw new BrokerError("INVALID_REQUEST", "Reviewer sessions require a read_only access policy.", { executionStarted: false });
     }
-
-    const needsCapture = workspace !== null && request.mode !== "review_slot" && req.role !== "reviewer" && workspace.canonical_path !== null;
-    if (needsCapture && !coverage) {
-      throw new BrokerError("SNAPSHOT_COVERAGE_MISMATCH", "Workspace has no usable coverage binding for its initial snapshot.", {
-        executionStarted: false,
-        retryGuidance: "use_covering_workspace_or_spawn_read_only_audit_session",
-        details: { workspace_id: workspace?.workspace_id ?? null, coverage_profile_id: profileId },
-      });
+    if (request.mode === "review_slot" && req.role !== "reviewer") {
+      throw new BrokerError("INVALID_REQUEST", "review_slot workspaces are only available to read-only reviewer sessions.", { executionStarted: false });
     }
-    const uncovered = coverage ? uncoveredWriteScope(policy.write_scope, coverage.config) : [];
-    if (uncovered.length > 0) {
-      throw new BrokerError(
-        "SNAPSHOT_COVERAGE_MISMATCH",
-        "The selected workspace coverage does not cover the session's effective write scope. Choose a compatible workspace or narrow the spawn policy to read_only.",
-        {
-          executionStarted: false,
-          retryGuidance: "use_covering_workspace_or_spawn_read_only_audit_session",
-          details: {
-            workspace_id: workspace?.workspace_id ?? request.repository_workspace_id ?? null,
-            coverage_profile_id: profileId,
-            coverage_profile_version: coverage?.version ?? null,
-            coverage_contract_hash: coverage?.contract_hash ?? null,
-            actual_write_scope: [...policy.write_scope],
-            uncovered_write_scope: uncovered,
-            compatible_workspace_ids: this.compatibleWorkspaceIds(req.project_id, req.role, policy),
-          },
-        },
-      );
+    if (workspace && workspace.mode !== "review_slot" && !workspace.canonical_path) {
+      throw new BrokerError("INVALID_REQUEST", "Physical workspace has no registered checkout path.", { executionStarted: false });
+    }
+    if (!workspace && request.mode !== "review_slot" && request.mode !== "worktree") {
+      throw new BrokerError("INVALID_REQUEST", "Physical workspace selection requires a registered workspace ID.", { executionStarted: false });
+    }
+    const physical = workspace?.canonical_path ? resolvePhysicalCheckoutIdentity(workspace.canonical_path) : null;
+    if (workspace?.canonical_path && !physical) {
+      throw new BrokerError("INVALID_REQUEST", "Workspace checkout path has no stable physical identity.", { executionStarted: false });
     }
 
     return sha256Hex(JSON.stringify({
@@ -1604,10 +1405,8 @@ export class BrokerCore {
       workspace_id: workspace?.workspace_id ?? null,
       project_id: workspace?.project_id ?? req.project_id,
       canonical_path: workspace?.canonical_path ?? null,
+      physical_scope: physical?.scope ?? null,
       quarantined: workspace?.quarantined ?? false,
-      coverage_profile_id: profileId,
-      coverage_profile_version: coverage?.version ?? null,
-      coverage_contract_hash: coverage?.contract_hash ?? null,
       workspace_configured: workspace ? this.workspaceSelectable(workspace) : true,
       source_workspace_id: request.mode === "worktree" && !request.workspace_id ? request.repository_workspace_id ?? null : null,
     }));
@@ -1641,45 +1440,28 @@ export class BrokerCore {
     return false;
   }
 
-  private compatibleWorkspaceIds(
-    projectId: string,
-    role: AgentRole,
-    policy: Pick<EffectiveWritePolicy, "access" | "write_scope">,
-  ): string[] {
+  private compatibleWorkspaceIds(projectId: string): string[] {
     const rows = this.db.raw.prepare("SELECT workspace_id FROM workspaces WHERE project_id = ? ORDER BY workspace_id").all(projectId) as Array<{ workspace_id: string }>;
     const compatible: string[] = [];
     for (const { workspace_id } of rows) {
       const workspace = getWorkspace(this.db, workspace_id);
-      if (!workspace || workspace.quarantined || !this.workspaceSelectable(workspace)) continue;
-      if (role !== "reviewer" && workspace.mode === "review_slot") continue;
-      if (role === "reviewer" && workspace.mode !== "review_slot") {
-        if (policy.access === "read_only") compatible.push(workspace_id);
-        continue;
-      }
-      if (!workspace.coverage_profile_id) continue;
-      const version = latestCoverageProfileVersion(this.db, workspace.coverage_profile_id);
-      const profile = version ? getCoverageProfile(this.db, workspace.coverage_profile_id, version) : null;
-      if (!profile) continue;
-      try {
-        const config = JSON.parse(profile.config) as CoverageConfig;
-        validateCoverageConfig(config);
-        if (coverageContractHash(config) !== profile.contract_hash) continue;
-        if (uncoveredWriteScope(policy.write_scope, config).length === 0) compatible.push(workspace_id);
-      } catch { /* invalid coverage cannot qualify as compatible */ }
+      if (!workspace || workspace.mode === "review_slot" || workspace.quarantined || !workspace.canonical_path || !this.workspaceSelectable(workspace)) continue;
+      if (!resolvePhysicalCheckoutIdentity(workspace.canonical_path)) continue;
+      compatible.push(workspace_id);
     }
     return compatible;
   }
 
-  private routeEffectivePolicy(policyProfileId: string): Pick<EffectiveWritePolicy, "access" | "write_scope"> | null {
+  private routeEffectivePolicy(policyProfileId: string): Pick<EffectiveWritePolicy, "access"> | null {
     const profile = getPolicyProfile(this.db, policyProfileId, POLICY_PROFILE_VERSION);
     if (!profile) return null;
     const result = computeEffectiveWritePolicy({
       policy_profile_id: policyProfileId,
       policy_profile_version: POLICY_PROFILE_VERSION,
       profileConfigJson: profile.config,
-      requestedRestrictions: undefined,
+      requestedAccess: undefined,
     });
-    return result.ok ? { access: result.policy.access, write_scope: [...result.policy.write_scope] } : null;
+    return result.ok ? { access: result.policy.access } : null;
   }
 
   /**
@@ -1733,7 +1515,7 @@ export class BrokerCore {
         canonical_path: worktreePath,
         quarantined: false,
         quarantine_reason: null,
-        coverage_profile_id: source.coverage_profile_id,
+        coverage_profile_id: null,
       };
       worktreeRecord = {
         workspace: workspaceRow,
@@ -1754,9 +1536,6 @@ export class BrokerCore {
       };
     }
 
-    const bindingWorkspace = worktreeRecord ? worktreeRecord.workspace : workspace;
-    const binding = this.resolveCoverageBinding(bindingWorkspace);
-
     // Session slot cap (§15.1) checked + reserved in the same boundary.
     reserveSessionSlot(this.db, now, sessionId, req.project_id, this.sessionCap(req.project_id));
     if (worktreeRecord) insertWorkspace(this.db, worktreeRecord.workspace);
@@ -1765,13 +1544,10 @@ export class BrokerCore {
       project_id: req.project_id,
       owner_coordinator_id: coordinatorId,
       provider: req.provider,
-      // §13.3: bound to the revalidated adapter version and the REGISTERED
-      // account auth_mode. cli_version is persisted ONLY from the observed
-      // readiness evidence (unknown stays null). Effective model/effort stay
-      // null — never fabricated from requested values before real native
-      // execution evidence.
+      // Preserve the selected adapter/account and requested model/effort.
+      // Current adapter readiness is checked once at dispatch.
       adapter_version: candidate.adapterVersion,
-      cli_version: candidate.observation?.cli_version ?? null,
+      cli_version: null,
       account_profile_id: req.account_profile_id,
       auth_mode: candidate.account.auth_mode,
       requested_model: req.model,
@@ -1784,9 +1560,9 @@ export class BrokerCore {
       policy_profile_version: POLICY_PROFILE_VERSION,
       workspace_id: worktreeRecord ? worktreeRecord.workspace.workspace_id : req.workspace.workspace_id,
       workspace_mode: req.workspace.mode,
-      coverage_profile_id: binding?.profile_id ?? null,
-      coverage_profile_version: binding?.version ?? null,
-      coverage_contract_hash: binding?.contract_hash ?? null,
+      coverage_profile_id: null,
+      coverage_profile_version: null,
+      coverage_contract_hash: null,
       native_conversation_ref: null,
       context_status: "not_started",
       state: "PROVISIONING",
@@ -1808,11 +1584,8 @@ export class BrokerCore {
       session_id: sessionId,
       turn_id: null,
       state: "pending",
-      // §12.1 durable binding: requested restrictions + profile config/
-      // fingerprint + normalized effective policy, captured at admission —
-      // plus the §13.3 provider binding (registered account tuple, adapter
-      // version, observed readiness evidence). Immutable afterwards; later
-      // turns refuse on drift instead of migrating.
+      // Durable access grant and selected account tuple. Workspace/user
+      // changes do not rewrite an already accepted session.
       payload: JSON.stringify({
         request_hash: payloadHash,
         instructions: req.instructions,
@@ -1861,14 +1634,7 @@ export class BrokerCore {
     };
   }
 
-  /**
-   * PROVISIONING → IDLE with a sealed initial snapshot. For a current-mode
-   * workspace this is a REAL capture (independent inventory + content blobs,
-   * §8.2: baseline ≠ HEAD — existing dirty state is included). Capture
-   * failure is a provisioning failure → BLOCKED with retained state (§6.1);
-   * the intent journal records which side effects happened.
-   * Idempotent: a session already in a defined state is left as-is.
-   */
+  /** Complete provisioning after any owned worktree operation is ready. */
   private completeProvisioningIfNeeded(sessionId: string, insideLock = false): void {
     const current = getSession(this.db, sessionId);
     if (!current) throw new Error("session-vanished");
@@ -1878,7 +1644,7 @@ export class BrokerCore {
     // background work — the long Git child runs OUTSIDE the event loop and
     // outside any transaction, serialized per repository common dir. The
     // journal drives staging/reconciliation; once stage "ready" is durable
-    // the normal binding/capture completion below runs unchanged. A journal
+    // the physical identity binding and metadata completion run. A journal
     // that exists but is invalid/unreadable is RETAINED (never interpreted
     // as an ordinary provision, never completed, never failed by guesswork).
     const worktreePayload = readProvisionIntentPayload(this.db, sessionId);
@@ -1906,23 +1672,15 @@ export class BrokerCore {
       return;
     }
 
-    // Review slots (P2-2), path-less workspaces and Git reviewer sessions
-    // (exact-commit review needs no snapshot baseline) provision without
-    // capture.
+    // Physical sessions bind a stable checkout identity but capture no
+    // baseline. Snapshots are explicit diagnostics, outside task execution.
     const workspace = current.workspace_id ? getWorkspace(this.db, current.workspace_id) : null;
-    const needsCapture =
-      workspace !== null &&
-      workspace.mode !== "review_slot" &&
-      workspace.canonical_path !== null &&
-      current.coverage_profile_id !== null &&
-      current.role !== "reviewer";
 
     // A06: durably bind the session to the FS-resolved physical checkout of
     // its future native cwd. Resolution happens OUTSIDE the transaction
     // (realpath/stat) and the binding is written into the session-owned
     // provision intent payload in the SAME transaction that completes
-    // provisioning — immutable afterwards. Only physical writer sessions
-    // bind; review slots and path-less workspaces keep their contracts. A
+    // provisioning — immutable afterwards. A
     // registered checkout without a stable physical identity fails
     // provisioning: the session must never dispatch a cwd it cannot pin, and
     // an unsupported native filesystem is refused, never faked as supported.
@@ -1949,88 +1707,7 @@ export class BrokerCore {
         }
       : null;
 
-    if (needsCapture && workspace?.canonical_path && current.coverage_profile_id && current.coverage_profile_version) {
-      const profile = getCoverageProfile(this.db, current.coverage_profile_id, current.coverage_profile_version);
-      if (!profile) {
-        this.failProvisioning(sessionId, "coverage-profile-missing");
-        return;
-      }
-      let config: CoverageConfig;
-      try {
-        config = JSON.parse(profile.config) as CoverageConfig;
-        validateCoverageConfig(config);
-      } catch {
-        this.failProvisioning(sessionId, "coverage-config-invalid");
-        return;
-      }
-      try {
-        if (physicalBinding && resolvePhysicalCheckoutIdentity(physicalBinding.canonical_cwd)?.scope !== physicalBinding.lease_scope) {
-          throw new Error("physical-checkout-changed-before-provision-capture");
-        }
-        const captured = captureSnapshot({
-          db: this.db,
-          blobs: this.blobStore,
-          clock: this.clock,
-          projectId: current.project_id,
-          workspaceId: workspace.workspace_id,
-          // The baseline describes the PINNED checkout, not the alias spelling.
-          workspaceRoot: physicalBinding?.canonical_cwd ?? workspace.canonical_path,
-          coverage: {
-            profile_id: profile.coverage_profile_id,
-            version: profile.version,
-            contract_hash: profile.contract_hash,
-            config,
-          },
-        });
-        if (physicalBinding && resolvePhysicalCheckoutIdentity(physicalBinding.canonical_cwd)?.scope !== physicalBinding.lease_scope) {
-          updateSnapshotState(this.db, captured.snapshot.snapshot_id, "FAILED", "physical-checkout-changed-during-provision-capture");
-          throw new Error("physical-checkout-changed-during-provision-capture");
-        }
-        const now = this.now();
-        this.db.tx(() => {
-          const session = getSession(this.db, sessionId);
-          if (!session || session.state !== "PROVISIONING") return;
-          assertSessionTransition(session.state, "provisioning_completed");
-          updateSessionFields(
-            this.db,
-            sessionId,
-            {
-              state: "IDLE",
-              initial_snapshot_id: captured.snapshot.snapshot_id,
-              latest_snapshot_id: captured.snapshot.snapshot_id,
-            },
-            session.record_version,
-            now,
-          );
-          // §15.3.1: the initial baseline stays pinned until close.
-          insertPin(this.db, {
-            pin_id: newId("pin"),
-            artifact_id: captured.snapshot.manifest_artifact_id,
-            root_kind: "session_anchor",
-            owner_session_id: sessionId,
-            owner_turn_id: null,
-            created_at: now,
-          });
-          if (physicalBinding) this.recordProvisionPhysicalBinding(sessionId, physicalBinding, now);
-          const intent = listPendingIntents(this.db, "provision_session").find((i) => i.session_id === sessionId);
-          if (intent) updateIntentState(this.db, intent.intent_id, "completed", now);
-          appendEvent(this.db, {
-            turn_id: null,
-            session_id: sessionId,
-            type: "session_provisioned",
-            payload: { initial_snapshot_id: captured.snapshot.snapshot_id },
-            created_at: now,
-          });
-        });
-        return;
-      } catch (e) {
-        const reason = e instanceof CoverageError ? `${e.code}: ${e.message}` : String(e);
-        this.failProvisioning(sessionId, reason);
-        return;
-      }
-    }
-
-    // No capture needed (review slot / path-less) — metadata-only completion.
+    // Metadata-only completion; no snapshot or coverage profile is required.
     const now = this.now();
     try {
       this.db.tx(() => {
@@ -2108,115 +1785,40 @@ export class BrokerCore {
     return project?.session_cap ?? this.limits.openSessionsPerProject;
   }
 
-  /** Preflight snapshot checks outside the admission tx (§7.2 step 3). */
-  private sendSnapshotPreflight(session: SessionRecord, req: SendRequest): string | null {
-    // Required task artifacts: ACL/sealed/retained checks before inference
-    // (§7.1.1) — every entry is required; nothing is silently dropped.
+  /** Validate required artifacts and optional manual snapshot-review inputs. */
+  private sendSnapshotPreflight(session: SessionRecord, req: SendRequest): void {
     this.resolveTaskArtifacts(session.project_id, req.task.artifact_refs ?? []);
-    if ("workspace_precondition" in req) {
-      const expected = req.workspace_precondition.expected_snapshot_id;
-      this.checkSnapshotBinding(session, expected, "expected");
-      // Digest comparison only for writer sessions with a real workspace.
-      if (session.workspace_mode !== "review_slot" && session.workspace_id) {
-        this.checkWorkspaceDigest(session, expected);
-      }
-    } else if ("review_binding" in req) {
-      const { baseline_snapshot_id, target_snapshot_id } = req.review_binding;
-      this.checkSnapshotBinding(session, baseline_snapshot_id, "review baseline");
-      this.checkSnapshotBinding(session, target_snapshot_id, "review target");
-      const b = getSnapshotRecord(this.db, baseline_snapshot_id);
-      const t = getSnapshotRecord(this.db, target_snapshot_id);
-      if (
-        b &&
-        t &&
-        (b.coverage_profile_id !== t.coverage_profile_id ||
-          b.coverage_profile_version !== t.coverage_profile_version ||
-          b.coverage_contract_hash !== t.coverage_contract_hash)
-      ) {
-        throw new BrokerError(
-          "SNAPSHOT_COVERAGE_MISMATCH",
-          "Review baseline and target have different coverage bindings (§9.5).",
-        );
-      }
-    } else {
-      // Git-native review: bounded Git reads (commit objects, HEAD and,
-      // optionally, a working-tree digest) run OUTSIDE the admission tx.
-      // No snapshots or diff inputs are created.
-      return this.gitReviewSendPreflight(session, req);
+    if (session.workspace_mode === "review_slot" && !req.review_binding) {
+      throw new BrokerError("INVALID_REQUEST", "review_slot reviewer turns require an explicit manual review_binding.");
     }
-    return null;
+    if (!req.review_binding) return;
+    if (session.workspace_mode !== "review_slot" || session.role !== "reviewer") {
+      throw new BrokerError("INVALID_REQUEST", "review_binding is only available to review_slot reviewer sessions.");
+    }
+    const policy = loadSessionWritePolicy(this.db, session);
+    if (policy.kind !== "effective" || policy.policy.access !== "read_only") {
+      throw new BrokerError("POLICY_UNSUPPORTED", "Manual snapshot review requires a read_only access policy.");
+    }
+    const { baseline_snapshot_id, target_snapshot_id } = req.review_binding;
+    const baseline = this.checkManualReviewSnapshot(session, baseline_snapshot_id, "review baseline");
+    const target = this.checkManualReviewSnapshot(session, target_snapshot_id, "review target");
+    if (
+      baseline.coverage_profile_id !== target.coverage_profile_id ||
+      baseline.coverage_profile_version !== target.coverage_profile_version ||
+      baseline.coverage_contract_hash !== target.coverage_contract_hash
+    ) {
+      throw new BrokerError("SNAPSHOT_COVERAGE_MISMATCH", "Review snapshots must use the same manual snapshot contract.");
+    }
   }
 
-  /**
-   * Git-review send preflight (§7.2 step 3): the session must be a read-only
-   * reviewer bound to a registered physical checkout; the binding commits
-   * must be full-hex commit objects of that repository; HEAD must equal the
-   * exact target commit and the checkout must be clean unless the caller
-   * explicitly binds its working-tree digest. Git reads are bounded
-   * subprocesses OUTSIDE any transaction; the authoritative boundary never
-   * runs Git. No snapshot is captured and no diff input is synthesized.
-   */
-  private gitReviewSendPreflight(session: SessionRecord, req: SendRequest): string | null {
-    const binding = "git_review_binding" in req ? req.git_review_binding : null;
-    if (!binding || typeof binding !== "object" ||
-        typeof binding.base_commit !== "string" || typeof binding.target_commit !== "string" ||
-        (binding.include_working_tree !== undefined && typeof binding.include_working_tree !== "boolean")) {
-      throw new BrokerError("INVALID_REQUEST", "git_review_binding requires string base_commit and target_commit.");
+  private checkManualReviewSnapshot(session: SessionRecord, snapshotId: string, label: string) {
+    const snapshot = getSnapshotRecord(this.db, snapshotId);
+    if (!snapshot || snapshot.project_id !== session.project_id) {
+      throw new BrokerError("INVALID_REQUEST", `Unknown ${label} snapshot for this project.`);
     }
-    for (const key of Object.keys(binding)) {
-      if (!["base_commit", "target_commit", "include_working_tree"].includes(key)) {
-        throw new BrokerError("INVALID_REQUEST", `Unknown git_review_binding field '${key}'.`);
-      }
-    }
-    if (session.role !== "reviewer" || session.workspace_mode === "review_slot" || !session.workspace_id) {
-      throw new BrokerError(
-        "INVALID_REQUEST",
-        "git_review_binding requires a reviewer session in current/worktree physical mode with a registered workspace.",
-      );
-    }
-    const policyLookup = loadSessionWritePolicy(this.db, session);
-    if (policyLookup.kind === "malformed") {
-      throw new BrokerError("POLICY_UNSUPPORTED", `Session policy binding is unusable: ${policyLookup.reason}`);
-    }
-    if (policyLookup.kind !== "effective" || policyLookup.policy.access !== "read_only") {
-      throw new BrokerError("POLICY_UNSUPPORTED", "git_review_binding requires an effective read_only policy.");
-    }
-    if (!GIT_REVIEW_COMMIT_PATTERN.test(binding.base_commit)) {
-      throw new BrokerError(
-        "INVALID_REQUEST",
-        "git_review_binding.base_commit must be a full 40- or 64-character lowercase hexadecimal commit id.",
-      );
-    }
-    if (!GIT_REVIEW_COMMIT_PATTERN.test(binding.target_commit)) {
-      throw new BrokerError(
-        "INVALID_REQUEST",
-        "git_review_binding.target_commit must be a full 40- or 64-character lowercase hexadecimal commit id.",
-      );
-    }
-    // The review runs in the session's durable PINNED physical checkout —
-    // the same cwd dispatch uses — never a re-resolved mutable alias.
-    const bound = readSessionPhysicalBinding(this.db, session.session_id);
-    if (bound.kind === "malformed") {
-      throw new BrokerError("POLICY_UNSUPPORTED", `Session physical cwd binding is unusable: ${bound.reason}`);
-    }
-    if (bound.kind !== "bound") {
-      throw new BrokerError("INVALID_REQUEST", "Session has no durable physical cwd binding; replacement session required.");
-    }
-    const root = resolveGitReviewRoot(bound.binding.canonical_cwd);
-    if (!root) {
-      throw new BrokerError("WORKSPACE_CHANGED", "Session's pinned physical checkout does not resolve on disk.");
-    }
-    try {
-      return preflightGitReview({
-        root, baseCommit: binding.base_commit, targetCommit: binding.target_commit,
-        includeWorkingTree: binding.include_working_tree === true,
-      });
-    } catch (e) {
-      if (e instanceof GitReviewPreflightError) {
-        throw new BrokerError("INVALID_REQUEST", e.message, { details: { reason: e.reason } });
-      }
-      throw e;
-    }
+    if (snapshot.state === "CAPTURING") throw new BrokerError("ARTIFACT_NOT_READY", `${label} snapshot is still capturing.`);
+    if (snapshot.state !== "SEALED") throw new BrokerError("INVALID_REQUEST", `${label} snapshot is not sealed.`);
+    return snapshot;
   }
 
   /**
@@ -2232,7 +1834,7 @@ export class BrokerCore {
         // whether an unknown or foreign resource exists.
         const snapshot = !artifact ? getSnapshotRecord(this.db, ref) : null;
         if (snapshot?.project_id === projectId) {
-          throw new BrokerError("INVALID_REQUEST", "task.artifact_refs accepts artifact IDs, not snapshot IDs. Put the snapshot in workspace_precondition.expected_snapshot_id (or review_binding for snapshot review); use artifact_refs: [] when there are no required artifacts.", {
+          throw new BrokerError("INVALID_REQUEST", "task.artifact_refs accepts artifact IDs, not snapshot IDs. Use review_binding only for a manual review_slot comparison; use artifact_refs: [] when there are no required artifacts.", {
             executionStarted: false,
             retryGuidance: "correct_task_artifact_refs",
             details: { field: "task.artifact_refs", index, reason: "snapshot_id_is_not_artifact_id" },
@@ -2284,33 +1886,9 @@ export class BrokerCore {
       throw new BrokerError("SESSION_BLOCKED", session0.block_reason ?? "Session is blocked.");
     }
     this.assertAdmissionOpen();
-    // §13.3 later-turn readiness revalidation (outside the tx): a session with
-    // a durably bound readiness fingerprint refuses on observed CLI/binary/
-    // config/auth drift BEFORE any accepted state. Requested model and effort
-    // are validated separately by adapter preflight. Authorization and idempotent
-    // replay already ran; the authoritative transaction below never probes.
-    this.sendReadinessRevalidation(session0);
-    // §7.2 step 3 preflight: expensive filesystem hashing outside the tx.
-    const gitWorkingTreeDigest = this.sendSnapshotPreflight(session0, req);
-    // A05 preflight: the writer lease target's physical checkout identity is
-    // resolved with realpath/stat OUTSIDE the admission tx; an unresolved or
-    // retargeted-away alias fails closed here, before any accepted state
-    // exists. The conflict decision itself stays in the authoritative tx
-    // below so the established error priority is preserved (SESSION_BUSY and
-    // RESOURCE_BUSY are decided before any lease refusal, as before).
-    const preflightLeaseTarget = this.leaseTurn(req) && session0.workspace_id
+    this.sendSnapshotPreflight(session0, req);
+    const preflightLeaseTarget = this.leaseTurn(session0) && session0.workspace_id
       ? this.writerLeaseTargetOrThrow(session0.workspace_id)
-      : null;
-    // A06 preflight: a session with a durable physical cwd binding may only
-    // send while the registered alias still resolves to exactly that bound
-    // physical root (checked with realpath/stat OUTSIDE the tx). A retargeted
-    // alias, an externally replaced root or a byte-identical copy is refused
-    // here — before any accepted state or inference exists. Unbound or
-    // malformed bindings are not reinterpreted here: their explicit fail-closed
-    // refusals happen pre-dispatch in the executor, after the established
-    // contract/policy priorities.
-    const preflightPhysical = preflightLeaseTarget?.physical
-      ? this.validateSessionPhysicalBinding(session0, preflightLeaseTarget.physical)
       : null;
 
     let response: SendResponse;
@@ -2330,18 +1908,7 @@ export class BrokerCore {
         // no fresh-session fallback; historical grants/leases are preserved.
         this.assertDurableProviderBinding(session);
         this.assertAdmissionOpen();
-        // Re-validate immutable snapshot records inside the authoritative
-        // boundary (cheap record reads; §9.5 binding rules). Git review
-        // bindings carry no snapshots: their commit-shape contract was
-        // validated in the preflight and the exact-commit drift check
-        // belongs to the executor under the held lease.
-        if ("workspace_precondition" in req) {
-          this.checkSnapshotBinding(session, req.workspace_precondition.expected_snapshot_id, "expected");
-        } else if ("review_binding" in req) {
-          this.checkSnapshotBinding(session, req.review_binding.baseline_snapshot_id, "review baseline");
-          this.checkSnapshotBinding(session, req.review_binding.target_snapshot_id, "review target");
-        }
-        this.checkWriteScopeCoverage(session);
+        this.sendSnapshotPreflight(session, req);
 
         const now = this.now();
         const turnId = newId(ID_PREFIX.turn);
@@ -2351,44 +1918,18 @@ export class BrokerCore {
         // priorities; an existing accepted operation already replayed above
         // keeps its successful outcome regardless of a later pause.
         assertQuotaScopeSendable(this.db, quotaScope, now);
-        const workspaceId = session.workspace_id; // writer lease target (INV-02)
+        const workspaceId = session.workspace_id;
 
         checkTurnCapacity(this.db, this.limits, quotaScope);
-        // A05: the writer lease scope is the authoritative physical checkout
-        // identity, re-resolved INSIDE the boundary (realpath/stat syscalls —
-        // never a subprocess). Registered/junction/symlink/case aliases of one
-        // checkout share one exclusive writer; path-less workspaces keep the
-        // legacy ID-scoped lease. A conflicting or quarantined alias is a
-        // mutable refusal: the transaction rolls back and frees the key.
+        // Serialize writers that resolve to the same physical checkout.
         let leaseTarget: WorkspaceLeaseTarget | null = null;
-        if (workspaceId && this.leaseTurn(req)) {
+        if (workspaceId && this.leaseTurn(session)) {
           leaseTarget = this.writerLeaseTargetOrThrow(workspaceId);
           if (!preflightLeaseTarget || preflightLeaseTarget.project_id !== leaseTarget.project_id ||
               workspaceLeaseScope(preflightLeaseTarget) !== workspaceLeaseScope(leaseTarget)) {
-            throw new BrokerError("WORKSPACE_CHANGED", "Checkout identity changed after admission preflight.", {
+            throw new BrokerError("WORKSPACE_CHANGED", "Checkout identity changed during send admission.", {
               executionStarted: false,
             });
-          }
-          // A06 authoritative cheap recheck (§7.2): the immutable session
-          // binding must still pin exactly the physical checkout the alias
-          // resolves to. Record reads plus realpath/stat syscalls only —
-          // never a subprocess inside the boundary.
-          if (preflightLeaseTarget.physical && preflightPhysical) {
-            const lookup = readSessionPhysicalBinding(this.db, session.session_id);
-            if (lookup.kind !== "bound" ||
-                lookup.binding.canonical_cwd !== preflightPhysical.canonical_cwd ||
-                lookup.binding.lease_scope !== preflightPhysical.lease_scope) {
-              throw new BrokerError("WORKSPACE_CHANGED", "Session physical cwd binding changed during admission.", {
-                executionStarted: false,
-              });
-            }
-            if (lookup.binding.lease_scope !== leaseTarget.physical?.scope) {
-              throw new BrokerError(
-                "WORKSPACE_CHANGED",
-                "Registered workspace alias no longer resolves to the session's bound physical checkout (retargeted or replaced).",
-                { executionStarted: false },
-              );
-            }
           }
           checkWorkspaceLeaseAvailable(this.db, leaseTarget);
         }
@@ -2398,17 +1939,7 @@ export class BrokerCore {
         const refs = req.task.artifact_refs ?? [];
         const resolvedArtifacts = this.resolveTaskArtifacts(session.project_id, refs);
 
-        const expectedSnapshot = "workspace_precondition" in req
-          ? req.workspace_precondition.expected_snapshot_id
-          : "review_binding" in req
-            ? req.review_binding.target_snapshot_id
-            : null;
-        const baselineSnapshot = "workspace_precondition" in req
-          ? req.workspace_precondition.expected_snapshot_id
-          : "review_binding" in req
-            ? req.review_binding.baseline_snapshot_id
-            : null;
-        const gitBinding = "git_review_binding" in req ? req.git_review_binding : null;
+        const baselineSnapshot = req.review_binding?.baseline_snapshot_id ?? null;
 
         const turn: TurnRecord = {
           turn_id: turnId,
@@ -2432,10 +1963,10 @@ export class BrokerCore {
           input_manifest_id: null,
           task_artifact_refs: refs,
           baseline_snapshot_id: baselineSnapshot,
-          review_target_snapshot_id: "review_binding" in req ? req.review_binding.target_snapshot_id : null,
-          git_base_commit: gitBinding ? gitBinding.base_commit : null,
-          git_target_commit: gitBinding ? gitBinding.target_commit : null,
-          git_working_tree_digest: gitBinding ? gitWorkingTreeDigest : null,
+          review_target_snapshot_id: req.review_binding?.target_snapshot_id ?? null,
+          git_base_commit: null,
+          git_target_commit: null,
+          git_working_tree_digest: null,
           final_snapshot_id: null,
           runtime_id: null,
           error_code: null,
@@ -2461,14 +1992,9 @@ export class BrokerCore {
           workspace_id: leaseTarget ? leaseTarget.workspace_id : null,
           workspace_lease_scope: leaseTarget ? workspaceLeaseScope(leaseTarget) : null,
         });
-        // §15.3.1 accepted-turn pins: the snapshots this turn depends on stay
-        // retained while it is nonterminal; released at terminal commit.
-        // Git review turns bind exact commits, not snapshots — no snapshot pins.
-        const pinnedSnapshotIds = "workspace_precondition" in req
-          ? [req.workspace_precondition.expected_snapshot_id]
-          : "review_binding" in req
-            ? [req.review_binding.baseline_snapshot_id, req.review_binding.target_snapshot_id]
-            : [];
+        const pinnedSnapshotIds = req.review_binding
+          ? [req.review_binding.baseline_snapshot_id, req.review_binding.target_snapshot_id]
+          : [];
         for (const snapId of pinnedSnapshotIds) {
           const rec = getSnapshotRecord(this.db, snapId);
           if (rec) {
@@ -2508,9 +2034,8 @@ export class BrokerCore {
           session_id: session.session_id,
           type: "turn_admitted",
           payload: {
-            expected_snapshot_id: expectedSnapshot,
             task: req.task,
-            ...(gitBinding ? { git_review_binding: { base_commit: gitBinding.base_commit, target_commit: gitBinding.target_commit, include_working_tree: gitBinding.include_working_tree === true, working_tree_digest: gitWorkingTreeDigest } } : {}),
+            ...(req.review_binding ? { review_binding: req.review_binding } : {}),
           },
           created_at: now,
         });
@@ -2570,111 +2095,23 @@ export class BrokerCore {
     if (refs.length > 32) {
       throw new BrokerError("INPUT_LIMIT", "artifact_refs exceeds 32 entries (§15.1).");
     }
-    const bindingVariants = ["workspace_precondition", "review_binding", "git_review_binding"] as const;
-    const present = bindingVariants.filter((name) => name in req);
-    if (present.length !== 1) {
-      throw new BrokerError(
-        "INVALID_REQUEST",
-        "Exactly one of workspace_precondition / review_binding / git_review_binding is required (§10.3).",
-      );
+    for (const legacy of ["workspace_precondition", "git_review_binding"] as const) {
+      if (legacy in req) {
+        throw new BrokerError("INVALID_REQUEST", `${legacy} is no longer part of the task-send contract.`);
+      }
     }
-  }
-
-  /**
-   * Snapshot binding checks (§7.1, §9.5): sealed, retained, same project,
-   * same coverage binding as the session; a review pair must share one
-   * binding. Cheap record reads — safe to repeat inside the admission tx.
-   */
-  private checkSnapshotBinding(session: SessionRecord, snapshotId: string, label: string): void {
-    const snap = getSnapshotRecord(this.db, snapshotId);
-    if (!snap || snap.project_id !== session.project_id) {
-      throw new BrokerError("INVALID_REQUEST", `Unknown ${label} snapshot for this project.`);
-    }
-    if (snap.state === "CAPTURING") {
-      throw new BrokerError("ARTIFACT_NOT_READY", `${label} snapshot is still capturing.`);
-    }
-    if (snap.state === "FAILED") {
-      throw new BrokerError("INVALID_REQUEST", `${label} snapshot capture failed.`);
-    }
-    if (
-      snap.coverage_profile_id !== session.coverage_profile_id ||
-      snap.coverage_profile_version !== session.coverage_profile_version ||
-      snap.coverage_contract_hash !== session.coverage_contract_hash
-    ) {
-      throw new BrokerError(
-        "SNAPSHOT_COVERAGE_MISMATCH",
-        `${label} snapshot has a different coverage binding than the session (§9.5).`,
-      );
-    }
-  }
-
-  /**
-   * Workspace precondition digest check (§8.2, §7.2 step 3): expensive
-   * filesystem hashing runs OUTSIDE the admission transaction; the result is
-   * a candidate observation re-validated at final admission by record checks.
-   */
-  private checkWorkspaceDigest(session: SessionRecord, expectedSnapshotId: string): void {
-    const snap = getSnapshotRecord(this.db, expectedSnapshotId);
-    if (!snap) return; // unknown snapshot is reported by binding checks
-    const workspace = session.workspace_id ? getWorkspace(this.db, session.workspace_id) : null;
-    if (!workspace?.canonical_path) {
-      throw new BrokerError("INVALID_REQUEST", "Session workspace has no resolvable path.");
-    }
-    if (!session.coverage_profile_id || !session.coverage_profile_version) {
-      throw new BrokerError("SNAPSHOT_COVERAGE_MISMATCH", "Session has no coverage binding.");
-    }
-    const profile = getCoverageProfile(this.db, session.coverage_profile_id, session.coverage_profile_version);
-    if (!profile) {
-      throw new BrokerError("SNAPSHOT_COVERAGE_MISMATCH", "Coverage profile missing.");
-    }
-    const config = JSON.parse(profile.config) as CoverageConfig;
-    const inventory = takeInventory(workspace.canonical_path, config);
-    const digest = computeSourceDigest(inventory.entries, {
-      profile_id: profile.coverage_profile_id,
-      version: profile.version,
-      contract_hash: profile.contract_hash,
-    });
-    if (digest !== snap.source_digest) {
-      throw new BrokerError("WORKSPACE_CHANGED", "Workspace source state no longer matches the expected snapshot (§8.2).", {
-        details: { expected_snapshot_id: expectedSnapshotId },
-      });
-    }
-  }
-
-  /**
-   * §8.7: the coverage contract must cover the whole effective policy write
-   * scope. An INVALID scope (missing or unreadable session binding)
-   * is an operator/config error — reject before inference, not after
-   * the run.
-   */
-  private checkWriteScopeCoverage(session: SessionRecord): void {
-    const scope = sessionWriteScope(this.db, session);
-    if (scope.kind === "invalid") {
-      throw new BrokerError("POLICY_UNSUPPORTED", `Session policy binding is unusable: ${scope.reason}`, { executionStarted: false });
-    }
-    if (!session.coverage_profile_id || !session.coverage_profile_version) return;
-    const profile = getCoverageProfile(this.db, session.coverage_profile_id, session.coverage_profile_version);
-    if (!profile) return;
-    if (scope.kind === "absent") return;
-    const config = JSON.parse(profile.config) as CoverageConfig;
-    const uncovered = uncoveredWriteScope(scope.prefixes, config);
-    if (uncovered.length > 0) {
-      throw new BrokerError(
-        "SNAPSHOT_COVERAGE_MISMATCH",
-        "The session's bound write scope is not covered by its workspace source selector (§8.7). Coverage is bound to the session and cannot be selected per send. Use a workspace whose coverage covers the granted write scope; for a read-only audit, spawn a new session with policy_restrictions.access='read_only'.",
-        {
-          executionStarted: false,
-          retryGuidance: "use_covering_workspace_or_spawn_read_only_audit_session",
-          details: {
-            session_id: session.session_id,
-            workspace_id: session.workspace_id,
-            coverage_profile_id: session.coverage_profile_id,
-            coverage_profile_version: session.coverage_profile_version,
-            actual_write_scope: [...scope.prefixes],
-            uncovered_write_scope: uncovered,
-          },
-        },
-      );
+    if (req.review_binding !== undefined) {
+      const binding = req.review_binding as unknown;
+      if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
+        throw new BrokerError("INVALID_REQUEST", "review_binding must contain baseline_snapshot_id and target_snapshot_id.");
+      }
+      const pair = binding as Record<string, unknown>;
+      if (typeof pair.baseline_snapshot_id !== "string" || typeof pair.target_snapshot_id !== "string") {
+        throw new BrokerError("INVALID_REQUEST", "review_binding must contain baseline_snapshot_id and target_snapshot_id.");
+      }
+      if (Object.keys(pair).some((key) => key !== "baseline_snapshot_id" && key !== "target_snapshot_id")) {
+        throw new BrokerError("INVALID_REQUEST", "Unknown review_binding field.");
+      }
     }
   }
 
@@ -2683,48 +2120,8 @@ export class BrokerCore {
     if (session.close_state === "pending") {
       throw new BrokerError("SESSION_CLOSING", "A close intent is pending for this session (§6.4).");
     }
-    // Binding-to-session rules: a review binding belongs to review-slot
-    // sessions only (§8.1): a current/worktree writer must use a workspace
-    // precondition, otherwise it would bypass both the exclusive lease and
-    // the digest precondition. A Git review binding belongs to read-only
-    // reviewer sessions on a registered physical checkout only; a Git
-    // reviewer session accepts nothing else (it has no snapshot baseline).
-    if (requiredSendBinding(session) === "git_review_binding" && !("git_review_binding" in req)) {
-      throw new BrokerError(
-        "INVALID_REQUEST",
-        "This reviewer session uses Git in its current/worktree checkout. Send git_review_binding with full base_commit and target_commit IDs. For uncommitted changes, set both IDs to the current HEAD and include_working_tree=true. Omit workspace_precondition and review_binding; no snapshot or replacement session is needed.",
-        {
-          executionStarted: false,
-          retryGuidance: "send_git_review_binding_in_same_session",
-          details: {
-            required_send_binding: "git_review_binding",
-            workspace_mode: session.workspace_mode,
-            uncommitted_changes: {
-              base_commit: "<full current HEAD>",
-              target_commit: "<full current HEAD>",
-              include_working_tree: true,
-            },
-          },
-        },
-      );
-    }
-    if ("review_binding" in req && session.workspace_mode !== "review_slot") {
-      throw new BrokerError("INVALID_REQUEST", "review_binding requires a review_slot session (§8.1).");
-    }
-    if ("git_review_binding" in req) {
-      if (session.role !== "reviewer" || session.workspace_mode === "review_slot" || !session.workspace_id) {
-        throw new BrokerError(
-          "INVALID_REQUEST",
-          "git_review_binding requires a reviewer session in current/worktree physical mode with a registered workspace.",
-        );
-      }
-    }
-    if ("workspace_precondition" in req && session.workspace_mode !== "review_slot") {
-      // Writer sessions need a coverage binding to make the precondition
-      // checkable at all — reject before inference (§8.7).
-      if (session.workspace_id && !session.coverage_profile_id) {
-        throw new BrokerError("SNAPSHOT_COVERAGE_MISMATCH", "Writer session has no coverage binding (§8.7).");
-      }
+    if (req.review_binding && (session.workspace_mode !== "review_slot" || session.role !== "reviewer")) {
+      throw new BrokerError("INVALID_REQUEST", "review_binding is only available to review_slot reviewer sessions.");
     }
     switch (session.state) {
       case "IDLE":
@@ -2747,14 +2144,6 @@ export class BrokerCore {
         throw new BrokerError("SESSION_BLOCKED", "Session cannot accept a turn now.");
     }
 
-    const adapter = this.adapters.get(session.provider);
-    const recorded = session.adapter_version;
-    if (adapter && recorded && recorded !== adapter.adapterVersion) {
-      throw new BrokerError(
-        "PROVIDER_INCOMPATIBLE",
-        `Session adapter version '${recorded}' does not match the registered adapter '${adapter.adapterVersion}'; revalidation required (§13.3).`,
-      );
-    }
   }
 
   /**
@@ -2803,74 +2192,10 @@ export class BrokerCore {
     }
   }
 
-  /**
-   * §13.3 later-turn readiness revalidation (OUTSIDE the tx, §7.2 step 3):
-   * sessions with a durably bound readiness fingerprint re-run the adapter's
-   * (adapter-side cached, freshness-bounded) preflight and compare the pure
-   * observation fingerprint. Observed CLI/binary/config/auth drift refuses
-   * BEFORE acceptance. Sessions without observed readiness (void-compatible
-   * adapters, legacy sessions) are unchanged.
-   */
-  private sendReadinessRevalidation(session: SessionRecord): void {
-    const lookup = readSessionProviderBinding(this.db, session.session_id);
-    if (lookup.kind !== "bound" || lookup.binding.readiness === null) return;
-    const adapter = this.adapters.get(session.provider);
-    if (!adapter) {
-      throw new BrokerError("PROVIDER_INCOMPATIBLE", `Provider '${session.provider}' is not available.`, {
-        executionStarted: false,
-      });
-    }
-    const account = getAccount(this.db, session.account_profile_id);
-    if (!account || account.provider !== session.provider) {
-      throw new BrokerError(
-        "PROVIDER_INCOMPATIBLE",
-        `Account profile '${session.account_profile_id}' is not available for provider '${session.provider}'.`,
-        { executionStarted: false },
-      );
-    }
-    const policyLookup = loadSessionWritePolicy(this.db, session);
-    if (policyLookup.kind !== "effective") return; // execution's established fail-closed path owns this refusal
-    const returned = adapter.preflight({
-      provider: session.provider,
-      model: session.requested_model,
-      effort: session.requested_effort,
-      role: session.role,
-      workspace_mode: session.workspace_mode,
-      account: {
-        account_profile_id: account.account_profile_id,
-        auth_mode: account.auth_mode,
-        quota_scope_id: account.quota_scope_id,
-      },
-      effective_policy: cloneFrozenPolicy(policyLookup.policy),
-    } satisfies AdapterPreflightContext);
-    const observation = readReadinessObservation(returned, adapter.providerId);
-    const fingerprint = observation ? fingerprintReadinessObservation(observation) : null;
-    if (fingerprint !== lookup.binding.readiness.fingerprint) {
-      throw new BrokerError(
-        "PROVIDER_INCOMPATIBLE",
-        "Observed provider readiness drifted from the session's durable binding (CLI version, binary/config inputs or auth status changed); refusing before acceptance — correct provider readiness and create a replacement session.",
-        {
-          executionStarted: false,
-          retryGuidance: "correct_provider_readiness_then_spawn_session",
-          details: { bound_fingerprint: lookup.binding.readiness.fingerprint },
-        },
-      );
-    }
-  }
-
-  private writerTurn(req: SendRequest): boolean {
-    return "workspace_precondition" in req;
-  }
-
-  /**
-   * Turns that take the EXCLUSIVE physical checkout lease: writers and Git
-   * reviewers alike. A read-review on a real checkout is serialized with
-   * broker writers (and with other broker reviews) exactly like a write —
-   * the reviewer is not a writer, but the checkout must stay broker-owned
-   * and externally quiescent for the review's exact-commit contract.
-   */
-  private leaseTurn(req: SendRequest): boolean {
-    return this.writerTurn(req) || "git_review_binding" in req;
+  private leaseTurn(session: SessionRecord): boolean {
+    if (!session.workspace_id || session.workspace_mode === "review_slot") return false;
+    const policy = loadSessionWritePolicy(this.db, session);
+    return policy.kind === "effective" && policy.policy.access === "workspace_write";
   }
 
   /**
@@ -2884,36 +2209,6 @@ export class BrokerCore {
     const workspace = getWorkspace(this.db, workspaceId);
     if (!workspace) throw new BrokerError("INVALID_REQUEST", "Unknown workspace reference.");
     return workspaceLeaseTarget(workspace, { requireResolvable: true });
-  }
-
-  /**
-   * A06 send preflight (§7.2 step 3): validate the session's durable physical
-   * cwd binding against the freshly resolved checkout identity — all
-   * filesystem resolution OUTSIDE the admission tx. Returns the bound binding
-   * the authoritative transaction must recheck, or null when the session
-   * carries no usable binding (unbound pre-package journals and malformed
-   * payloads keep their established fail-closed refusals further along the
-   * send/execution pipeline — they are never reinterpreted as the alias).
-   */
-  private validateSessionPhysicalBinding(session: SessionRecord, target: PhysicalCheckoutIdentity): SessionPhysicalCwdBinding | null {
-    const lookup = readSessionPhysicalBinding(this.db, session.session_id);
-    if (lookup.kind !== "bound") return null;
-    if (lookup.binding.lease_scope !== target.scope) {
-      throw new BrokerError(
-        "WORKSPACE_CHANGED",
-        "Registered workspace alias no longer resolves to the session's bound physical checkout (retargeted or replaced).",
-        { executionStarted: false },
-      );
-    }
-    const pinned = resolvePhysicalCheckoutIdentity(lookup.binding.canonical_cwd);
-    if (!pinned || pinned.scope !== lookup.binding.lease_scope) {
-      throw new BrokerError(
-        "WORKSPACE_CHANGED",
-        "Session's pinned physical checkout no longer resolves to its bound identity (renamed or recreated externally).",
-        { executionStarted: false },
-      );
-    }
-    return lookup.binding;
   }
 
   private quotaScopeFor(session: SessionRecord): string {
@@ -3471,12 +2766,11 @@ export class BrokerCore {
   /** Compact authorization diagnostic from the immutable spawn-time binding. */
   sessionEffectivePolicy(coordinatorId: string, sessionId: string): {
     access: "read_only" | "workspace_write";
-    write_scope: string[];
   } | null {
     const session = this.authorizeSession(coordinatorId, sessionId);
     const lookup = loadSessionWritePolicy(this.db, session);
     if (lookup.kind !== "effective") return null;
-    return { access: lookup.policy.access, write_scope: [...lookup.policy.write_scope] };
+    return { access: lookup.policy.access };
   }
 
   /**
@@ -3517,14 +2811,12 @@ export class BrokerCore {
       binding_version: binding.binding_version,
       account: { ...binding.account },
       adapter_version: binding.adapter_version ?? session.adapter_version,
-      cli_version: binding.cli_version ?? session.cli_version,
-      // CLI-owned auth status as OBSERVED at admission; null = unknown —
-      // distinct from a registered auth_mode and never reported as false.
-      authenticated: binding.readiness?.authenticated ?? null,
-      readiness_fingerprint: binding.readiness?.fingerprint ?? null,
-      readiness_observed_at: binding.readiness?.observed_at ?? null,
-      readiness_source: binding.readiness?.source ?? null,
-      model_catalog_size: binding.readiness?.model_catalog_size ?? null,
+      cli_version: null,
+      authenticated: null,
+      readiness_fingerprint: null,
+      readiness_observed_at: null,
+      readiness_source: null,
+      model_catalog_size: null,
     };
   }
 
@@ -3638,29 +2930,13 @@ export class BrokerCore {
     for (const { workspace_id } of workspaces) {
       const ws = getWorkspace(this.db, workspace_id);
       if (!ws || !this.workspaceSelectable(ws)) continue;
-      const coverageVersion = ws.coverage_profile_id ? latestCoverageProfileVersion(this.db, ws.coverage_profile_id) : null;
-      const coverageProfile = coverageVersion && ws.coverage_profile_id
-        ? getCoverageProfile(this.db, ws.coverage_profile_id, coverageVersion)
-        : null;
-      let sourcePrefixes: string[] | null = null;
-      if (coverageProfile) {
-        try {
-          const config = JSON.parse(coverageProfile.config) as CoverageConfig;
-          validateCoverageConfig(config);
-          sourcePrefixes = [...config.source_prefixes];
-        } catch { /* omit malformed coverage details; spawn rejects the profile */ }
-      }
       entries.push({
         kind: "workspace", id: ws.workspace_id, display_name: ws.workspace_id,
-        mode: ws.mode, coverage_profile_id: ws.coverage_profile_id, quarantined: ws.quarantined,
-        coverage_profile_version: coverageProfile?.version ?? null,
-        coverage_contract_hash: coverageProfile?.contract_hash ?? null,
-        coverage_source_prefixes: sourcePrefixes,
+        mode: ws.mode, quarantined: ws.quarantined,
         // §8.3 additive: eligible registered repository workspace reference
         // for broker-created detached worktrees. Only REGISTERED ids are
         // exposed — never a guessed or caller-supplied path.
-        // This field describes source-repository suitability. Coverage and
-        // policy compatibility are role-specific and reported per route.
+        // Physical paths are local-only; report only the suitability flag.
         eligible_worktree_source: ws.mode === "current" && !ws.quarantined && ws.canonical_path !== null,
       });
     }
@@ -3674,7 +2950,7 @@ export class BrokerCore {
       if (route.project_id !== projectId) continue;
       const effectivePolicy = this.routeEffectivePolicy(route.policy_profile_id);
       const compatibleWorkspaceIds = effectivePolicy
-        ? this.compatibleWorkspaceIds(projectId, route.role, effectivePolicy)
+        ? this.compatibleWorkspaceIds(projectId)
         : [];
       entries.push({
         kind: "route",
@@ -3715,6 +2991,32 @@ export class BrokerCore {
   turnAgentReported(coordinatorId: string, turnId: string) {
     this.turnStatus(coordinatorId, turnId); // Apply the same turn ownership check.
     return getTurnEventPayload(this.db, turnId, "agent_reported");
+  }
+
+  /** Bounded workspace observations; a filesystem delta does not prove its author. */
+  turnWorkspaceDelta(coordinatorId: string, turnId: string) {
+    this.turnStatus(coordinatorId, turnId);
+    const terminal = getTurnEventPayload(this.db, turnId, "turn_terminal");
+    const raw = terminal?.observed_workspace_delta;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const delta = raw as Record<string, unknown>;
+    const categories = ["added", "modified", "deleted"] as const;
+    if (categories.some(key => !Array.isArray(delta[key]) ||
+        (delta[key] as unknown[]).some(path => typeof path !== "string"))) return null;
+    let remaining = 100;
+    const paths = { added: [] as string[], modified: [] as string[], deleted: [] as string[] };
+    const counts = { added: 0, modified: 0, deleted: 0 };
+    for (const key of categories) {
+      const all = delta[key] as string[];
+      counts[key] = all.length;
+      paths[key] = all.slice(0, remaining);
+      remaining -= paths[key].length;
+    }
+    return {
+      ...paths, counts,
+      truncated: counts.added + counts.modified + counts.deleted > 100,
+      attribution: "unknown" as const,
+    };
   }
 
   /** Schema-only report/findings artifact descriptor for the public result DTO. */
@@ -3788,10 +3090,9 @@ export class BrokerCore {
 
 /** Request contract follows the durable session kind, never the task wording. */
 export function requiredSendBinding(
-  session: Pick<SessionRecord, "role" | "workspace_mode">,
-): "workspace_precondition" | "review_binding" | "git_review_binding" {
-  if (session.workspace_mode === "review_slot") return "review_binding";
-  return session.role === "reviewer" ? "git_review_binding" : "workspace_precondition";
+  session: Pick<SessionRecord, "workspace_mode">,
+): "none" | "review_binding" {
+  return session.workspace_mode === "review_slot" ? "review_binding" : "none";
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -3881,63 +3182,13 @@ function worktreeLockFence(ticket: RepositoryLockTicket): {
   };
 }
 
-/**
- * Pure comparable fingerprint over every externally-observed spawn input
- * (§7.2): provider, adapter version, registered account binding, the narrowed
- * effective policy and the captured readiness observation (null for
- * void-compatible adapters). Recomputed inside the admission transaction from
- * fresh pure reads — an unequal fingerprint rejects the spawn instead of
- * admitting stale preflight observations. The profile config itself is
- * covered by its `profile_fingerprint` (sha256 over the config text).
- */
-function spawnCandidateFingerprint(parts: {
-  provider: string;
-  adapterVersion: string;
-  account: Pick<AccountProfileRecord, "account_profile_id" | "provider" | "auth_mode" | "quota_scope_id">;
-  policy: EffectiveWritePolicy;
-  observation: ProviderReadinessObservation | null;
-  worktreeSource: { source_workspace_id: string; base_commit: string; source_common_dir: string; source_canonical_path: string; source_coverage_profile_id: string | null } | null;
-  workspaceAdmissionFingerprint: string;
-}): string {
-  return sha256Hex(JSON.stringify({
-    provider: parts.provider,
-    adapter_version: parts.adapterVersion,
-    account: {
-      account_profile_id: parts.account.account_profile_id,
-      provider: parts.account.provider,
-      auth_mode: parts.account.auth_mode,
-      quota_scope_id: parts.account.quota_scope_id,
-    },
-    policy: {
-      binding_version: parts.policy.binding_version,
-      access: parts.policy.access,
-      write_scope: parts.policy.write_scope,
-      policy_profile_id: parts.policy.policy_profile_id,
-      policy_profile_version: parts.policy.policy_profile_version,
-      profile_fingerprint: parts.policy.profile_fingerprint,
-      requested_restrictions: parts.policy.requested_restrictions,
-    },
-    readiness_fingerprint: parts.observation ? fingerprintReadinessObservation(parts.observation) : null,
-    // §8.3: the validated source binding participates — a changed source row
-    // or base commit yields a different fingerprint and refuses admission.
-    worktree_source: parts.worktreeSource,
-    workspace_admission: parts.workspaceAdmissionFingerprint,
-  }));
-}
-
-/** Seal the spawn candidate's durable provider binding (§12.1/§13.3 intent). */
+/** Seal only the selected account tuple; adapter readiness is checked at dispatch. */
 function durableProviderBinding(candidate: SpawnPreflightCandidate): {
   binding_version: number;
   account: { account_profile_id: string; provider: string; auth_mode: string; quota_scope_id: string | null };
   adapter_version: string;
-  cli_version: string | null;
-  readiness: {
-    fingerprint: string;
-    observed_at: number;
-    source: string;
-    authenticated: boolean | null;
-    model_catalog_size: number | null;
-  } | null;
+  cli_version: null;
+  readiness: null;
 } {
   return {
     binding_version: 1,
@@ -3948,16 +3199,8 @@ function durableProviderBinding(candidate: SpawnPreflightCandidate): {
       quota_scope_id: candidate.account.quota_scope_id,
     },
     adapter_version: candidate.adapterVersion,
-    cli_version: candidate.observation?.cli_version ?? null,
-    readiness: candidate.observation
-      ? {
-          fingerprint: fingerprintReadinessObservation(candidate.observation),
-          observed_at: candidate.observation.observed_at,
-          source: candidate.observation.source,
-          authenticated: candidate.observation.authenticated,
-          model_catalog_size: candidate.observation.model_catalog?.length ?? null,
-        }
-      : null,
+      cli_version: null,
+    readiness: null,
   };
 }
 
@@ -3998,25 +3241,7 @@ export function readSessionProviderBinding(db: RegistryDb, sessionId: string): P
     if (a.quota_scope_id !== null && typeof a.quota_scope_id !== "string") {
       return { kind: "malformed", reason: "provider binding quota scope is invalid" };
     }
-    if (b.readiness === undefined || (["cursor","antigravity","zcode"].includes(String(a.provider)) && b.readiness === null)) return {kind:"malformed",reason:"provider binding required readiness is missing"};
-    let readiness: DurableReadinessMetadata | null = null;
-    if (b.readiness !== undefined && b.readiness !== null) {
-      if (typeof b.readiness !== "object" || Array.isArray(b.readiness)) {
-        return { kind: "malformed", reason: "provider binding readiness is invalid" };
-      }
-      const r = b.readiness as Record<string, unknown>;
-      if (typeof r.fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(r.fingerprint)) {
-        return { kind: "malformed", reason: "provider binding readiness fingerprint is invalid" };
-      }
-      if (typeof r.observed_at !== "number" || !Number.isSafeInteger(r.observed_at) || r.observed_at < 0 || (r.source !== "cli_metadata_probe" && r.source !== "config_catalog") || (r.authenticated !== null && typeof r.authenticated !== "boolean") || (r.model_catalog_size !== null && (typeof r.model_catalog_size !== "number" || !Number.isSafeInteger(r.model_catalog_size) || r.model_catalog_size < 0 || r.model_catalog_size > 4096))) return {kind:"malformed",reason:"provider readiness metadata is invalid"};
-      readiness = {
-        fingerprint: r.fingerprint,
-        observed_at: r.observed_at,
-        source: r.source,
-        authenticated: typeof r.authenticated === "boolean" ? r.authenticated : null,
-        model_catalog_size: typeof r.model_catalog_size === "number" && Number.isSafeInteger(r.model_catalog_size) ? r.model_catalog_size : null,
-      };
-    }
+    if (b.readiness !== null) return { kind: "malformed", reason: "provider readiness observations are no longer part of session admission" };
     return {
       kind: "bound",
       binding: {
@@ -4028,8 +3253,8 @@ export function readSessionProviderBinding(db: RegistryDb, sessionId: string): P
           quota_scope_id: typeof a.quota_scope_id === "string" ? a.quota_scope_id : null,
         },
         adapter_version: typeof b.adapter_version === "string" ? b.adapter_version : null,
-        cli_version: typeof b.cli_version === "string" ? b.cli_version : null,
-        readiness,
+        cli_version: null,
+        readiness: null,
       },
     };
   } catch (e) {

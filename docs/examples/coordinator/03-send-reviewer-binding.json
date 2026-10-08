@@ -1,11 +1,11 @@
 {
   "tool": "agent_session_send",
-  "note": "Git reviewer in the registered author checkout. Pause edits while it runs. Use only git_review_binding; no snapshots or full diff artifact are required. Both commits can be HEAD for purely uncommitted review.",
+  "note": "Ordinary read-only reviewer task in the registered physical checkout. The reviewer uses Git directly to inspect the current changes; no Git or snapshot binding is sent.",
   "arguments": {
     "session_id": "<reviewer-session-id>",
     "idempotency_key": "<new-unique-key>",
     "task": {
-      "goal": "Review the bound Git changes, including staged, unstaged and nonignored new files. Report findings.",
+      "goal": "Review the current Git changes, including staged, unstaged and untracked files. Report findings.",
       "acceptance_criteria": [
         "Every finding states a file/line reference, impact and reason.",
         "Confirmed findings are delivered in the findings artifact."
@@ -13,16 +13,11 @@
       "relevant_paths": [
         "src/"
       ],
-      "context": "Read-only review in your cwd. Use Git and read relevant files. Do not modify, stage or commit. Report findings first with file/line, impact and reason.",
+      "context": "Read-only review in your registered physical checkout. Inspect Git directly and read relevant files. Do not modify, stage or commit. Report findings first with file/line, impact and reason.",
       "artifact_refs": [],
       "checks": [
         "List findings with file/line, impact and reason; state explicitly what could not be verified."
       ]
-    },
-    "git_review_binding": {
-      "base_commit": "<full-base-commit-object-id>",
-      "target_commit": "<full-target-commit-object-id>",
-      "include_working_tree": true
     }
   }
 }

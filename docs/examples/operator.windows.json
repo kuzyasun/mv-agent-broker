@@ -26,8 +26,8 @@
     { "account_profile_id": "zcode-individual", "provider": "zcode", "quota_scope_id": "zcode-individual", "auth_mode": "cli-owned" }
   ],
   "workspaces": [
-    { "workspace_id": "repo-a-current", "project_id": "repo-a", "mode": "current", "canonical_path": "C:\\work\\repo-a", "coverage_profile_id": "repo-a-coverage" }
-    ,{ "workspace_id": "repo-a-review", "project_id": "repo-a", "mode": "review_slot", "canonical_path": null, "coverage_profile_id": "repo-a-coverage" }
+    { "workspace_id": "repo-a-current", "project_id": "repo-a", "mode": "current", "canonical_path": "C:\\work\\repo-a" },
+    { "workspace_id": "repo-a-review", "project_id": "repo-a", "mode": "review_slot", "canonical_path": null, "coverage_profile_id": "repo-a-coverage" }
   ],
   "policy_profiles": [
     { "policy_profile_id": "repo-a-worker", "version": "1", "config": { "access": "workspace_write" } },

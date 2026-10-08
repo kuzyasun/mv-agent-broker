@@ -191,12 +191,12 @@ the internal MCP binding and stay in each card's advanced details. A model
 refresh is an explicit metadata-only action and supports manual model entry
 when a provider is unavailable. Observed catalog timestamps are
 informational: they do not prove authentication or quota. Use **New project
-wizard** to add another repository. Browse local folders, select the
-repository folder, choose file coverage and worker permissions, and copy
-agent profiles from an existing project. Readable names, tags, enablement,
-models, efforts, accounts, and native-subagent preferences are copied to new
-route IDs; reviewer and researcher copies receive the separate read-only
-policy. You can also start without profiles and add them afterwards.
+wizard** to add another repository. Browse local folders and select the
+physical checkout. The wizard creates read-only and whole-project write
+policies; copied routes keep their original access, model, account, effort,
+tags, enablement, and native-subagent preferences under new route IDs.
+Reviewer and researcher routes remain read-only. You can also start without
+routes and add them afterwards.
 
 Tags are coordinator selection hints, never permissions: toggle the
 `default` and `large` chips or enter custom lower-case tags (letters,
@@ -208,30 +208,24 @@ and discovery, but it cannot be stored or toggled — saving rejects it. The
 tag filter includes the derived tag; filtering never hides the other pools'
 Add-profile controls and disabled cards stay editable.
 
-The recommended coverage is the whole project folder: `source_prefixes: ["."]`
-covers every current and future top-level file and folder, except generated
-folders and broker/Git state that the preset excludes. The default worker
-policy then carries no `write_scope`: workers may write the whole covered
-project, including entries created after the project was added. The narrower
-code-folder preset and the advanced fields are deliberate restrictions that
-enumerate explicit coverage and write scopes; use them only when a project
-really must stay narrow. Folder browsing lists names only and does not run an
-agent or spend quota.
+Policies have one access setting: `read_only` or `workspace_write` (write to the
+whole registered project). There are no file allowlists or coverage presets in
+the ordinary project workflow. Coverage profiles remain an advanced setting
+for explicit manual snapshot capture and review. Folder browsing lists names
+only and does not run an agent or spend quota.
 
 MCP discovery lists active workspace registrations and verified managed
-worktrees, rather than every historical registry row. Each route's
-`compatible_workspace_ids` lists workspaces matching its default policy and
-coverage. A narrower explicitly requested policy is checked at spawn. Invalid
-policy/coverage combinations are rejected before creating a session or snapshot.
-Removed registrations stay in the registry for existing sessions and evidence;
-they are not available for new sessions merely because their old IDs still exist.
+worktrees, rather than every historical registry row. Removed registrations
+stay in the registry for existing sessions and evidence; they are not available
+for new sessions merely because their old IDs still exist. A new session uses
+the selected physical checkout and the current route policy. Existing sessions
+retain their captured access and other spawn-time settings.
 
-Creation stages new project, workspace, policy, and coverage IDs locally;
-**Save** writes the configuration. In shared-daemon mode, stop the daemon only
-when there are no active turns or pending intents, then start it again to use
-the new project. Existing sessions retain their bindings. The new project can
-share the current configuration and state; a separate configuration/state is
-optional.
+Creation stages new project, workspace, and policy IDs locally; **Save** writes
+the configuration. In shared-daemon mode, stop the daemon only when there are
+no active turns or pending intents, then start it again to use the new project.
+The new project can share the current configuration and state; a separate
+configuration/state is optional.
 
 ### Storage and cleanup
 
@@ -275,34 +269,21 @@ old reports or unpinned snapshots later. Cleanup does not purge turn metadata,
 idempotency history or native conversations. Current native sessions keep their
 bindings and protected evidence. Preview again after cleanup for current totals.
 
-### Snapshot size and build caches
+### Manual snapshot capture
 
-A snapshot captures the declared source files, including untracked files. Git
-ignore rules do not remove files from that contract. The source byte limit is
-256 MiB (spec section 15.1), independent of provider token quota. Do not raise
-the limit to accommodate disposable build caches.
-
-The presets exclude known top-level output folders, including `artifacts`,
-`node_modules`, `.dart_tool`, and `.angular`; these exclusions intentionally
-override the whole-project source. Inspect nested output folders too. For a
-nested cache such as `web/node_modules`, either exclude `web/node_modules`
-explicitly alongside the root source, or restrict coverage and the worker
-policy's `write_scope` to `web/src` plus the root files inside `web`. New
-files inside `web/src` are then already covered; under the whole-project
-preset every new location is covered automatically.
-
-When replacing a coverage or policy already bound to a session, use a new
-profile ID for future sessions and keep the historical evidence. After saving,
-stop and start the shared daemon only when there are no active turns or pending
-intents. Verify `agent_workspace_snapshot` before a snapshot-bound worker
-turn; Git reviewer turns do not require a snapshot.
+Snapshot capture is an explicit manual diagnostic and storage feature; ordinary
+task admission and completion do not depend on snapshots. A manual capture
+uses its selected coverage profile and is limited to 256 MiB of source data
+(spec section 15.1), independent of provider token quota. Exclude disposable
+build caches from the manual capture when useful. Coverage profiles referenced
+by historical sessions remain bound to those sessions. Editing a policy profile
+changes access for new sessions; existing sessions keep their captured access.
 
 Broker-managed Windows Git operations enable `core.longpaths` for each
 invocation; they do not change repository or global Git configuration. A
-detached worktree contains the selected commit only. To review unfinished
-changes in the same registered checkout, send `git_review_binding` with
-`include_working_tree: true`. Pause writes during that review. A separate
-reviewer worktree at the committed target allows the author to keep working.
+detached worktree contains the selected commit only. Reviewers inspect Git
+directly in their registered physical checkout or worktree; task sends do not
+need a Git binding, commit binding, snapshot selector, or source digest.
 
 The Connection section emits MCP JSON and Codex TOML that attach to the shared
 daemon through `src/bridge/main-stdio.ts`, with `AB_STATE_DIR` and
@@ -315,18 +296,12 @@ Use the project selector to filter profiles, and the tag filter to narrow by
 an effective tag including the derived `multi-agent` tag. Duplicate a profile
 to create a different model/effort or review preset, give it a readable name
 and a unique technical ID using letters, numbers, dot, underscore, or hyphen.
-Select permissions separately from the role: choosing `reviewer` does not
-change a shared worker policy, while the role switch and the wizard give
-reviewer and researcher profiles only read-only policy choices — an already
-suitable read-only policy is retained, otherwise the single unambiguous
-read-only policy is selected, otherwise the choice stays explicitly
-unresolved. Config validation rejects a named reviewer or researcher profile
-with a non-read-only policy, so saving through JSON cannot silently
-reintroduce that mistake; workers may intentionally be read-only. The
-selected policy's access is displayed, while the wizard creates a separate
-read-only review policy. Changing shared bound policies requires new
-IDs/versions through configuration rather than changing privileges of old
-sessions.
+Select access separately from the role: workers may be read-only or write to
+the whole project, while reviewer and researcher routes use read-only access.
+Config validation rejects a reviewer or researcher profile with write access.
+The selected access is displayed, and the project wizard creates both access
+profiles. Editing a shared policy changes the access assigned to new sessions;
+existing sessions keep the access captured when they were spawned.
 
 Click **Refresh model catalogue**, then choose from the **Model** dropdown.
 **Search models** filters by part of a model ID, independently of the selected
@@ -406,10 +381,13 @@ session unchanged — an open PROVISIONING window still completes. Metadata
 edits never invalidate a committed same-key replay, while genuinely
 conflicting arguments still conflict.
 
-The caller supplies the project, instructions, workspace, and
-idempotency key. `agents_list` exposes routes with the same bounded paging as
-the other discovery entries. Multiple sessions may run from the same profile
-on distinct physical workspaces — a profile is not an execution slot; the
+The caller supplies the project, instructions, workspace, and idempotency key
+when spawning. A follow-up send supplies `{session_id, idempotency_key, task}`;
+the task contains the goal, acceptance criteria, and any useful context. It
+does not need a snapshot, coverage selector, or permission override.
+`agents_list` exposes routes with the same bounded paging as the other discovery
+entries. Multiple sessions may run from the same profile on distinct physical
+workspaces — a profile is not an execution slot; the
 existing concurrency, quota-scope, session-cap, and physical checkout lease
 guards remain in effect.
 
@@ -418,22 +396,23 @@ subscription plan. They must reflect the CLI account actually in use. ZCode
 Start Plan selection remains unverified; the current standalone route uses
 Individual. Never put access tokens or API keys in this config.
 
-Route roles are `worker`, `reviewer`, and `researcher`. Git reviewers use a
-read-only review policy in a registered current or detached worktree. Explicit
-snapshot review uses a `review_slot`; workers normally use a current or
-detached worktree. `native_subagents` is advisory prompt text only: it cannot
-guarantee child count, child model, or permissions. The default is one broker
-session with no native delegation preference.
+Route roles are `worker`, `reviewer`, and `researcher`. Reviewers use read-only
+access in a registered physical checkout or worktree and inspect Git directly.
+Manual snapshot review is an advanced option: register a `review_slot`, capture
+the baseline and target snapshots explicitly, then send `review_binding`.
+Workers normally use a current checkout or detached worktree.
+`native_subagents` is advisory prompt text only: it cannot guarantee child
+count, child model, or permissions. The default is one broker session with no
+native delegation preference.
 
 To change a route's behavior, edit its JSON `model`, `effort`, or
 `native_subagents` and restart the process that owns the settings: direct
 stdio mode itself, or the idle shared daemon. Name, enabled flag, and tags
 are selection metadata that also take effect on restart. New sessions use
-the new route; existing sessions keep
-their immutable provider, account, model, effort, role, policy, and workspace
-settings. A raw `agent_session_spawn` may select `route_id`, or may continue
-using the existing explicit provider/account/model/role/policy fields. Mixing
-the two forms is rejected.
+the new route; existing sessions keep their immutable provider, account, model,
+effort, role, access, and workspace settings. A raw `agent_session_spawn` may
+select `route_id`, or may continue using the existing explicit
+provider/account/model/role/policy fields. Mixing the two forms is rejected.
 
 Cursor effort is part of the catalog model ID: for example
 `gpt-5.6-sol` plus `high` resolves to `gpt-5.6-sol-high`. An already-suffixed
@@ -461,8 +440,8 @@ and owned by the operator. To operate on another repository, change that
 repository's workspace `canonical_path` before its first session. To add a new
 repository after sessions exist, add a new project/workspace ID (and allow the
 project for the coordinator), or use a separate config/state directory. Reusing
-a bound workspace ID for another path is rejected. Declare the repository's
-source folders in its coverage profile and exclude its state/build directories.
+a bound workspace ID for another path is rejected. Ordinary registration does
+not require a coverage profile; configure one only for manual snapshot capture.
 
 The `daemon` command keeps one owned state directory and serves the existing
 private RPC. Generate an existing-daemon bridge snippet with `--connect`;
@@ -618,21 +597,23 @@ let the agent and vendor decide. Repository child definitions
 can select separate models: Cursor reads `.cursor/agents/*.md` with YAML
 `name`, `description`, `model`, `readonly`, `is_background`; Antigravity reads
 `.agents/agents/*.md` with `name`, `description`, `tools`, `model: inherit`,
-`mainAgent`, and `subagent`. Include definitions in coverage when reviewing
-their edits. See the linked native-subagent documentation for tested examples
-and limits. Changing the parent route does not guarantee child settings.
+`mainAgent`, and `subagent`. Review their edits from the registered checkout or
+worktree with Git. See the linked native-subagent documentation for tested
+examples and limits. Changing the parent route does not guarantee child
+settings.
 
 ## Review workflow and limitations
 
-Use a reviewer profile in the author's registered checkout, with a read-only
-policy. Send `git_review_binding` with the exact base and target commit IDs.
-Set `include_working_tree: true` for staged, unstaged and nonignored new files;
-no commit or snapshot is required. The broker pins the observed file/index
-state and rejects drift. Pause edits until review finishes: the broker lease
-serializes broker jobs, not external editors. Use a separate worktree at the
-committed target for parallel author progress. Snapshot review remains an
-explicit option for non-Git sources. Native subagents do not replace the
-independent reviewer. See [Git review](git-review-plan.md) and
+Use a reviewer profile in the author's registered physical checkout or
+worktree, with read-only access. Send the ordinary task and let the reviewer
+inspect Git directly; no Git binding, commit binding, snapshot selector, or
+drift check is required. Read-only access is an instruction to the agent and
+does not freeze files against external edits. Use a separate physical worktree
+when the author needs to keep editing during review. Manual snapshot review is
+an advanced option for non-Git sources or a deliberately captured comparison:
+register a `review_slot`, capture both snapshots explicitly, then send only
+`review_binding`. Native subagents do not replace the independent reviewer.
+See [Git review](git-review-plan.md) and
 [request examples](examples/coordinator/README.md).
 
 See [native subagent notes](native-subagents.md), [pilot issues](pilot-issues.md),

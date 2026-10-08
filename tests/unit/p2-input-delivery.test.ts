@@ -21,12 +21,11 @@ describe("required input delivery (§7.1.1)", () => {
   it("explains a snapshot in artifact_refs before admission, then accepts the corrected read-only audit", async () => {
     const h = createHarness();
     try {
-      const session = await h.spawnWorkerSession({ policy_restrictions: { access: "read_only" } });
-      const snapshotId = h.core.sessionStatus(h.seed.coordinatorId, session.session_id).latest_snapshot_id!;
+      const session = await h.spawnWorkerSession({ access: "read_only" });
+      const snapshotId = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-input-snapshot" }).snapshot_id;
       const ctx = { coordinatorId: h.seed.coordinatorId, core: h.core };
       const args = {
         session_id: session.session_id, idempotency_key: "audit-with-snapshot-artifact",
-        workspace_precondition: { expected_snapshot_id: snapshotId },
         task: { goal: "Read-only audit.", artifact_refs: [snapshotId] },
       };
       await expect(callBridgeTool(ctx, "agent_session_send", args)).rejects.toMatchObject({
@@ -49,7 +48,7 @@ describe("required input delivery (§7.1.1)", () => {
     const h = createHarness();
     try {
       const session = await h.spawnWorkerSession();
-      const snapshotId = h.core.sessionStatus(h.seed.coordinatorId, session.session_id).latest_snapshot_id!;
+      const snapshotId = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-input-snapshot" }).snapshot_id;
       insertProject(h.db, { project_id: "project-other", display_name: "Other", configuration_revision: 1, session_cap: 20, created_at: h.clock.now() });
       insertSnapshotRecord(h.db, { ...getSnapshotRecord(h.db, snapshotId)!, snapshot_id: "snap-foreign", project_id: "project-other" });
       const artifact = h.publishArtifact("Other project's findings");

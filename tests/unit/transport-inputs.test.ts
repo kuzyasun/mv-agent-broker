@@ -104,6 +104,7 @@ describe("normative complete envelope transport (§7.1.1, §13.2, §15.1)", () =
         account_profile_id: "acct-zcode",
         model: "GLM-5.3-Flash",
         role: "reviewer",
+        access: "read_only",
         workspace: { mode: "review_slot", workspace_id: "ws-review-zcode" },
         policy_profile_id: "pol-writer",
         policy_profile_version: "1",
@@ -114,7 +115,7 @@ describe("normative complete envelope transport (§7.1.1, §13.2, §15.1)", () =
       // Baseline snapshot from worker
       const workerSpawn = await h.spawnWorkerSession();
       const workerStatus = h.core.sessionStatus(h.seed.coordinatorId, workerSpawn.session_id);
-      const baseline = workerStatus.initial_snapshot_id;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-transport-baseline" }).snapshot_id;
       expect(baseline).toBeTruthy();
 
       // Write changes resulting in ~5 KiB diff
@@ -195,12 +196,13 @@ describe("normative complete envelope transport (§7.1.1, §13.2, §15.1)", () =
 
       const reviewer = await h.spawnWorkerSession({
         role: "reviewer",
+        access: "read_only",
         workspace: { mode: "review_slot", workspace_id: "ws-review-mock" },
       });
 
       const workerSpawn = await h.spawnWorkerSession();
       const workerStatus = h.core.sessionStatus(h.seed.coordinatorId, workerSpawn.session_id);
-      const baseline = workerStatus.initial_snapshot_id;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-transport-baseline" }).snapshot_id;
 
       // Small diff ~500 bytes
       h.writeWorkspaceFile("src/main.c", "int main() { return 100; }\n");
@@ -291,9 +293,6 @@ describe("normative complete envelope transport (§7.1.1, §13.2, §15.1)", () =
           acceptance_criteria: ["done"],
           artifact_refs: [],
         },
-        workspace_precondition: {
-          expected_snapshot_id: status.initial_snapshot_id!,
-        },
       });
 
       await start(h, t1);
@@ -365,9 +364,6 @@ describe("normative complete envelope transport (§7.1.1, §13.2, §15.1)", () =
           goal: "Process all artifacts.",
           acceptance_criteria: ["done"],
           artifact_refs: artIds,
-        },
-        workspace_precondition: {
-          expected_snapshot_id: status.initial_snapshot_id!,
         },
       });
 

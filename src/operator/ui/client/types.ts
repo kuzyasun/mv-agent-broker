@@ -35,11 +35,7 @@ export interface OperatorWorkspace {
 export interface OperatorPolicyProfile {
   policy_profile_id: string;
   version?: string;
-  config: {
-    access?: "read_only" | "workspace_write";
-    write_scope?: string[];
-    [key: string]: unknown;
-  };
+  config: { access: "read_only" | "workspace_write" };
 }
 
 export interface CoverageConfig {

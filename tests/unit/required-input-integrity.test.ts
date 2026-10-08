@@ -371,11 +371,11 @@ describe("required-input integrity (same-size / irregular)", () => {
         coverage_profile_id: h.seed.coverageProfileId,
       });
       const reviewer = await h.spawnWorkerSession({
-        role: "reviewer",
+        role: "reviewer", access: "read_only",
         workspace: { mode: "review_slot", workspace_id: "ws-review-manifest" },
       });
       const worker = await h.spawnWorkerSession();
-      const baseline = h.core.sessionStatus(h.seed.coordinatorId, worker.session_id).initial_snapshot_id!;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-review-baseline" }).snapshot_id;
       h.writeWorkspaceFile("src/main.c", "int main(){return 11;}\n");
       const target = h.core.snapshot(h.seed.coordinatorId, {
         project_id: h.seed.projectId,
@@ -442,11 +442,11 @@ describe("required-input integrity (same-size / irregular)", () => {
         coverage_profile_id: h.seed.coverageProfileId,
       });
       const reviewer = await h.spawnWorkerSession({
-        role: "reviewer",
+        role: "reviewer", access: "read_only",
         workspace: { mode: "review_slot", workspace_id: "ws-review-int" },
       });
       const worker = await h.spawnWorkerSession();
-      const baseline = h.core.sessionStatus(h.seed.coordinatorId, worker.session_id).initial_snapshot_id!;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-review-baseline" }).snapshot_id;
       h.writeWorkspaceFile("src/main.c", "int main(){return 99;}\n");
       const target = h.core.snapshot(h.seed.coordinatorId, {
         project_id: h.seed.projectId,
@@ -509,11 +509,11 @@ describe("required-input integrity (same-size / irregular)", () => {
         coverage_profile_id: h.seed.coverageProfileId,
       });
       const reviewer = await h.spawnWorkerSession({
-        role: "reviewer",
+        role: "reviewer", access: "read_only",
         workspace: { mode: "review_slot", workspace_id: "ws-review-miss" },
       });
       const worker = await h.spawnWorkerSession();
-      const baseline = h.core.sessionStatus(h.seed.coordinatorId, worker.session_id).initial_snapshot_id!;
+      const baseline = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-review-baseline" }).snapshot_id;
       h.writeWorkspaceFile("src/main.c", "int main(){return 7;}\n");
       const target = h.core.snapshot(h.seed.coordinatorId, {
         project_id: h.seed.projectId,

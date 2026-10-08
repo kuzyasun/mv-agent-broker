@@ -119,7 +119,7 @@ describe("report artifacts", () => {
         coverage_profile_id: h.seed.coverageProfileId,
       });
       const worker = await h.spawnWorkerSession();
-      const s1 = worker.initial_snapshot_id!;
+      const s1 = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-report-baseline" }).snapshot_id;
       h.writeWorkspaceFile("src/main.c", "int main(){return 1;}\n");
       const target = h.core.snapshot(h.seed.coordinatorId, {
         project_id: h.seed.projectId,
@@ -132,7 +132,7 @@ describe("report artifacts", () => {
       const reviewer = await h.spawnWorkerSession({
         role: "reviewer",
         workspace: { mode: "review_slot", workspace_id: "ws-review" },
-        policy_restrictions: { access: "read_only" },
+        access: "read_only",
       });
       const findingsText = "FINDINGS_BODY_exact_binding_ok";
       const tRev = h.core.send(h.seed.coordinatorId, {
@@ -183,7 +183,6 @@ describe("report artifacts", () => {
 
       // Next mock worker consumes the findings artifact by ID only.
       const next = h.sendTask(worker.session_id, "rep-w2", "Apply findings.", {
-        workspace_precondition: { expected_snapshot_id: s2 },
         task: {
           goal: "Apply findings.",
           artifact_refs: [result.full_message_artifact_id],
@@ -556,10 +555,10 @@ describe("report artifacts", () => {
       const reportId = getTurnEventPayload(h.db, t1.turn_id, "report_publication")?.artifact_id as string;
       expect(getArtifact(h.db, reportId)?.state).toBe("sealed");
       // Completed worker report: no publication pins leak (the surviving
-      // turn-owned pin is the latest final snapshot's session_anchor only).
+      // turn-owned pin retains the latest report only).
       const workerTurnPins = listPinsByOwner(h.db, t1.turn_id);
       expect(workerTurnPins.filter((p) => p.root_kind === "active_turn" || p.root_kind === "pending_intent").length).toBe(0);
-      expect(workerTurnPins.map((p) => p.root_kind)).toEqual(["session_anchor", "session_anchor"]);
+      expect(workerTurnPins.map((p) => p.root_kind)).toEqual(["session_anchor"]);
       // The latest report survives while the open session references it.
       const preview = previewCleanup(h.db, openBlobStore(h.blobRoot), h.seed.projectId);
       expect(preview.eligible.some((a) => a.artifact_id === reportId)).toBe(false);
@@ -585,13 +584,13 @@ describe("report artifacts", () => {
       const reviewer = await h.spawnWorkerSession({
         role: "reviewer",
         workspace: { mode: "review_slot", workspace_id: "ws-review-pin" },
-        policy_restrictions: { access: "read_only" },
+        access: "read_only",
       });
-      const wstat = h.core.sessionStatus(h.seed.coordinatorId, worker.session_id);
+      const manual = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-report-pins" }).snapshot_id;
       const tRev = h.sendTask(reviewer.session_id, "rep-pin-rev", "Review.", {
         review_binding: {
-          baseline_snapshot_id: wstat.initial_snapshot_id!,
-          target_snapshot_id: wstat.latest_snapshot_id ?? wstat.initial_snapshot_id!,
+          baseline_snapshot_id: manual,
+          target_snapshot_id: manual,
         },
       });
       h.adapter.plan(tRev.turn_id, [{ kind: "complete", outcome: "completed", summary: "anchored-findings" }]);

@@ -369,6 +369,7 @@ export class CursorAdapter implements ProviderAdapter {
     if (req.native_conversation_ref !== null && !req.native_conversation_ref.trim()) {
       throw new BrokerError("SESSION_NOT_RESUMABLE", "Cursor resume requires a nonempty native conversation reference.", { executionStarted: false });
     }
+    const readOnly = req.effective_policy?.access === "read_only" || req.role === "reviewer";
     const args = ["--print", "--output-format", "stream-json", "--model", model, "--trust"];
     // Explicitly writable operator-approved workers must execute their checks
     // without an interactive approval prompt. Native explicit denies still win.
@@ -376,7 +377,7 @@ export class CursorAdapter implements ProviderAdapter {
     if (req.role === "worker" && req.effective_policy?.access === "workspace_write" &&
         Array.isArray(req.effective_policy.write_scope) && req.effective_policy.write_scope.length > 0) args.push("--force");
     // Plan mode can deliver its report via CreatePlan instead of result text.
-    if (req.role === "reviewer") args.push("--mode", "ask");
+    if (readOnly) args.push("--mode", "ask");
     if (req.workspace_path !== null && req.workspace_path !== undefined && req.workspace_path.length > 0) {
       args.push("--workspace", req.workspace_path);
     }
@@ -396,7 +397,7 @@ export class CursorAdapter implements ProviderAdapter {
     let retainTurnEvidence = false;
 
     try {
-      if (req.role === "reviewer") {
+      if (readOnly) {
         // Read-only Git review is a physical-session capability: current and
         // worktree reviewers may inspect their checkout with broker-validated
         // read-only git commands; snapshot-slot reviewers stay tool-free.

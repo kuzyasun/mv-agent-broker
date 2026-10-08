@@ -35,7 +35,7 @@ describe("operator stdio", () => {
       coordinators: [{ coordinator_id: "coord-main", display_name: "Main", allowed_project_ids: ["project-main"] }],
       accounts: [{ account_profile_id: "acct-mock", provider: "mock", quota_scope_id: "mock", auth_mode: "cli-owned" }],
       workspaces: [{ workspace_id: "ws-main", project_id: "project-main", mode: "current", canonical_path: root, coverage_profile_id: "cov-main" }],
-      policy_profiles: [{ policy_profile_id: "pol-main", version: "1", config: { access: "workspace_write", write_scope: ["src"] } }],
+      policy_profiles: [{ policy_profile_id: "pol-main", version: "1", config: { access: "workspace_write" } }],
       coverage_profiles: [{
         coverage_profile_id: "cov-main",
         version: "1",
@@ -89,14 +89,13 @@ describe("operator stdio", () => {
       });
       const spawnBody = JSON.parse(spawned.result.content[0].text);
       expect(spawnBody.session_id).toBeTruthy();
-      expect(spawnBody.initial_snapshot_id).toBeTruthy();
+      expect(spawnBody.initial_snapshot_id).toBeNull();
       const sent = await call(5, "tools/call", {
         name: "agent_session_send",
         arguments: {
           session_id: spawnBody.session_id,
           idempotency_key: "turn-route",
           task: { goal: "Return a deterministic mock result.", artifact_refs: [] },
-          workspace_precondition: { expected_snapshot_id: spawnBody.initial_snapshot_id },
         },
       });
       const sendBody = JSON.parse(sent.result.content[0].text);

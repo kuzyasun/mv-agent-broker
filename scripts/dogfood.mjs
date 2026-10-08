@@ -1,8 +1,6 @@
 // Opt-in native development through the public MCP interface. No Claude route.
 // node --experimental-transform-types scripts/dogfood.mjs <task.json>
-// Task: {name, provider, model, effort, write_scope?, goal, checks?, review?}.
-// write_scope is an explicit opt-in restriction; without it the worker grant
-// covers the whole project.
+// Task: {name, provider, model, effort, goal, checks?, review?}.
 // review: {provider, model, effort, goal}. Private results stay in the fresh
 // system-temp ab-df-* root printed as EVIDENCE at completion.
 import { execFileSync, spawn } from 'node:child_process';
@@ -52,23 +50,16 @@ if (process.argv[2] === '--serve') {
   if (!runtimeFiles || !runtimeTree.includes('\tpackage.json\0')) throw new Error('Stable runtime is incomplete.');
   const { openRegistryDb } = await import(pathToFileURL(path.join(runtime, 'src/storage/db.ts')).href);
   const registry = await import(pathToFileURL(path.join(runtime, 'src/storage/repo.ts')).href);
-  const { coverageContractHash } = await import(pathToFileURL(path.join(runtime, 'src/workspaces/coverage.ts')).href);
   const db = openRegistryDb(path.join(state, 'registry.sqlite'));
-  // Operator rule: whole-project source coverage; explicit task write_scope
-  // stays an opt-in restriction, otherwise the worker policy omits it and
-  // workspace_write grants the entire project by default.
-  const coverage = { source_prefixes: ['.'], non_source_prefixes: [], excluded_prefixes: ['.git', '.state', 'node_modules', 'dist', 'coverage'] };
   if (!reviewFrom) {
   registry.insertProject(db, { project_id: 'self', display_name: 'Agent Broker self-development', configuration_revision: 1, session_cap: 4, created_at: Date.now() });
   registry.insertCoordinator(db, { coordinator_id: 'self-coordinator', display_name: 'Native MCP development client', allowed_project_ids: ['self'], revoked: false, config_revision: 1 });
   for (const provider of ['zcode', 'antigravity', 'cursor', 'mock']) {
     registry.insertAccount(db, { account_profile_id: provider, provider, quota_scope_id: `native:${provider}`, auth_mode: 'cli-owned' });
   }
-  registry.insertCoverageProfile(db, { coverage_profile_id: 'source', version: '1', config: JSON.stringify(coverage), contract_hash: coverageContractHash(coverage) });
-  registry.insertPolicyProfile(db, { policy_profile_id: 'worker', version: '1', config: JSON.stringify(task.write_scope === undefined ? { access: 'workspace_write' } : { access: 'workspace_write', write_scope: task.write_scope }) });
+  registry.insertPolicyProfile(db, { policy_profile_id: 'worker', version: '1', config: JSON.stringify({ access: 'workspace_write' }) });
   registry.insertPolicyProfile(db, { policy_profile_id: 'reviewer', version: '1', config: JSON.stringify({ access: 'read_only' }) });
-  registry.insertWorkspace(db, { workspace_id: 'repo', project_id: 'self', mode: 'current', canonical_path: repo, quarantined: false, quarantine_reason: null, coverage_profile_id: 'source' });
-  registry.insertWorkspace(db, { workspace_id: 'review', project_id: 'self', mode: 'review_slot', canonical_path: null, quarantined: false, quarantine_reason: null, coverage_profile_id: 'source' });
+  registry.insertWorkspace(db, { workspace_id: 'repo', project_id: 'self', mode: 'current', canonical_path: repo, quarantined: false, quarantine_reason: null, coverage_profile_id: null });
   }
   db.close();
   const env = { ...process.env, AB_STATE_DIR: state, AB_COORDINATOR_ID: 'self-coordinator', AB_ROLE: 'daemon',
@@ -95,16 +86,17 @@ if (process.argv[2] === '--serve') {
     if (result.isError || payload.ok === false) throw new Error(`${name}: ${JSON.stringify(payload)}`);
     return payload;
   };
-  const run = async (route, role, binding) => {
+  const run = async (route, role) => {
     const reviewer = role === 'reviewer';
     const session = await tool('agent_session_spawn', { project_id: 'self', idempotency_key: randomUUID(), provider: route.provider, account_profile_id: route.provider, model: route.model, ...(route.effort == null ? {} : { effort: route.effort }), role,
       instructions: reviewer
-        ? 'Independent read-only review. Read the required diff and source in this isolated target snapshot. Do not edit files, run mutating commands, invoke other agents/MCP, commit, or access credentials. Final report MUST fit 3000 characters: findings first, relative path/line, severity and reasoning; say if none found. Omit scope recaps, absolute paths and introductions. Native permission enforcement remains unverified; obey these boundaries.'
-        : `Implement the assigned bounded package in the repository. Worker authorization covers the entire project by default${task.write_scope ? `; this task is explicitly restricted to: ${task.write_scope.join(', ')}` : '; task paths never imply a file allowlist'}. Preserve existing changes. Do not stage/commit/push, delegate, access credentials or call MCP. Read nearby source first. Run requested offline checks, fix failures, and self-review actual diff. Final report MUST fit 3000 characters: changed files, behavior, exact check results and limitations.`,
-      workspace: { mode: reviewer ? 'review_slot' : 'current', workspace_id: reviewer ? 'review' : 'repo' }, policy_profile_id: reviewer ? 'reviewer' : 'worker' });
+        ? 'Independent read-only review. Read the project files and Git diff in this checkout. Do not edit files, run mutating commands, invoke other agents/MCP, commit, or access credentials. Final report MUST fit 3000 characters: findings first, relative path/line, severity and reasoning; say if none found. Omit scope recaps, absolute paths and introductions. Native permission enforcement remains unverified; obey these boundaries.'
+        : 'Implement the assigned bounded package in the repository. Write access covers the entire project; task paths are guidance, not a file allowlist. Preserve existing changes. Do not stage/commit/push, delegate, access credentials or call MCP. Read nearby source first. Run requested offline checks, fix failures, and self-review the actual diff. Final report MUST fit 3000 characters: changed files, behavior, exact check results and limitations.',
+
+      workspace: { mode: 'current', workspace_id: 'repo' }, policy_profile_id: reviewer ? 'reviewer' : 'worker' });
     sessions.push(session.session_id);
     const deadlineMs = route.deadline_ms ?? 3600000;
-    const accepted = await tool('agent_session_send', { session_id: session.session_id, idempotency_key: randomUUID(), task: { goal: route.goal, checks: route.checks ?? [], artifact_refs: [] }, ...(reviewer ? { review_binding: binding } : { workspace_precondition: { expected_snapshot_id: session.initial_snapshot_id } }), deadline_ms: deadlineMs });
+    const accepted = await tool('agent_session_send', { session_id: session.session_id, idempotency_key: randomUUID(), task: { goal: route.goal, checks: route.checks ?? [], artifact_refs: [] }, deadline_ms: deadlineMs });
     const record = { role, session, accepted, route: { provider: route.provider, model: route.model, effort: route.effort }, status: null };
     evidence.turns.push(record); save();
     console.log(`START ${role}: ${route.provider} ${route.model} ${route.effort ?? ''}; ${accepted.turn_id}`);
@@ -131,7 +123,7 @@ if (process.argv[2] === '--serve') {
     record.events = await tool('agent_turn_events', { turn_id: accepted.turn_id }); save();
     console.log(`DONE ${role}: ${record.status.state}\n${JSON.stringify(record.result)}`);
     assert.equal(record.status.state, 'SUCCEEDED', 'Native development turn did not succeed; no automatic retry or plan fallback.');
-    return { baseline_snapshot_id: session.initial_snapshot_id, target_snapshot_id: record.result.broker_observed.final_snapshot_id };
+    return record;
   };
   try {
     const readyUntil = Date.now() + 20000;
@@ -155,22 +147,13 @@ if (process.argv[2] === '--serve') {
     bridge.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     if (reviewFrom) {
       const worker = reviewFrom.turns.find(turn => turn.role === 'worker');
-      if (!worker?.session?.initial_snapshot_id) throw new Error('Review requires a retained worker baseline.');
-      if (!['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(worker.status?.state)) throw new Error('Review cannot capture a running or unresolved worker.');
-      if (worker.status?.state !== 'SUCCEEDED' && !task.review_current) throw new Error('Review of a failed worker requires an explicit current-source capture.');
-      evidence.reviewSource = { turn_id: worker.accepted.turn_id, state: worker.status?.state, capture_current: !!task.review_current };
-      let target = worker.result.broker_observed.final_snapshot_id;
-      if (task.review_current) {
-        // Capture the integrator's fixes using the public interface and mock;
-        // review the entire package against the original worker baseline.
-        const current = await run({ provider: 'mock', model: 'mock', goal: 'Capture the current integrated source for independent review.', deadline_ms: 60000 }, 'worker');
-        target = current.target_snapshot_id;
-      }
-      if (!target) throw new Error('Review requires a sealed target snapshot.');
-      await run(task, 'reviewer', { baseline_snapshot_id: worker.session.initial_snapshot_id, target_snapshot_id: target });
+      if (!worker) throw new Error('Review requires the original worker record.');
+      if (!['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(worker.status?.state)) throw new Error('Review cannot follow a running or unresolved worker.');
+      evidence.reviewSource = { turn_id: worker.accepted.turn_id, state: worker.status?.state, checkout: repo };
+      await run(task, 'reviewer');
     } else {
-      const binding = await run(task, 'worker');
-      if (task.review) await run(task.review, 'reviewer', binding);
+      await run(task, 'worker');
+      if (task.review) await run(task.review, 'reviewer');
     }
     evidence.status = 'passed';
   } catch (error) { evidence.status = 'failed'; evidence.error = String(error); process.exitCode = 1; console.error(evidence.error); }

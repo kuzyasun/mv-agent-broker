@@ -96,7 +96,7 @@ node $bundle login --no-browser
 Reuse a working login; credentials remain in the provider's store.
 
 Next, use **New project wizard**, select the repository folder, and choose the
-scope and profiles to copy. On the first project there are no profiles to copy:
+profiles to copy. On the first project there are no profiles to copy:
 create profiles in the pools after adding the project.
 
 ## Pools, models and permissions
@@ -106,16 +106,17 @@ Select a project in **Show profiles for project**, expand a pool, and click
 and policy. **Refresh model catalogue** reads vendor metadata; it does not run
 a coding task. A manually entered model still has to pass provider preflight.
 
-- **Workers** implement tasks. The default write policy allows the covered
-  project, including related tests and documentation. Narrow file lists are
-  an explicit operator choice. Git metadata, broker state and caches stay excluded.
-- **Reviewers** inspect changes with a read-only policy. Git review is the
-  default: the reviewer reads the registered checkout with Git, including
-  staged, unstaged and nonignored new files. No broker snapshots or full diff
-  input are needed. Pause edits during review; use a separate worktree at a
-  committed target to keep authoring in parallel. See
-  [Git review](docs/git-review-plan.md).
-- **Researchers** investigate with a read-only policy.
+- **Workers** implement tasks with write access to the whole project, including
+  tests and documentation. Task paths are guidance, not a file allowlist.
+- **Reviewers** inspect the selected checkout with files and Git, including
+  uncommitted changes. They use read-only access; no snapshots are required.
+- **Researchers** investigate with read-only access.
+
+Permissions have two settings: **Read-only** and **Write all project**. A write
+profile can be narrowed to read-only when creating an audit session. The broker
+serializes writers in the same physical checkout. Read-only agents can run
+alongside other agents; their report does not certify an unchanged checkout.
+Use separate worktrees when the review needs a stable target.
 
 Tags such as `default`, `large` and `fast` help the coordinator choose a profile.
 A profile name like `cursor_large` is just a name. The broker binds a session to
@@ -170,7 +171,8 @@ Give the coordinator this prompt, replacing the project ID shown in the UI:
 > with provider, model, effort, role, policy and subagent settings before paid
 > work. Choose only my enabled profiles; respect their tags and quota pauses.
 > Select a workspace from the route's compatible_workspace_ids. After spawn,
-> verify effective_policy and use exactly the required_send_binding from status.
+> verify effective_policy.access. Send session_id, idempotency_key and task.goal;
+> ordinary tasks and reviews need no snapshot or special review binding.
 > Use separate worktrees for parallel workers and a separate reviewer profile.
 > Read result artifacts, verify actual changes and checks, and perform final
 > review yourself. Record broker incidents. If the MCP tools are absent or a
@@ -199,13 +201,12 @@ automatically. After quota recovery, the coordinator submits work explicitly.
 
 Large inputs and full reports stay in artifacts. Coordinators should read needed
 pages and pass artifact references instead of repeatedly copying full transcripts.
-Git review (the default) delivers commit ids and suggested `git diff` commands;
-the reviewer reads the checkout itself, so binary changes such as images are
-visible. The explicit snapshot review alternative builds a complete diff of the
-bound snapshot pair with limited unchanged context; increase its budget or choose
-an appropriate baseline if that diff is too large. Uncommitted Git review uses
-`include_working_tree: true`; the broker records a local file/index fingerprint
-and rejects a result if that state changes. It never stages or commits for you.
+Reviews use the selected checkout directly: name the intended Git commits or
+uncommitted changes in the task. The broker neither fingerprints source files
+nor rejects completed work because somebody edited the checkout. `SUCCEEDED`
+means execution completed; the coordinator accepts the result after reviewing
+its report and actual changes. Snapshots and snapshot `review_slot` comparison
+remain optional tools for a deliberately frozen baseline/target review.
 
 **Storage and cleanup** previews expired, unpinned registered artifacts before
 confirmed deletion. It preserves pinned/retained data. Its accounting covers

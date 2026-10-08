@@ -72,7 +72,7 @@ describe("A01: spawn replay after lost response", () => {
     expect(second.session_id).toBe(first.session_id);
     expect(second.replayed_request).toBe(true);
     expect(second.state).toBe("IDLE");
-    expect(second.initial_snapshot_id).toBeTruthy();
+    expect(second.initial_snapshot_id).toBeNull();
 
     const sessions = h.core.sessionsList(h.seed.coordinatorId, h.seed.projectId);
     expect(sessions).toHaveLength(1);

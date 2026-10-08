@@ -150,8 +150,8 @@ verified commit when HEAD is not an accepted checkpoint. The resolved immutable
 commit and copied file count are recorded as `runtimeCommit`/`runtimeFiles` in
 private evidence. Dirty/untracked source is never copied into the broker runtime.
 It starts a separate daemon and stdio MCP bridge and drives the public API from Node.
-Native workers edit the actual repository. Reviewers receive an isolated
-target snapshot with required baseline/target diff inputs. Changing source
+Native workers edit the actual repository. Reviewers inspect the selected checkout with Git and files. Ordinary review
+requires no source snapshots or special binding. Changing source
 does not replace the active broker executable midway through a turn.
 
 ```powershell
@@ -159,8 +159,7 @@ node --experimental-transform-types scripts/dogfood.mjs .state/tasks/package.jso
 ```
 
 Task JSON contains `name`, `provider`, `model`, optional `effort`,
-optional `write_scope` (an explicit opt-in restriction; without it the worker
-grant covers the whole project, per the operator rule in AGENTS.md), `goal`,
+`goal`,
 optional `checks`, and `deadline_ms` (default 3600000).
 Optional `runtime_ref` pins the accepted broker commit independently of the
 working tree being implemented and reviewed.
@@ -169,12 +168,10 @@ completed successfully using 47 committed runtime files. A temporary dirty
 source marker and an untracked source file were both excluded; the frozen file
 matched its Git blob byte for byte. The rehearsal consumed no native quota.
 An optional `review` route starts an independent review of the completed
-worker snapshots. `review_from` points to a private successful worker evidence
-file for a standalone review. `review_current: true` captures current integrated
-source via a mock turn, then reviews it against that worker's original baseline.
-This explicit capture also permits auditing retained changes from a failed
-worker; it preserves the original failed status and records `reviewSource`.
-It does not run another paid implementation task. Final worker/reviewer reports
+worker checkout. `review_from` points to retained worker evidence for a separate
+read-only review of that same current checkout. It does not capture a source
+snapshot or launch a mock writer. Review the intended Git change set in the task.
+Final worker/reviewer reports
 must fit 3000 characters, with findings first and relative paths, to stay inside
 the broker's 4000-character summary boundary. A capped report is partial evidence.
 

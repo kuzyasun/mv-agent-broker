@@ -383,7 +383,7 @@ export function PoolsSection(): JSX.Element {
                   }
                 }}
               >
-                <option value="worker">Worker (Execution / Full Scope)</option>
+                <option value="worker">Worker (Execution)</option>
                 <option value="reviewer">Reviewer (Strictly Read-Only)</option>
                 <option value="researcher">Researcher (Strictly Read-Only)</option>
               </select>
@@ -490,8 +490,9 @@ export function PoolsSection(): JSX.Element {
                 }
               >
                 {policies.map((p) => {
-                  const access = p.config?.access ?? "read_only";
-                  const isRead = access === "read_only";
+                  const profileAccess = p.config.access;
+                  const access = profileAccess === "workspace_write" ? "Write all project" : "Read-only";
+                  const isRead = profileAccess === "read_only";
                   const disabled = isReadOnlyRole(routeDraft.value!.role) && !isRead;
                   return (
                     <option
@@ -504,9 +505,13 @@ export function PoolsSection(): JSX.Element {
                   );
                 })}
               </select>
-              {isReadOnlyRole(routeDraft.value.role) && (
+              {isReadOnlyRole(routeDraft.value.role) ? (
                 <p className="mt-1 text-[11px] text-[#434655]">
-                  Reviewers and researchers are restricted to read-only policies.
+                  Reviewers and researchers use read-only access.
+                </p>
+              ) : (
+                <p className="mt-1 text-[11px] text-[#434655]">
+                  Choose read-only or write access to the whole project.
                 </p>
               )}
             </div>
@@ -694,7 +699,7 @@ function PoolCardList(props: {
                 : "bg-[#fffbeb] border-[#fde68a] text-[#92400e]"
             }`}
           >
-            {role === "worker" ? "WORKSPACE_WRITE" : "READ_ONLY"}
+            Permissions are set per profile
           </span>
         </div>
 
@@ -733,7 +738,9 @@ function ProfileCard({ route }: { route: OperatorRoute }): JSX.Element {
   const isEditing = editingRouteId.value === route.route_id;
   const isEnabled = route.enabled !== false;
   const tags = effectiveRouteTags(route);
-  const isWorker = route.role === "worker";
+  const access = draftConfig.value?.policy_profiles.find(
+    (profile) => profile.policy_profile_id === route.policy_profile_id,
+  )?.config.access ?? "read_only";
 
   return (
     <div
@@ -792,13 +799,11 @@ function ProfileCard({ route }: { route: OperatorRoute }): JSX.Element {
             </span>
           </div>
           <div>
-            <span className="text-[#434655] block text-[11px]">Scope:</span>
+            <span className="text-[#434655] block text-[11px]">Access:</span>
             <span
-              className={`font-semibold ${
-                isWorker ? "text-[#1d4ed8]" : "text-[#92400e]"
-              }`}
+              className={`font-semibold ${access === "workspace_write" ? "text-[#1d4ed8]" : "text-[#92400e]"}`}
             >
-              {isWorker ? "WORKSPACE_WRITE" : "READ_ONLY"}
+              {access === "workspace_write" ? "Write all project" : "Read-only"}
             </span>
           </div>
           <div>

@@ -31,7 +31,7 @@ export class CodexAdapter implements ProviderAdapter {
     }
     // Parent exec owns sandbox policy; resume owns its model/JSON/config flags.
     // Ignore ambient model/MCP defaults while retaining native CODEX_HOME auth.
-    const args = ["exec", "--sandbox", req.role === "reviewer" ? "read-only" : "workspace-write"];
+    const args = ["exec", "--sandbox", req.effective_policy?.access === "read_only" || req.role === "reviewer" ? "read-only" : "workspace-write"];
     if (req.native_conversation_ref !== null) args.push("resume");
     args.push("--json", "--ignore-user-config", "--model", req.requested_model.trim());
     if (req.requested_effort !== null) args.push("-c", `model_reasoning_effort=${JSON.stringify(req.requested_effort)}`);

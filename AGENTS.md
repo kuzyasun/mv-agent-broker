@@ -17,23 +17,24 @@ for a specific change.
 - Prioritize a usable MCP broker, clear configuration, and token economy. Defer
   rare recoverable edge cases until an observed problem justifies the work.
 
-## Worker authorization scope
+## Trusted local execution
 
-Ordinary worker authorization covers the ENTIRE project by default. A policy
-profile with `access: "workspace_write"` and no explicit `write_scope` grants
-the project root (`"."`): source, tests, scripts, documentation, and root
-files and directories that do not exist yet. Exclusions for Git metadata,
-broker state, and dependency/build caches stay in place.
+The operator trusts the agents running locally. Permissions have only two
+levels: `read_only` and `workspace_write` for the entire project. Task paths,
+package assignments and `relevant_paths` are guidance, never file allowlists.
 
-- Narrow write scope is an explicit operator choice only: set `write_scope`
-  in the policy profile or `policy_restrictions` to specific prefixes;
-  `[]` denies writes; `read_only` (reviewers) stays read-only.
-- Task descriptions, package names, and work-assignment paths NEVER imply a
-  file allowlist. Never infer narrow scope from where a worker was told to
-  work; only an explicitly configured scope list restricts it.
-- This is coordinator-side policy, not a verified native sandbox: mandatory
-  native confinement remains unverified and must not be advertised as
-  enforced.
+Ordinary current/worktree tasks and reviews require no snapshots, source
+coverage, Git bindings or source-digest checks. Native completion is execution
+success; the coordinator owns acceptance and final review. Do not recreate
+file-scope, workspace-drift or catalogue-fingerprint guards as workflow gates.
+Manual snapshots and explicit snapshot review slots are optional advanced tools.
+
+Keep actual project/session authorization, selected provider/model/effort,
+owned-process cancellation, quotas/deadlines and serialization of writers in
+the same physical checkout. Read-only turns do not freeze shared files and do
+not take an exclusive writer lease. Native confinement is unverified and must
+not be advertised as an enforced OS sandbox. Sessions can be closed and created
+again on the same authorized profile without preserving old development APIs.
 
 ## Self-development
 

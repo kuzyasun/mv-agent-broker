@@ -123,7 +123,7 @@ export function createHarness(opts: {
   insertPolicyProfile(db, {
     policy_profile_id: "pol-writer",
     version: "1",
-    config: JSON.stringify({ access: "workspace_write", write_scope: ["src", "tests"] }),
+    config: JSON.stringify({ access: "workspace_write" }),
   });
   insertCoverageProfile(db, {
     coverage_profile_id: seed.coverageProfileId,
@@ -231,19 +231,11 @@ export function createHarness(opts: {
       return core.spawn(seed.coordinatorId, req);
     },
     sendTask(sessionId: string, key: string, goal = "Implement the parser.", extra: Record<string, unknown> = {}) {
-      const session = core.sessionStatus(seed.coordinatorId, sessionId);
       const req: Record<string, unknown> = {
         session_id: sessionId,
         idempotency_key: key,
         task: { goal, acceptance_criteria: ["Tests pass."], artifact_refs: [] },
       };
-      // A review_binding replaces the default workspace precondition; exactly
-      // one of the two variants may be present (§10.3).
-      if (!("review_binding" in extra) && !("workspace_precondition" in extra)) {
-        const expected = session.latest_snapshot_id ?? session.initial_snapshot_id;
-        if (!expected) throw new Error("session has no baseline snapshot");
-        req.workspace_precondition = { expected_snapshot_id: expected };
-      }
       return core.send(seed.coordinatorId, { ...req, ...extra } as Parameters<BrokerCore["send"]>[1]);
     },
   };

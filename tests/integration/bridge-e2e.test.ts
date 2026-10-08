@@ -149,7 +149,6 @@ describe("bridge e2e: §16.2 vertical slice over MCP stdio", () => {
         relevant_paths: ["src/main.c"], context: "caller context", checks: ["compare"], artifact_refs: [] };
       const send = toolContent(await rpc("tools/call", toolParams("agent_session_send", {
         session_id: spawn.session_id, idempotency_key: "contract-send", task,
-        workspace_precondition: { expected_snapshot_id: spawn.initial_snapshot_id },
       })));
       await drain();
       await rpc("tools/call", toolParams("agent_session_stop", { session_id: spawn.session_id, idempotency_key: "contract-close" }));
@@ -198,14 +197,13 @@ describe("bridge e2e: §16.2 vertical slice over MCP stdio", () => {
       );
       expect(spawn.state).toBe("IDLE");
       const sessionId = spawn.session_id as string;
-      expect(spawn.initial_snapshot_id).toBeTruthy();
+      expect(spawn.initial_snapshot_id).toBeNull();
 
       const send = toolContent(
         await rpc("tools/call", toolParams("agent_session_send", {
           session_id: sessionId,
           idempotency_key: "e2e-send-1",
           task: { goal: "Implement parser.", acceptance_criteria: ["works"], artifact_refs: [] },
-          workspace_precondition: { expected_snapshot_id: spawn.initial_snapshot_id },
         })),
       );
       const turnId = send.turn_id as string;
@@ -225,7 +223,7 @@ describe("bridge e2e: §16.2 vertical slice over MCP stdio", () => {
       expect(result.execution_status).toBe("SUCCEEDED");
       expect(result.quality_status).toBe("unreviewed");
       const observed = result.broker_observed as Record<string, unknown>;
-      expect(observed.final_snapshot_id).toBeTruthy();
+      expect(observed.final_snapshot_id).toBeNull();
       expect(observed.input_manifest_id).toBeTruthy();
 
       const events = toolContent(await rpc("tools/call", toolParams("agent_turn_events", { turn_id: turnId })));
@@ -327,7 +325,6 @@ describe("bridge e2e: §16.2 vertical slice over MCP stdio", () => {
           session_id: "session-foreign",
           idempotency_key: "e2e-send-foreign",
           task: { goal: "test", artifact_refs: [] },
-          workspace_precondition: { expected_snapshot_id: "snap-dummy" },
         }))) as { content: Array<{ text: string }>; isError: boolean };
         expect(badSend.isError).toBe(true);
         const badSendPayload = JSON.parse(badSend.content[0]!.text) as {
@@ -385,7 +382,6 @@ describe("bridge e2e: §16.2 vertical slice over MCP stdio", () => {
           session_id: session2Id,
           idempotency_key: "e2e-b-send-2",
           task: { goal: "Implement slice.", acceptance_criteria: ["ok"], artifact_refs: [] },
-          workspace_precondition: { expected_snapshot_id: spawn2.initial_snapshot_id },
         })),
       );
       const turnId = send.turn_id as string;

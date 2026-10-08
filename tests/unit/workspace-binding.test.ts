@@ -2,29 +2,26 @@
  * A06 acceptance: durable physical cwd binding.
  *
  * New physical sessions durably bind the FS-resolved physical checkout
- * (realpath + dev/ino scope) of their native cwd at provisioning, inside the
- * session-owned provision intent. Turns dispatch that PINNED cwd — never a
+ * (realpath + dev/ino scope) of their native cwd at metadata-only provisioning,
+ * inside the session-owned provision intent. Turns dispatch that PINNED cwd — never a
  * re-resolved mutable registered alias — so a junction retarget after
  * dispatch cannot move native workspace IO to a checkout the session does not
- * lease. Final captures read the pinned root under the exact held lease with
- * identity re-verified before+after. Sessions provisioned without a binding
+ * lease. Sessions provisioned without a binding
  * get an explicit pre-dispatch refusal requiring replacement (native context
- * retained); path-less and review-slot contracts are unchanged.
+ * retained); review-slot sessions remain broker-owned.
  * All mock-level, no inference; filesystem fixtures are real temp dirs.
  */
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync, cpSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, cpSync } from "node:fs";
 import path from "node:path";
-import { createHarness, settle, settleTurn, start, COVERAGE_CONFIG, type Harness } from "../helpers/harness.ts";
+import { createHarness, settle, settleTurn, start, type Harness } from "../helpers/harness.ts";
 import { BrokerError } from "../../src/shared/errors.ts";
 import {
   PHYSICAL_CWD_BINDING_VERSION,
   readSessionPhysicalBinding,
   resolvePhysicalCheckoutIdentity,
 } from "../../src/workspaces/identity.ts";
-import { computeSourceDigest, takeInventory } from "../../src/workspaces/inventory.ts";
-import { coverageContractHash } from "../../src/workspaces/coverage.ts";
-import { insertWorkspace } from "../../src/storage/repo.ts";
+import { insertPolicyProfile, insertWorkspace } from "../../src/storage/repo.ts";
 import { TurnExecutor } from "../../src/core/execution.ts";
 import { openBlobStore } from "../../src/snapshots/blobs.ts";
 import { openInputViewStore } from "../../src/inputs/views.ts";
@@ -69,7 +66,7 @@ function registerLinkWorkspace(h: Harness, workspaceId: string, linkPath: string
     canonical_path: linkPath,
     quarantined: false,
     quarantine_reason: null,
-    coverage_profile_id: h.seed.coverageProfileId,
+    coverage_profile_id: null,
   });
 }
 
@@ -115,78 +112,6 @@ async function waitBarrier(h: Harness, name: string, timeoutMs = 5000): Promise<
 const BINDING_LIMITS = { globalUnfinishedTurns: 10, quotaScopeUnfinishedTurns: 10 };
 
 describe("A06: durable physical cwd binding", () => {
-  it("blocks provisioning when the pinned root is replaced during initial capture", async () => {
-    const h = createHarness();
-    const donor = path.join(path.dirname(h.workspaceRoot), "ws-donor");
-    const retained = path.join(path.dirname(h.workspaceRoot), "ws-retained");
-    const { requests } = recordDispatch(h);
-    try {
-      cpSync(h.workspaceRoot, donor, { recursive: true });
-      const originalScope = resolvePhysicalCheckoutIdentity(h.workspaceRoot)!.scope;
-      const originalWrite = h.core.blobStore.write.bind(h.core.blobStore);
-      let replaced = false;
-      h.core.blobStore.write = (project, bytes) => {
-        const result = originalWrite(project, bytes);
-        if (!replaced) {
-          replaced = true;
-          renameSync(h.workspaceRoot, retained);
-          renameSync(donor, h.workspaceRoot);
-        }
-        return result;
-      };
-      const session = await h.spawnWorkerSession();
-      expect(replaced).toBe(true);
-      expect(resolvePhysicalCheckoutIdentity(h.workspaceRoot)!.scope).not.toBe(originalScope);
-      expect(session.state).toBe("BLOCKED");
-      const row = h.db.raw.prepare("SELECT initial_snapshot_id, latest_snapshot_id FROM sessions WHERE session_id=?").get(session.session_id);
-      expect(row).toMatchObject({ initial_snapshot_id: null, latest_snapshot_id: null });
-      expect(h.db.raw.prepare("SELECT state FROM snapshot_records").all()).toEqual([{ state: "FAILED" }]);
-      expect(requests).toHaveLength(0);
-    } finally { h.cleanup(); }
-  });
-
-  it("invalidates the captured snapshot when the physical root is replaced during final capture", async () => {
-    const h = createHarness();
-    const donor = path.join(path.dirname(h.workspaceRoot), "ws-final-donor");
-    const retained = path.join(path.dirname(h.workspaceRoot), "ws-final-retained");
-    try {
-      const session = await h.spawnWorkerSession();
-      cpSync(h.workspaceRoot, donor, { recursive: true });
-      const turn = h.sendTask(session.session_id, "capture-replacement");
-      h.adapter.plan(turn.turn_id, [
-        { kind: "barrier", name: "before-final-capture" },
-        { kind: "complete", outcome: "completed" },
-      ]);
-      await start(h, turn);
-      await waitBarrier(h, "before-final-capture");
-      const originalWrite = h.core.blobStore.write.bind(h.core.blobStore);
-      let replaced = false;
-      h.core.blobStore.write = (project, bytes) => {
-        const result = originalWrite(project, bytes);
-        // Inject inside final capture rather than the preceding report write.
-        const capturing = h.db.raw.prepare("SELECT COUNT(*) n FROM snapshot_records WHERE state='CAPTURING'").get() as { n: number };
-        if (!replaced && capturing.n > 0) {
-          replaced = true;
-          renameSync(h.workspaceRoot, retained);
-          renameSync(donor, h.workspaceRoot);
-        }
-        return result;
-      };
-      h.adapter.releaseBarrier("before-final-capture");
-      await settleTurn(h, turn.turn_id);
-      expect(replaced).toBe(true);
-      expect(h.core.turnStatus(h.seed.coordinatorId, turn.turn_id)).toMatchObject({
-        state: "FAILED", native_outcome: "completed", error_code: "EVIDENCE_CAPTURE_FAILED", final_snapshot_id: null,
-      });
-      const snapshots = h.db.raw.prepare("SELECT snapshot_id, state FROM snapshot_records").all() as { snapshot_id: string; state: string }[];
-      expect(snapshots).toHaveLength(2);
-      expect(snapshots.find((s) => s.snapshot_id === session.initial_snapshot_id)?.state).toBe("SEALED");
-      expect(snapshots.find((s) => s.snapshot_id !== session.initial_snapshot_id)?.state).toBe("FAILED");
-      expect(h.core.sessionStatus(h.seed.coordinatorId, session.session_id).latest_snapshot_id).toBe(session.initial_snapshot_id);
-      expect(h.db.raw.prepare("SELECT COUNT(*) n FROM reservations WHERE owner_turn_id=? AND released_at IS NULL").get(turn.turn_id)).toEqual({ n: 0 });
-    } finally { h.cleanup(); }
-  });
-
   it("refuses a legacy lease for a physically bound session without dispatching or discarding context", async () => {
     const h = createHarness();
     const { requests } = recordDispatch(h);
@@ -206,24 +131,22 @@ describe("A06: durable physical cwd binding", () => {
     } finally { h.cleanup(); }
   });
 
-  it("rolls back ready state if its physical binding journal becomes invalid during provisioning", async () => {
+  it("refuses dispatch when the persisted physical binding is corrupt", async () => {
     const h = createHarness();
     const { requests } = recordDispatch(h);
     try {
-      const originalWrite = h.core.blobStore.write.bind(h.core.blobStore);
-      let corrupted = false;
-      h.core.blobStore.write = (project, bytes) => {
-        const result = originalWrite(project, bytes);
-        if (!corrupted) {
-          corrupted = true;
-          h.db.raw.prepare("UPDATE intents SET payload='invalid-json' WHERE kind='provision_session' AND state='pending'").run();
-        }
-        return result;
-      };
       const session = await h.spawnWorkerSession();
-      expect(corrupted).toBe(true);
-      expect(session.state).toBe("BLOCKED");
-      expect(h.db.raw.prepare("SELECT initial_snapshot_id FROM sessions WHERE session_id=?").get(session.session_id)).toMatchObject({ initial_snapshot_id: null });
+      expect(session.state).toBe("IDLE");
+      rewriteProvisionPayload(h, session.session_id, (p) => {
+        (p.physical_workspace as Record<string, unknown>).lease_scope = "physical:corrupt";
+      });
+      const turn = h.sendTask(session.session_id, "corrupt-binding");
+      await start(h, turn);
+      await settleTurn(h, turn.turn_id);
+      expect(h.core.turnStatus(h.seed.coordinatorId, turn.turn_id)).toMatchObject({
+        state: "FAILED",
+        execution_started: false,
+      });
       expect(requests).toHaveLength(0);
     } finally { h.cleanup(); }
   });
@@ -260,7 +183,7 @@ describe("A06: durable physical cwd binding", () => {
     }
   });
 
-  it("dispatch pins the junction's physical target; mid-turn retarget keeps owned writes on A, B independent, and seals nothing foreign", async (ctx) => {
+  it("dispatch pins the junction's physical target; mid-turn retarget keeps owned writes on A and captures no snapshots", async (ctx) => {
     const h = createHarness({ limits: BINDING_LIMITS });
     const baseDir = path.dirname(h.workspaceRoot);
     const otherRoot = path.join(baseDir, "ws-other");
@@ -317,17 +240,17 @@ describe("A06: durable physical cwd binding", () => {
       expect(readFileSync(path.join(h.workspaceRoot, "src", "a06-write.c"), "utf8")).toBe("on A\n");
       expect(existsSync(path.join(otherRoot, "src", "a06-write.c"))).toBe(false);
 
-      // Post-completion path drift: a KNOWN completion with an evidence
-      // failure — never UNKNOWN, and never a snapshot of the foreign root.
+      // Retargeting after dispatch does not change the pinned cwd or trigger
+      // automatic source capture. The owned write remains on A.
       const done = h.core.turnStatus(h.seed.coordinatorId, t1.turn_id);
-      expect(done.state).toBe("FAILED");
+      expect(done.state).toBe("SUCCEEDED");
       expect(done.native_outcome).toBe("completed");
       expect(done.execution_started).toBe(true);
-      expect(done.error_code).toBe("EVIDENCE_CAPTURE_FAILED");
       expect(done.final_snapshot_id).toBeNull();
       expect(countRows(h, "snapshot_records")).toBe(snapsBefore);
       const sess = h.core.sessionStatus(h.seed.coordinatorId, s.session_id);
-      expect(sess.latest_snapshot_id).toBe(sess.initial_snapshot_id);
+      expect(sess.initial_snapshot_id).toBeNull();
+      expect(sess.latest_snapshot_id).toBeNull();
       expect(sess.state).toBe("IDLE");
     } finally {
       removeLink(link);
@@ -335,7 +258,7 @@ describe("A06: durable physical cwd binding", () => {
     }
   });
 
-  it("next send via the retargeted registry refuses before inference; the key stays reusable after correction", async (ctx) => {
+  it("dispatch via a retargeted registry refuses before inference and preserves context", async (ctx) => {
     const h = createHarness({ limits: BINDING_LIMITS });
     const baseDir = path.dirname(h.workspaceRoot);
     const otherRoot = path.join(baseDir, "ws-other");
@@ -353,24 +276,26 @@ describe("A06: durable physical cwd binding", () => {
       expect(h.core.turnStatus(h.seed.coordinatorId, t1.turn_id).state).toBe("SUCCEEDED");
       const contextRef = h.core.sessionStatus(h.seed.coordinatorId, s.session_id).native_conversation_ref;
 
-      // Retarget to CONTENT-IDENTICAL B: only physical identity can refuse.
-      writeFileSync(path.join(otherRoot, "src", "main.c"), "int main(){return 0;}\n", "utf8");
+      // Retarget to a content-identical B: only physical identity can refuse.
+      cpSync(h.workspaceRoot, otherRoot, { recursive: true });
       removeLink(link);
       if (!tryCreateLink(otherRoot, link)) throw new Error("junction retarget failed");
-      const turnsBefore = countRows(h, "turns");
-      const err = expectBrokerError(() => h.sendTask(s.session_id, "flow-retry"), "WORKSPACE_CHANGED");
-      expect(err.executionStarted).toBe(false);
-      expect(countRows(h, "turns")).toBe(turnsBefore); // no turn, zero inference
+      const turn = h.sendTask(s.session_id, "retargeted-send");
+      await start(h, turn);
+      await settleTurn(h, turn.turn_id);
+      const refused = h.core.turnStatus(h.seed.coordinatorId, turn.turn_id);
+      expect(refused).toMatchObject({ state: "FAILED", error_code: "WORKSPACE_CHANGED", execution_started: false });
+      expect(h.adapter.dispatchPermissionAcquired(turn.turn_id)).toBeNull();
       const after = h.core.sessionStatus(h.seed.coordinatorId, s.session_id);
       expect(after.state).toBe("IDLE");
       expect(after.native_conversation_ref).toBe(contextRef); // context retained
       expect(after.context_status).toBe("available");
 
-      // Correct the registry alias back to A: the mutable refusal never
-      // consumed the key, so the same key + payload is reusable.
+      // Correcting the registered alias allows a later plain send to resume
+      // the same native context from its pinned checkout.
       removeLink(link);
       if (!tryCreateLink(h.workspaceRoot, link)) throw new Error("junction restore failed");
-      const t2 = h.sendTask(s.session_id, "flow-retry");
+      const t2 = h.sendTask(s.session_id, "flow-corrected");
       expect(t2.state).toBe("ACCEPTED");
       await start(h, t2);
       await settle(h);
@@ -392,26 +317,28 @@ describe("A06: durable physical cwd binding", () => {
 
       const copyRoot = path.join(path.dirname(h.workspaceRoot), "ws-copy");
       cpSync(h.workspaceRoot, copyRoot, { recursive: true });
-      const digestOf = (root: string) =>
-        computeSourceDigest(takeInventory(root, COVERAGE_CONFIG).entries, {
-          profile_id: h.seed.coverageProfileId,
-          version: "1",
-          contract_hash: coverageContractHash(COVERAGE_CONFIG),
-        });
       // The copy is provably content-identical but a different checkout.
-      expect(digestOf(copyRoot)).toBe(digestOf(h.workspaceRoot));
+      expect(readFileSync(path.join(copyRoot, "src", "main.c"), "utf8")).toBe(
+        readFileSync(path.join(h.workspaceRoot, "src", "main.c"), "utf8"),
+      );
       expect(resolvePhysicalCheckoutIdentity(copyRoot)!.scope).not.toBe(
         resolvePhysicalCheckoutIdentity(h.workspaceRoot)!.scope,
       );
 
       h.db.raw.prepare("UPDATE workspaces SET canonical_path = ? WHERE workspace_id = 'ws-main'").run(copyRoot);
-      const err = expectBrokerError(() => h.sendTask(s.session_id, "identity-key"), "WORKSPACE_CHANGED");
-      expect(err.message).toMatch(/bound physical checkout/);
-      expect(countRows(h, "turns")).toBe(1); // refused before any inference
+      const refused = h.sendTask(s.session_id, "identity-drift");
+      await start(h, refused);
+      await settleTurn(h, refused.turn_id);
+      expect(h.core.turnStatus(h.seed.coordinatorId, refused.turn_id)).toMatchObject({
+        state: "FAILED",
+        error_code: "WORKSPACE_CHANGED",
+        execution_started: false,
+      });
+      expect(h.adapter.dispatchPermissionAcquired(refused.turn_id)).toBeNull();
 
       // Restoring the registered alias makes the same key reusable again.
       h.db.raw.prepare("UPDATE workspaces SET canonical_path = ? WHERE workspace_id = 'ws-main'").run(h.workspaceRoot);
-      const t2 = h.sendTask(s.session_id, "identity-key");
+      const t2 = h.sendTask(s.session_id, "identity-restored");
       await start(h, t2);
       await settle(h);
       expect(h.core.turnStatus(h.seed.coordinatorId, t2.turn_id).state).toBe("SUCCEEDED");
@@ -516,25 +443,29 @@ describe("A06: durable physical cwd binding", () => {
   it("path-less and review-slot sessions keep their contracts (no physical binding)", async () => {
     const h = createHarness();
     try {
-      const pathless = await h.spawnWorkerSession({ workspace: { mode: "current", workspace_id: null } });
-      expect(pathless.state).toBe("IDLE");
-      expect(provisionPayload(h, pathless.session_id).physical_workspace).toBeUndefined();
+      await expect(h.spawnWorkerSession({ workspace: { mode: "current", workspace_id: null } }))
+        .rejects.toMatchObject({ code: "INVALID_REQUEST", executionStarted: false });
 
-      // A review slot with a registered but UNRESOLVABLE canonical_path must
-      // provision untouched: review slots never bind or require a physical
-      // checkout — their cwd is the broker-owned slot.
+      // Review slots never bind or require a physical checkout; their cwd is
+      // the broker-owned slot.
       insertWorkspace(h.db, {
         workspace_id: "ws-review",
         project_id: h.seed.projectId,
         mode: "review_slot",
-        canonical_path: path.join(path.dirname(h.workspaceRoot), "never-exists"),
+        canonical_path: null,
         quarantined: false,
         quarantine_reason: null,
         coverage_profile_id: null,
       });
+      insertPolicyProfile(h.db, {
+        policy_profile_id: "pol-readonly",
+        version: "1",
+        config: JSON.stringify({ access: "read_only" }),
+      });
       const reviewer = await h.spawnWorkerSession({
         role: "reviewer",
         workspace: { mode: "review_slot", workspace_id: "ws-review" },
+        policy_profile_id: "pol-readonly",
       });
       expect(reviewer.state).toBe("IDLE");
       expect(provisionPayload(h, reviewer.session_id).physical_workspace).toBeUndefined();
@@ -543,7 +474,7 @@ describe("A06: durable physical cwd binding", () => {
     }
   });
 
-  it("a registered checkout with no stable physical identity fails provisioning (no faked support)", async () => {
+  it("rejects a registered checkout with no stable physical identity", async () => {
     const h = createHarness();
     try {
       insertWorkspace(h.db, {
@@ -553,26 +484,12 @@ describe("A06: durable physical cwd binding", () => {
         canonical_path: path.join(path.dirname(h.workspaceRoot), "does-not-exist"),
         quarantined: false,
         quarantine_reason: null,
-        coverage_profile_id: h.seed.coverageProfileId,
+        coverage_profile_id: null,
       });
-      const s = await h.spawnWorkerSession({ workspace: { mode: "current", workspace_id: "ws-broken" } });
-      expect(s.state).toBe("BLOCKED");
-      const sess = h.core.sessionStatus(h.seed.coordinatorId, s.session_id);
-      expect(sess.block_reason).toContain("no-stable-physical-identity");
-      const intent = h.db.raw
-        .prepare("SELECT state FROM intents WHERE kind='provision_session' AND session_id=?")
-        .get(s.session_id) as { state: string };
-      expect(intent.state).toBe("failed");
-      expectBrokerError(
-        () =>
-          h.core.send(h.seed.coordinatorId, {
-            session_id: s.session_id,
-            idempotency_key: "never-dispatched",
-            task: { goal: "g", artifact_refs: [] },
-            workspace_precondition: { expected_snapshot_id: "snap-none" },
-          }),
-        "SESSION_BLOCKED",
-      );
+      const before = countRows(h, "sessions");
+      await expect(h.spawnWorkerSession({ workspace: { mode: "current", workspace_id: "ws-broken" } }))
+        .rejects.toMatchObject({ code: "INVALID_REQUEST", executionStarted: false });
+      expect(countRows(h, "sessions")).toBe(before);
       expect(countRows(h, "turns")).toBe(0);
     } finally {
       h.cleanup();

@@ -16,7 +16,6 @@ import {
   expireArtifact,
   getAccount,
   getArtifact,
-  getCoverageProfile,
   getDaemonState,
   getSession,
   getSnapshotRecord,
@@ -36,7 +35,6 @@ import {
   sealArtifact,
   updateIntentState,
   updateSessionFields,
-  updateSnapshotState,
   updateTurnFields,
 } from "../storage/repo.ts";
 
@@ -49,7 +47,6 @@ import type {
   Limits,
   SessionRecord,
   SnapshotManifest,
-  SnapshotRecord,
   TurnRecord,
   TurnState,
 } from "../shared/api-types.ts";
@@ -77,22 +74,16 @@ import type {
 } from "../runtime/adapter.ts";
 import { assertQuotaScopeSendable, readSessionProviderBinding, quotaScopeForSession } from "./broker.ts";
 import { recordQuotaCooldown } from "./quotaCooldown.ts";
-import {
-  fingerprintReadinessObservation,
-  readReadinessObservation,
-} from "../providers/common/readiness.ts";
 import type { BlobStore } from "../snapshots/blobs.ts";
-import { captureSnapshot, diffManifests, readManifest, type ManifestDelta } from "../snapshots/capture.ts";
+import { readManifest } from "../snapshots/capture.ts";
 import { diffSnapshots, renderCompleteDiffDocument } from "../snapshots/diff.ts";
-import { CoverageError, matchesPrefix, type CoverageConfig } from "../workspaces/coverage.ts";
+import { CoverageError } from "../workspaces/coverage.ts";
 import {
   isPhysicalLeaseScope,
   readSessionPhysicalBinding,
   resolvePhysicalCheckoutIdentity,
 } from "../workspaces/identity.ts";
-import { gitReviewDrift, resolveGitReviewRoot } from "../workspaces/gitReview.ts";
 import { loadSessionWritePolicy, sessionWriteScope, type EffectiveWritePolicy } from "./policy.ts";
-import { computeSourceDigest, takeInventory } from "../workspaces/inventory.ts";
 import {
   buildTurnInputManifest,
   INLINE_TOTAL_BYTE_CAP,
@@ -252,16 +243,6 @@ interface CancelWatch {
   reason: string | null;
 }
 
-/**
- * A Git-native review turn: bound to exact full-hex commits (git_review_binding)
- * instead of snapshots. The reviewer reads the registered bound checkout with
- * its own Git tooling; the broker captures no snapshots and synthesizes no
- * diff inputs.
- */
-function isGitReviewTurn(turn: Pick<TurnRecord, "git_base_commit" | "git_target_commit">): boolean {
-  return turn.git_base_commit !== null && turn.git_target_commit !== null;
-}
-
 export class TurnExecutor {
   private readonly db: RegistryDb;
   private readonly clock: Clock;
@@ -364,19 +345,6 @@ export class TurnExecutor {
     const watch: CancelWatch = { reason: null };
     this.cancelWatches.set(turnId, watch);
 
-    // §7.2 step 7: re-check the workspace under the lease at STARTING — an
-    // external write that landed after the send-time digest preflight must
-    // fail the turn BEFORE dispatch (no inference), not be absorbed into
-    // this turn's delta.
-    if (turn.baseline_snapshot_id && session.workspace_id && session.workspace_mode !== "review_slot") {
-      const drift = this.checkBaselineDrift(turn, session);
-      if (drift) {
-        this.finalizePreStartKnown(turn, session, "WORKSPACE_CHANGED", drift, continuation);
-        return;
-      }
-    }
-
-    // §7.2 step 7: re-check cancel/policy under lease before launch.
     const turnNow = getTurn(this.db, turnId);
     if (!turnNow) return;
     if (turnNow.state === "CANCELLING") {
@@ -433,18 +401,6 @@ export class TurnExecutor {
     if (!pinned.ok) {
       this.finalizePreStartKnown(turnNow, session, pinned.code, pinned.message, continuation);
       return;
-    }
-
-    // Git review: revalidate the exact-commit contract under the held lease
-    // BEFORE inference. A queued or restarted turn re-proves the contract at
-    // dispatch time — HEAD moved off the target commit or a dirty checkout
-    // (external or coordinator edit) fails closed with zero inference.
-    if (isGitReviewTurn(turnNow)) {
-      const drift = this.gitReviewCheckoutDrift(session, turnNow.git_target_commit!, turnNow.git_working_tree_digest, "pre-dispatch");
-      if (drift) {
-        this.finalizePreStartKnown(turnNow, session, "WORKSPACE_CHANGED", drift, continuation);
-        return;
-      }
     }
 
     // Required input delivery BEFORE dispatch (§7.1.1, §13.2.1): resolve →
@@ -508,49 +464,20 @@ export class TurnExecutor {
             );
           }
         }
-        let freshObservationFingerprint: string | null = null;
-        if (bindingLookup.kind === "bound" && bindingLookup.binding.readiness !== null) {
-          // Establish observation OUTSIDE the authoritative transaction (§13.3):
-          // runs non-inference metadata probe or config inspection.
-          const account = getAccount(this.db, session.account_profile_id);
-          if (!account || account.provider !== session.provider) {
-            throw new BrokerError(
-              "PROVIDER_INCOMPATIBLE",
-              `Account profile '${session.account_profile_id}' is not available for provider '${session.provider}'.`,
-              { executionStarted: false },
-            );
-          }
-          const policyLookup = loadSessionWritePolicy(this.db, session);
-          if (policyLookup.kind !== "effective") {
-            throw new BrokerError("POLICY_UNSUPPORTED", "Session write policy is not effective.", { executionStarted: false });
-          }
-          const returned = adapter.preflight({
-            provider: session.provider,
-            model: session.requested_model,
-            effort: session.requested_effort,
-            role: session.role,
-            workspace_mode: session.workspace_mode,
-            account: {
-              account_profile_id: account.account_profile_id,
-              auth_mode: account.auth_mode,
-              quota_scope_id: account.quota_scope_id,
-            },
-            effective_policy: cloneFrozenPolicy(policyLookup.policy),
-          } satisfies AdapterPreflightContext);
-          const observation = readReadinessObservation(returned, adapter.providerId);
-          freshObservationFingerprint = observation ? fingerprintReadinessObservation(observation) : null;
-          if (freshObservationFingerprint !== bindingLookup.binding.readiness.fingerprint) {
-            throw new BrokerError(
-              "PROVIDER_INCOMPATIBLE",
-              "Provider readiness identity changed between admission and dispatch; refusing native launch — correct provider readiness and create a replacement session (§13.3).",
-              {
-                executionStarted: false,
-                retryGuidance: "correct_provider_readiness_then_spawn_session",
-                details: { bound_fingerprint: bindingLookup.binding.readiness.fingerprint, fresh_fingerprint: freshObservationFingerprint },
-              },
-            );
-          }
+        const account = getAccount(this.db, session.account_profile_id);
+        if (!account || account.provider !== session.provider) {
+          throw new BrokerError("PROVIDER_INCOMPATIBLE", "Configured account is unavailable for this provider.", { executionStarted: false });
         }
+        // Probe the current installation once. CLI/catalog changes do not invalidate a session.
+        adapter.preflight({
+          provider: session.provider,
+          model: session.requested_model,
+          effort: session.requested_effort,
+          role: session.role,
+          workspace_mode: session.workspace_mode,
+          account: { account_profile_id: account.account_profile_id, auth_mode: account.auth_mode, quota_scope_id: account.quota_scope_id },
+          effective_policy: effectivePolicy,
+        } satisfies AdapterPreflightContext);
 
         // Durable dispatch-permission record before native handoff (§14.3).
         const now = this.clock.now();
@@ -588,13 +515,6 @@ export class TurnExecutor {
                 "PROVIDER_INCOMPATIBLE",
                 "Registered account binding drifted after admission; refusing dispatch — replacement session required (§13.3).",
                 { executionStarted: false },
-              );
-            }
-            if (bindingLookup.binding.readiness !== null && freshObservationFingerprint !== bindingLookup.binding.readiness.fingerprint) {
-              throw new BrokerError(
-                "PROVIDER_INCOMPATIBLE",
-                "Provider readiness identity changed after admission; refusing dispatch — correct provider readiness and create a replacement session (§13.3).",
-                { executionStarted: false, retryGuidance: "correct_provider_readiness_then_spawn_session" },
               );
             }
           }
@@ -1014,9 +934,6 @@ export class TurnExecutor {
         ? JSON.stringify({
             baseline_snapshot_id: turn.baseline_snapshot_id,
             target_snapshot_id: turn.review_target_snapshot_id,
-            ...(isGitReviewTurn(turn)
-              ? { git_base_commit: turn.git_base_commit, git_target_commit: turn.git_target_commit, git_working_tree_digest: turn.git_working_tree_digest }
-              : {}),
             turn_id: turn.turn_id,
             session_id: session.session_id,
             source: session.provider,
@@ -1587,18 +1504,9 @@ export class TurnExecutor {
           : null,
     }));
 
-    const workspace_binding = isGitReviewTurn(turn)
-      ? {
-          git_review: {
-            workspace_id: session.workspace_id ?? "",
-            base_commit: turn.git_base_commit ?? "",
-            target_commit: turn.git_target_commit ?? "",
-            working_tree_digest: turn.git_working_tree_digest,
-          },
-        }
-      : session.workspace_mode === "review_slot"
-        ? { review: { baseline_snapshot_id: turn.baseline_snapshot_id ?? "", target_snapshot_id: turn.review_target_snapshot_id ?? "" } }
-        : { workspace_id: session.workspace_id, expected_snapshot_id: turn.baseline_snapshot_id };
+    const workspace_binding = session.workspace_mode === "review_slot"
+      ? { review: { baseline_snapshot_id: turn.baseline_snapshot_id ?? "", target_snapshot_id: turn.review_target_snapshot_id ?? "" } }
+      : { workspace_id: session.workspace_id };
 
     const manifest = buildTurnInputManifest({
       turn_id: turn.turn_id,
@@ -1771,23 +1679,15 @@ export class TurnExecutor {
     const lines: string[] = [
       "agent-broker context envelope (deterministic, broker-generated)",
       `turn=${turn.turn_id} session=${session.session_id} role=${session.role}`,
-      `workspace=${session.workspace_id ?? "none"} baseline_snapshot=${turn.baseline_snapshot_id ?? "none"}`,
+      `workspace=${session.workspace_id ?? "none"}`,
+      this.sessionAllowsWrites(session)
+        ? "Access: write all project. Task paths are guidance, not a file allowlist."
+        : "Access: read-only. Inspect files and Git; do not modify project files.",
       "[session instructions]", instructions, "[/session instructions]",
       "[task contract JSON]", JSON.stringify(task), "[/task contract JSON]",
       // §9.3: the prompt states which snapshot replaced the previous code.
       ...(turn.review_target_snapshot_id
         ? [`review_target_snapshot=${turn.review_target_snapshot_id} (this replaced the previous code in your cwd)`]
-        : []),
-      // Git-native review: compact exact commit ids plus suggested diff
-      // commands. The broker NEVER synthesizes or delivers diff bytes — the
-      // reviewer reads the bound checkout with its own Git tooling.
-      ...(turn.git_base_commit && turn.git_target_commit
-        ? [
-            `git_review_binding: base_commit=${turn.git_base_commit} target_commit=${turn.git_target_commit} working_tree_digest=${turn.git_working_tree_digest ?? "clean"} (review this exact commit pair and bound working-tree state in your cwd)`,
-            ...(turn.git_working_tree_digest
-              ? [`suggested git commands: git diff --no-ext-diff --no-textconv ${turn.git_base_commit} (tracked working content); git diff --cached --no-ext-diff --no-textconv ${turn.git_target_commit}; git diff --no-ext-diff --no-textconv; git ls-files --others --exclude-standard, then read each untracked file; external diff and textconv are disabled`]
-              : [`suggested git commands: git diff --no-ext-diff --no-textconv --stat ${turn.git_base_commit}..${turn.git_target_commit}; git diff --no-ext-diff --no-textconv ${turn.git_base_commit}..${turn.git_target_commit}; git show --no-ext-diff --no-textconv ${turn.git_target_commit} --stat`]),
-          ]
         : []),
       inputs.length > 0
         ? `required inputs (${inputs.length}) — every input below is required:`
@@ -2142,7 +2042,7 @@ export class TurnExecutor {
       };
     }
     const binding = lookup.binding;
-    if (!lease || binding.lease_scope !== lease.scope) {
+    if (this.sessionAllowsWrites(session) && (!lease || binding.lease_scope !== lease.scope)) {
       return {
         ok: false,
         code: "WORKSPACE_CHANGED",
@@ -2150,7 +2050,7 @@ export class TurnExecutor {
       };
     }
     const pinnedIdentity = resolvePhysicalCheckoutIdentity(binding.canonical_cwd);
-    if (!pinnedIdentity || pinnedIdentity.scope !== lease.scope) {
+    if (!pinnedIdentity || pinnedIdentity.scope !== binding.lease_scope) {
       return {
         ok: false,
         code: "WORKSPACE_CHANGED",
@@ -2160,66 +2060,9 @@ export class TurnExecutor {
     return { ok: true, cwd: binding.canonical_cwd };
   }
 
-  /**
-   * Git review drift re-check against the session's durable PINNED checkout:
-   * HEAD must still equal the exact target commit and the checkout must stay
-   * clean or match its working-tree digest. `phase` only labels the failure. Unresolvable/unreadable state
-   * fails closed as drift.
-   */
-  private gitReviewCheckoutDrift(session: SessionRecord, targetCommit: string, digest: string | null, phase: "pre-dispatch" | "post-run"): string | null {
-    const binding = readSessionPhysicalBinding(this.db, session.session_id);
-    if (binding.kind === "malformed") {
-      return `session physical cwd binding is unusable for the ${phase} drift re-check`;
-    }
-    if (binding.kind !== "bound") {
-      return `session has no durable physical cwd binding for the ${phase} drift re-check`;
-    }
-    const root = resolveGitReviewRoot(binding.binding.canonical_cwd);
-    if (!root) {
-      return `review checkout does not resolve for the ${phase} drift re-check`;
-    }
-    return gitReviewDrift(root, targetCommit, digest);
-  }
-
-  /**
-   * Returns a drift description when the live workspace digest no longer
-   * matches the turn's baseline snapshot (§8.2), or null when it matches.
-   * A06: the digest is taken from the session's PINNED checkout when bound —
-   * the re-check must describe the checkout this turn will write.
-   */
-  private checkBaselineDrift(turn: TurnRecord, session: SessionRecord): string | null {
-    const baseline = getSnapshotRecord(this.db, turn.baseline_snapshot_id!);
-    if (!baseline || baseline.state !== "SEALED") {
-      return "baseline snapshot is not sealed";
-    }
-    const workspace = getWorkspace(this.db, session.workspace_id!);
-    if (!workspace?.canonical_path) return "workspace path unresolvable";
-    const profile = getCoverageProfile(this.db, session.coverage_profile_id!, session.coverage_profile_version!);
-    if (!profile) return "coverage profile missing";
-    const config = JSON.parse(profile.config) as CoverageConfig;
-    const binding = readSessionPhysicalBinding(this.db, session.session_id);
-    const root = binding.kind === "bound" ? binding.binding.canonical_cwd : workspace.canonical_path;
-    if (binding.kind === "bound") {
-      const pinned = resolvePhysicalCheckoutIdentity(root);
-      if (!pinned || pinned.scope !== binding.binding.lease_scope) {
-        return "pinned physical checkout no longer resolves to the session's bound identity";
-      }
-    }
-    let digest: string;
-    try {
-      const inventory = takeInventory(root, config);
-      digest = computeSourceDigest(inventory.entries, {
-        profile_id: profile.coverage_profile_id,
-        version: profile.version,
-        contract_hash: profile.contract_hash,
-      });
-    } catch {
-      return "workspace source state unreadable for the baseline re-check";
-    }
-    if (digest !== baseline.source_digest) {
-      return "workspace source state changed since the expected snapshot (§8.2)";
-    }
-    return null;
+  private sessionAllowsWrites(session: SessionRecord): boolean {
+    const policy = loadSessionWritePolicy(this.db, session);
+    return policy.kind === "effective" && policy.policy.access === "workspace_write";
   }
 
   private finalizeWithFailure(
@@ -2264,51 +2107,6 @@ export class TurnExecutor {
     // cancel request; the cancellation stays in the audit trail.
     const timedOut = turn.deadline_at !== null && this.clock.now() > turn.deadline_at && cancelReason === "deadline";
 
-    // Final evidence capture for writer turns (§9.2): a SUCCEEDED candidate
-    // requires a sealed final snapshot + complete observed delta + scope
-    // check. A known capture/scope failure is a finalization failure — the
-    // native outcome is preserved separately (§5.3).
-    // Git review turns are not writers: the exact-commit binding is the
-    // evidence, no final snapshot is captured, and a checkout that drifted
-    // during the review must not produce an accepted SUCCEEDED review.
-    const isGitReview = isGitReviewTurn(turn);
-    const isWriter = session.workspace_id !== null && session.workspace_mode !== "review_slot" && !isGitReview;
-    let finalSnapshotId: string | null = null;
-    let delta: ManifestDelta | null = null;
-    let evidenceError: CoverageError | null = null;
-
-    if (isWriter && result.native_outcome === "completed") {
-      try {
-        const captured = this.finalCapture(turn, session);
-        finalSnapshotId = captured.snapshot.snapshot_id;
-        delta = captured.delta;
-      } catch (e) {
-        if (e instanceof CoverageError) {
-          evidenceError = e;
-        } else {
-          evidenceError = new CoverageError(String(e), "EVIDENCE_CAPTURE_FAILED");
-        }
-      }
-    }
-
-    if (isGitReview && !evidenceError && result.native_outcome === "completed") {
-      const drift = this.gitReviewCheckoutDrift(session, turn.git_target_commit!, turn.git_working_tree_digest, "post-run");
-      if (drift) evidenceError = new CoverageError(drift, "WORKSPACE_CHANGED");
-    }
-
-    if (evidenceError) {
-      this.commitTerminal(turn, session, {
-        candidate: "FAILED",
-        native_outcome: result.native_outcome,
-        termination_reason: timedOut ? "deadline" : cancelReason !== null && result.native_outcome === "failed" ? "cancelled" : "normal",
-        execution_started: true,
-        finalization_error: `${evidenceError.code}: ${evidenceError.message}`,
-        error_code: evidenceError.code,
-        detail: { malformed: result.malformed === true, cancel_reason: cancelReason, final_snapshot_id: null },
-      }, continuation, result.native_conversation_ref !== "" ? result.native_conversation_ref : undefined);
-      return;
-    }
-
     this.commitTerminal(turn, session, {
       candidate: result.native_outcome === "completed" ? "SUCCEEDED" : timedOut ? "TIMED_OUT" : cancelReason !== null && result.native_outcome === "failed" ? "CANCELLED" : "FAILED",
       native_outcome: result.native_outcome,
@@ -2319,130 +2117,8 @@ export class TurnExecutor {
       detail: {
         malformed: result.malformed === true,
         cancel_reason: cancelReason,
-        observed_workspace_delta: delta ? { added: delta.added, modified: delta.modified, deleted: delta.deleted } : null,
       },
-    }, continuation, result.native_conversation_ref !== "" ? result.native_conversation_ref : undefined, finalSnapshotId);
-  }
-
-  /**
-   * Final writer snapshot under the turn's workspace lease (§9.2): capture,
-   * diff against the baseline manifest, and enforce scope policy (§8.7) —
-   * every source change must be inside the policy write scope, and no new
-   * files may appear in undeclared/protected areas.
-   */
-  private finalCapture(turn: TurnRecord, session: SessionRecord): { snapshot: SnapshotRecord; delta: ManifestDelta } {
-    const leaseDrift = this.workspaceLeaseBindingDrift(turn.turn_id, session);
-    if (leaseDrift) throw new CoverageError(leaseDrift, "EVIDENCE_CAPTURE_FAILED");
-    const workspace = session.workspace_id ? getWorkspace(this.db, session.workspace_id) : null;
-    if (!workspace || !workspace.canonical_path) {
-      throw new CoverageError("Writer session has no resolvable workspace path", "EVIDENCE_CAPTURE_FAILED");
-    }
-    if (!session.coverage_profile_id || !session.coverage_profile_version || !session.coverage_contract_hash) {
-      throw new CoverageError("Session has no coverage binding", "SNAPSHOT_COVERAGE_MISMATCH");
-    }
-    const profile = getCoverageProfile(this.db, session.coverage_profile_id, session.coverage_profile_version);
-    if (!profile) {
-      throw new CoverageError("Coverage profile not found", "SNAPSHOT_COVERAGE_MISMATCH");
-    }
-    const config = JSON.parse(profile.config) as CoverageConfig;
-    const coverage = {
-      profile_id: profile.coverage_profile_id,
-      version: profile.version,
-      contract_hash: profile.contract_hash,
-      config,
-    };
-
-    // A06: the final capture reads the session's PINNED checkout under the
-    // exact held lease — never a re-resolved mutable alias — with the pinned
-    // root's identity re-verified immediately before and after the capture.
-    // A root renamed/recreated mid-turn is an evidence failure for the known
-    // native completion; a foreign checkout is never promoted as the final
-    // source. (Arbitrary external rename/recreate still requires per-tool
-    // native enforcement; this closes the capture window only.)
-    const binding = readSessionPhysicalBinding(this.db, session.session_id);
-    if (binding.kind === "malformed") {
-      throw new CoverageError(`Session physical cwd binding is unusable: ${binding.reason}`, "EVIDENCE_CAPTURE_FAILED");
-    }
-    const captureRoot = binding.kind === "bound" ? binding.binding.canonical_cwd : workspace.canonical_path;
-    if (binding.kind === "bound" &&
-        resolvePhysicalCheckoutIdentity(captureRoot)?.scope !== binding.binding.lease_scope) {
-      throw new CoverageError(
-        "Pinned physical checkout does not resolve to the bound identity before final capture",
-        "EVIDENCE_CAPTURE_FAILED",
-      );
-    }
-
-    const captured = captureSnapshot({
-      db: this.db,
-      blobs: this.blobs,
-      clock: this.clock,
-      projectId: session.project_id,
-      workspaceId: workspace.workspace_id,
-      workspaceRoot: captureRoot,
-      coverage,
-    });
-
-    if (binding.kind === "bound" &&
-        resolvePhysicalCheckoutIdentity(captureRoot)?.scope !== binding.binding.lease_scope) {
-      updateSnapshotState(this.db, captured.snapshot.snapshot_id, "FAILED", "physical-checkout-changed-during-final-capture");
-      throw new CoverageError(
-        "Pinned physical checkout identity changed during final capture",
-        "EVIDENCE_CAPTURE_FAILED",
-      );
-    }
-
-    if (!turn.baseline_snapshot_id) {
-      throw new CoverageError("Writer turn has no baseline snapshot", "EVIDENCE_CAPTURE_FAILED");
-    }
-    const baselineRecord = getSnapshotRecord(this.db, turn.baseline_snapshot_id);
-    if (!baselineRecord || baselineRecord.state !== "SEALED") {
-      throw new CoverageError("Baseline snapshot is not sealed", "EVIDENCE_CAPTURE_FAILED");
-    }
-    const baselineManifest = readManifest({
-      db: this.db,
-      blobs: this.blobs,
-      projectId: session.project_id,
-      snapshot: baselineRecord,
-    });
-    const delta = diffManifests(baselineManifest, captured.manifest);
-
-    // Scope enforcement (§8.5, §8.7): post-detection against the session's
-    // IMMUTABLE effective write policy (§12.1 binding); a violation fails the
-    // turn with evidence, no rollback is attempted. Fail-closed: an unreadable
-    // binding or policy profile cannot silently disable the check, and an
-    // empty scope (read_only or undeclared write_scope) permits no writes.
-    const scope = sessionWriteScope(this.db, session);
-    if (scope.kind === "invalid") {
-      throw new CoverageError("Policy write scope invalid: " + scope.reason, "EVIDENCE_CAPTURE_FAILED");
-    }
-    const writeScope = scope.kind === "declared" ? scope.prefixes : []; // absent → nothing permitted
-    const changed = [...delta.added, ...delta.modified, ...delta.deleted];
-    const outsideScope = changed.filter((p) => !writeScope.some((prefix) => matchesPrefix(p, prefix)));
-    if (outsideScope.length > 0) {
-      throw new CoverageError(
-        `Source changes outside policy write scope: ${outsideScope.slice(0, 10).join(", ")}`,
-        "SCOPE_VIOLATION",
-      );
-    }
-    const baselineProtected = new Set(baselineManifest.protected_observed);
-    const newProtected = captured.manifest.protected_observed.filter((p) => !baselineProtected.has(p));
-    if (newProtected.length > 0) {
-      throw new CoverageError(
-        `Writes into undeclared/protected paths: ${newProtected.slice(0, 10).join(", ")}`,
-        "SCOPE_VIOLATION",
-      );
-    }
-    // Git metadata and broker state are protected areas too (§8.7): a new
-    // top-level entry inside an excluded subtree (e.g. .git) is a violation.
-    const baselineExcluded = new Set(baselineManifest.excluded_observed ?? []);
-    const newExcluded = (captured.manifest.excluded_observed ?? []).filter((p) => !baselineExcluded.has(p));
-    if (newExcluded.length > 0) {
-      throw new CoverageError(
-        `Writes into excluded/protected subtrees: ${newExcluded.slice(0, 10).join(", ")}`,
-        "SCOPE_VIOLATION",
-      );
-    }
-    return { snapshot: captured.snapshot, delta };
+    }, continuation, result.native_conversation_ref !== "" ? result.native_conversation_ref : undefined);
   }
 
   private markUnknown(turn: TurnRecord, session: SessionRecord, cause: unknown): void {
@@ -2775,35 +2451,6 @@ export class TurnExecutor {
       const unrecoverableReport = reportStatus.get(turn.turn_id);
       const forceReportFailure = unrecoverableReport?.ok === false;
 
-      // Git review turns are never writers (no final snapshot in recovery)
-      // and their SUCCEEDED candidate must survive the post-run drift check:
-      // a checkout that changed since the review fails closed instead.
-      const isGitReview = isGitReviewTurn(turn);
-      const isWriter = session.workspace_id !== null && session.workspace_mode !== "review_slot" && !isGitReview;
-      let finalSnapshotId: string | null = null;
-      let delta: ManifestDelta | null = null;
-      let evidenceError: CoverageError | null = null;
-
-      if (isWriter && !forceReportFailure && row.candidate === "SUCCEEDED" && row.native_outcome === "completed") {
-        try {
-          const captured = this.finalCapture(turn, session);
-          finalSnapshotId = captured.snapshot.snapshot_id;
-          delta = captured.delta;
-        } catch (e) {
-          if (e instanceof CoverageError) {
-            evidenceError = e;
-          } else {
-            evidenceError = new CoverageError(String(e), "EVIDENCE_CAPTURE_FAILED");
-          }
-        }
-      }
-
-      if (isGitReview && !forceReportFailure && !evidenceError &&
-          row.candidate === "SUCCEEDED" && row.native_outcome === "completed") {
-        const drift = this.gitReviewCheckoutDrift(session, turn.git_target_commit!, turn.git_working_tree_digest, "post-run");
-        if (drift) evidenceError = new CoverageError(drift, "WORKSPACE_CHANGED");
-      }
-
       const nativeRef = row.native_conversation_ref ?? undefined;
       if (nativeRef && session.native_conversation_ref === null) {
         this.db.tx(() => {
@@ -2851,24 +2498,6 @@ export class TurnExecutor {
           null,
           true,
         );
-      } else if (evidenceError) {
-        this.commitTerminal(
-          turn,
-          session,
-          {
-            candidate: "FAILED",
-            native_outcome: row.native_outcome,
-            termination_reason: row.termination_hint ?? "normal",
-            execution_started: row.execution_started === 1,
-            finalization_error: `${evidenceError.code}: ${evidenceError.message}`,
-            error_code: evidenceError.code,
-            detail: { cancel_reason: row.termination_hint === "cancelled" ? "cancelled" : null, final_snapshot_id: null },
-          },
-          continuation,
-          nativeRef,
-          null,
-          true,
-        );
       } else {
         this.commitTerminal(
           turn,
@@ -2882,12 +2511,11 @@ export class TurnExecutor {
             error_code: null,
             detail: {
               cancel_reason: row.termination_hint === "cancelled" ? "cancelled" : null,
-              observed_workspace_delta: delta ? { added: delta.added, modified: delta.modified, deleted: delta.deleted } : null,
-            },
+                  },
           },
           continuation,
           nativeRef,
-          finalSnapshotId,
+          null,
           true,
         );
       }
@@ -2896,7 +2524,7 @@ export class TurnExecutor {
         turn_id: turn.turn_id,
         session_id: session.session_id,
         type: "recovery_outcome_reconciled",
-        payload: { candidate: forceReportFailure || evidenceError ? "FAILED" : row.candidate },
+        payload: { candidate: forceReportFailure ? "FAILED" : row.candidate },
         created_at: this.clock.now(),
       });
     }

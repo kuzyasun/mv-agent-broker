@@ -1,3 +1,8 @@
+> Historical implementation plan. Superseded on 2026-10-08 by the
+> [trusted local workflow](trusted-local-workflow-plan.md): ordinary reviewers
+> read checkout files and Git directly with a plain task send. Commit/digest
+> bindings and automatic source-state vetoes described below were removed.
+
 # Git review
 
 ## Default workflow

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createHarness, settle, start } from "../helpers/harness.ts";
 import { previewCleanup, executeCleanup } from "../../src/storage/cleanup.ts";
 import { openBlobStore } from "../../src/snapshots/blobs.ts";
+import { insertPin } from "../../src/storage/repo.ts";
 import { BrokerError } from "../../src/shared/errors.ts";
 
 function expectBrokerError(fn: () => unknown, code: string): BrokerError {
@@ -92,10 +93,13 @@ describe("cleanup and agent_artifact_read (§15.3, §10.1)", () => {
     }
   });
 
-  it("session anchors protect the initial baseline; retained manifests keep shared blobs alive", async () => {
+  it("explicit pins protect a manual snapshot; retained manifests keep shared blobs alive", async () => {
     const h = createHarness();
     try {
       const spawn = await h.spawnWorkerSession();
+      const initial = h.core.snapshot(h.seed.coordinatorId, { project_id: h.seed.projectId, workspace_id: h.seed.workspaceMain, idempotency_key: "manual-pinned-baseline" });
+      const initialArt = h.db.raw.prepare("SELECT manifest_artifact_id FROM snapshot_records WHERE snapshot_id=?").get(initial.snapshot_id) as { manifest_artifact_id: string };
+      insertPin(h.db, { pin_id: "manual-pin", artifact_id: initialArt.manifest_artifact_id, root_kind: "session_anchor", owner_session_id: spawn.session_id, owner_turn_id: null, created_at: h.clock.now() });
       const snap = h.core.snapshot(h.seed.coordinatorId, {
         project_id: h.seed.projectId,
         workspace_id: h.seed.workspaceMain,
@@ -142,8 +146,8 @@ describe("cleanup and agent_artifact_read (§15.3, §10.1)", () => {
       expect(res.deletedBlobHashes).toEqual([snapArtRow.content_hash]);
 
       const session = h.core.sessionStatus(h.seed.coordinatorId, spawn.session_id);
-      expect(session.initial_snapshot_id).toBeTruthy();
-      const initialManifestArtId = manifestArtifactIdOf(session.initial_snapshot_id!);
+      expect(session.initial_snapshot_id).toBeNull();
+      const initialManifestArtId = manifestArtifactIdOf(initial.snapshot_id);
       const initialArtRow = h.db.raw
         .prepare("SELECT content_hash FROM artifacts WHERE artifact_id = ?")
         .get(initialManifestArtId) as { content_hash: string };
