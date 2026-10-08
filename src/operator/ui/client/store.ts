@@ -17,6 +17,7 @@ import type {
   CatalogObservation,
   ConnectionSnippets,
   HostDisplayPreferences,
+  ModelOption,
   OperatorAccount,
   OperatorConfig,
   OperatorCoverageProfile,
@@ -89,6 +90,7 @@ export const turnErrorLoading = signal<boolean>(false);
 
 // Catalog cache
 export const catalogObservations = signal<Map<string, CatalogObservation>>(new Map());
+export const catalogModelOptions = signal<Map<string, ModelOption[]>>(new Map());
 
 // Operation state & feedback
 export const isSaving = signal<boolean>(false);

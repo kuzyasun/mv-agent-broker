@@ -1,6 +1,6 @@
 import type {
   BootstrapData,
-  CatalogObservation,
+  CatalogRefreshResult,
   FolderEntry,
   OperatorConfig,
   OperatorStatus,
@@ -140,7 +140,7 @@ export async function fetchFolders(folderPath?: string): Promise<FolderEntry> {
   });
 }
 
-export async function refreshCatalog(provider: string): Promise<CatalogObservation> {
+export async function refreshCatalog(provider: string): Promise<CatalogRefreshResult> {
   return request("/api/models/refresh", {
     method: "POST",
     body: JSON.stringify({ provider }),

@@ -190,6 +190,11 @@ export interface ModelOption {
   efforts: string[];
 }
 
+export interface CatalogRefreshResult {
+  observation: CatalogObservation;
+  options: ModelOption[];
+}
+
 export interface StoragePreview {
   preview_token: string;
   project_id: string;

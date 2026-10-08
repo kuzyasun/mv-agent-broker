@@ -9,6 +9,24 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-08: UI catalogue refresh consumed the wrong response shape
+
+The models endpoint returned `{observation, options}` correctly, but the UI
+treated the entire response as the observation and read `models` at its root.
+The refresh action failed and could put a malformed observation into its cache.
+Separately, an unrefreshed Antigravity profile hid the effort selector, even
+when the profile had a configured effort. Manual model entry hid it as well.
+
+The live metadata-only endpoint returned 18 Antigravity model routes; the
+Gemini 3.8 Flash options included low, medium and high. No provider inference
+was needed to obtain that catalogue. The attached `inpage.js` wallet-adapter
+broadcast errors did not establish a failure of this endpoint.
+
+The UI fix consumes the endpoint's observation envelope, keeps the effort
+control visible, preserves configured values and distinguishes unverified
+choices from observed catalogue options. Provider metadata failures must be
+reported as failures rather than a successful refresh of zero models.
+
 ## 2026-10-08: A snapshot ID in artifact_refs looked like an authorization failure
 
 Beehive correctly created a read-only Antigravity worker session, then submitted

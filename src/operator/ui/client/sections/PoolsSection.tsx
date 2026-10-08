@@ -16,6 +16,7 @@ import {
 import {
   applyRouteDraft,
   cancelRouteDraft,
+  catalogModelOptions,
   catalogObservations,
   deleteRouteAction,
   draftConfig,
@@ -88,11 +89,23 @@ export function PoolsSection(): JSX.Element {
   const handleRefreshCatalog = async (provider: string) => {
     catalogRefreshing.value = true;
     try {
-      const observation = await refreshCatalog(provider);
-      const nextMap = new Map(catalogObservations.value);
-      nextMap.set(provider, observation);
-      catalogObservations.value = nextMap;
-      setActionMessage(`Refreshed catalog for ${provider} (${observation.models.length} models).`, "info", 3000);
+      const result = await refreshCatalog(provider);
+      const nextObservations = new Map(catalogObservations.value);
+      nextObservations.set(provider, result.observation);
+      catalogObservations.value = nextObservations;
+      const nextOptions = new Map(catalogModelOptions.value);
+      nextOptions.set(provider, result.options);
+      catalogModelOptions.value = nextOptions;
+      if (result.observation.models.length === 0 || result.observation.detail) {
+        const detail = result.observation.detail ? ` ${result.observation.detail}` : "";
+        setActionMessage(
+          `Catalogue refresh for ${provider} returned ${result.observation.models.length} models.${detail}`,
+          "warning",
+          7000,
+        );
+      } else {
+        setActionMessage(`Refreshed catalogue for ${provider} (${result.observation.models.length} models).`, "info", 3000);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setActionMessage(`Failed to refresh catalog: ${msg}`, "error", 4000);
@@ -430,7 +443,7 @@ export function PoolsSection(): JSX.Element {
               </div>
 
               {manualModel.value ? (
-                <div>
+                <div className="space-y-1.5">
                   <input
                     id="prof-model-manual"
                     type="text"
@@ -441,15 +454,20 @@ export function PoolsSection(): JSX.Element {
                       updateRouteDraftField("model", (e.target as HTMLInputElement).value)
                     }
                   />
+                  <EffortSelector
+                    provider={routeDraft.value.provider}
+                    selectedModel={routeDraft.value.model}
+                    selectedEffort={routeDraft.value.effort ?? ""}
+                    onEffortChange={(effort) => updateRouteDraftField("effort", effort || undefined)}
+                  />
                 </div>
               ) : (
                 <ModelSelector
                   provider={routeDraft.value.provider}
                   selectedModel={routeDraft.value.model}
                   selectedEffort={routeDraft.value.effort ?? ""}
-                  onModelChange={(model, effort) => {
+                  onModelChange={(model) => {
                     updateRouteDraftField("model", model);
-                    updateRouteDraftField("effort", effort || undefined);
                   }}
                   onEffortChange={(effort) => {
                     updateRouteDraftField("effort", effort || undefined);
@@ -863,15 +881,14 @@ function ModelSelector({
   provider: string;
   selectedModel: string;
   selectedEffort: string;
-  onModelChange: (model: string, effort: string) => void;
+  onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
 }): JSX.Element {
   const observation = catalogObservations.value.get(provider);
   const models = observation?.models ?? [selectedModel];
-  const options = parseModelOptions(provider, models);
-
-  const currentOption = options.find((o) => o.model === selectedModel);
-  const availableEfforts = currentOption?.efforts ?? ["", "low", "medium", "high", "max"];
+  const options = observation
+    ? catalogModelOptions.value.get(provider) ?? []
+    : parseModelOptions(provider, models);
 
   return (
     <div className="space-y-1.5">
@@ -885,11 +902,7 @@ function ModelSelector({
           value={selectedModel}
           onChange={(e) => {
             const nextModel = (e.target as HTMLSelectElement).value;
-            const opt = options.find((o) => o.model === nextModel);
-            const nextEffort = opt?.efforts.includes(selectedEffort)
-              ? selectedEffort
-              : opt?.efforts[0] ?? "";
-            onModelChange(nextModel, nextEffort);
+            onModelChange(nextModel);
           }}
         >
           {options.map((opt) => (
@@ -903,24 +916,75 @@ function ModelSelector({
         </select>
       </div>
 
-      {availableEfforts.length > 1 && (
-        <div>
-          <label htmlFor="prof-effort-select" className="block text-[11px] text-[#434655] mb-0.5">
-            Effort
-          </label>
-          <select
-            id="prof-effort-select"
-            className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8] cursor-pointer"
-            value={selectedEffort}
-            onChange={(e) => onEffortChange((e.target as HTMLSelectElement).value)}
-          >
-            {availableEfforts.map((eff) => (
-              <option key={eff} value={eff}>
-                {eff === "" ? "(default / none)" : eff}
-              </option>
-            ))}
-          </select>
-        </div>
+      <EffortSelector
+        provider={provider}
+        selectedModel={selectedModel}
+        selectedEffort={selectedEffort}
+        onEffortChange={onEffortChange}
+      />
+    </div>
+  );
+}
+
+function EffortSelector({
+  provider,
+  selectedModel,
+  selectedEffort,
+  onEffortChange,
+}: {
+  provider: string;
+  selectedModel: string;
+  selectedEffort: string;
+  onEffortChange: (effort: string) => void;
+}): JSX.Element {
+  const observation = catalogObservations.value.get(provider);
+  const modelOption = catalogModelOptions.value.get(provider)?.find((option) => option.model === selectedModel);
+  const observed = Boolean(observation);
+  const hasObservedOptions = observed && Boolean(modelOption);
+  const efforts = hasObservedOptions
+    ? [...modelOption!.efforts]
+    : ["", "low", "medium", "high", "max"];
+  // The configured default is also a value: preserve it when the catalogue
+  // reports only explicit effort variants, rather than visually selecting low.
+  if (!efforts.includes(selectedEffort)) efforts.push(selectedEffort);
+  const configuredIsUnverified = observed
+    ? !modelOption?.efforts.includes(selectedEffort)
+    : selectedEffort !== "";
+
+  return (
+    <div>
+      <label htmlFor="prof-effort-select" className="block text-[11px] text-[#434655] mb-0.5">
+        Effort
+      </label>
+      <select
+        id="prof-effort-select"
+        className="w-full h-8 px-2 border border-[#c4c5d7] font-mono text-xs bg-white focus:border-[#1d4ed8] cursor-pointer"
+        value={selectedEffort}
+        onChange={(e) => onEffortChange((e.target as HTMLSelectElement).value)}
+      >
+        {efforts.map((effort) => {
+          const unverified = !hasObservedOptions || (effort === selectedEffort && configuredIsUnverified);
+          return (
+            <option key={effort} value={effort}>
+              {`${effort === "" ? "(provider default)" : effort}${unverified ? (effort === selectedEffort ? " (configured, unverified)" : " (unverified)") : ""}`}
+            </option>
+          );
+        })}
+      </select>
+      {!observed && (
+        <p className="mt-1 text-[11px] text-[#8a4b08]">
+          Effort choices are unverified until catalogue refresh.
+        </p>
+      )}
+      {observed && !modelOption && (
+        <p className="mt-1 text-[11px] text-[#8a4b08]">
+          Model was not reported by the current catalogue. Effort choices are unverified.
+        </p>
+      )}
+      {hasObservedOptions && configuredIsUnverified && (
+        <p className="mt-1 text-[11px] text-[#8a4b08]">
+          Configured effort was not reported by the current catalogue.
+        </p>
       )}
     </div>
   );
