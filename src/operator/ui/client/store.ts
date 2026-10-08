@@ -17,7 +17,9 @@ import type {
   CatalogObservation,
   ConnectionSnippets,
   HostDisplayPreferences,
+  OperatorAccount,
   OperatorConfig,
+  OperatorCoverageProfile,
   OperatorRoute,
   OperatorStatus,
   TurnErrorDetail,
@@ -317,6 +319,15 @@ export async function restartDaemonAction(): Promise<boolean> {
   }
 }
 
+export function safeJsonParse<T = unknown>(text: string): T {
+  return JSON.parse(text, (key, value) => {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") {
+      return undefined;
+    }
+    return value;
+  }) as T;
+}
+
 // Profile Editor Actions
 export function startEditRoute(route: OperatorRoute, isNew = false): void {
   if (isRouteDraftDirty.value) {
@@ -384,9 +395,12 @@ export function applyRouteDraft(): boolean {
     }
   }
 
+  const current = draftConfig.value;
+  if (!current) return false;
+
   batch(() => {
     draftConfig.value = {
-      ...draftConfig.value!,
+      ...current,
       routes,
     };
     editingRouteId.value = null;
@@ -415,14 +429,15 @@ export function duplicateRouteAction(sourceRoute: OperatorRoute): void {
 }
 
 export function deleteRouteAction(routeId: string): void {
-  if (!draftConfig.value) return;
+  const current = draftConfig.value;
+  if (!current) return;
   const proceed = window.confirm(`Delete profile '${routeId}' from draft?`);
   if (!proceed) return;
 
-  const routes = (draftConfig.value.routes ?? []).filter((r) => r.route_id !== routeId);
+  const routes = (current.routes ?? []).filter((r) => r.route_id !== routeId);
   batch(() => {
     draftConfig.value = {
-      ...draftConfig.value!,
+      ...current,
       routes,
     };
     if (editingRouteId.value === routeId) {
@@ -467,9 +482,9 @@ export function applyAdvancedDraft(): boolean {
   advancedError.value = null;
 
   try {
-    const accounts = JSON.parse(advancedDraft.value.accountsJson);
-    const pins = JSON.parse(advancedDraft.value.pinsJson);
-    const coverage = JSON.parse(advancedDraft.value.coverageJson);
+    const accounts = safeJsonParse<OperatorAccount[]>(advancedDraft.value.accountsJson);
+    const pins = safeJsonParse<Record<string, string>>(advancedDraft.value.pinsJson);
+    const coverage = safeJsonParse<OperatorCoverageProfile[]>(advancedDraft.value.coverageJson);
     const stateDir = advancedDraft.value.stateDir.trim();
 
     if (!Array.isArray(accounts)) throw new Error("Accounts must be an array");
@@ -479,9 +494,12 @@ export function applyAdvancedDraft(): boolean {
     if (!Array.isArray(coverage)) throw new Error("Coverage profiles must be an array");
     if (!stateDir) throw new Error("State directory cannot be empty");
 
+    const current = draftConfig.value;
+    if (!current) return false;
+
     batch(() => {
       draftConfig.value = {
-        ...draftConfig.value!,
+        ...current,
         accounts,
         native_binary_pins: pins,
         state_dir: stateDir,

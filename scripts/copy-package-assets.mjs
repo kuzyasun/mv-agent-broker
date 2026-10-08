@@ -19,6 +19,7 @@ function copyAssets(sourceDir, distDir) {
   mkdirSync(distDir, { recursive: true });
   for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
     if (entry.isDirectory() && entry.name === "client") continue;
+    if (entry.isFile() && entry.name === "input.css") continue;
     const sourcePath = path.join(sourceDir, entry.name);
     const distPath = path.join(distDir, entry.name);
     if (entry.isDirectory()) {

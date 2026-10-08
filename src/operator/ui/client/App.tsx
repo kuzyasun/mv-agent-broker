@@ -3,6 +3,7 @@ import { useEffect } from "preact/hooks";
 import { Header } from "./components/Header.tsx";
 import { NavigationRail } from "./components/NavigationRail.tsx";
 import { ActionToast } from "./components/ActionToast.tsx";
+import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import {
   activeSection,
   initNavigation,
@@ -38,13 +39,15 @@ export function App(): JSX.Element {
       <div className="flex flex-1 overflow-hidden">
         <NavigationRail />
         <main className="flex-1 flex overflow-hidden">
-          {section === "pools" && <PoolsSection />}
-          {section === "projects" && <ProjectsSection />}
-          {section === "overview" && <OverviewSection />}
-          {section === "limits" && <LimitsSection />}
-          {section === "storage" && <StorageSection />}
-          {section === "connection" && <ConnectionSection />}
-          {section === "advanced" && <AdvancedSection />}
+          <ErrorBoundary>
+            {section === "pools" && <PoolsSection />}
+            {section === "projects" && <ProjectsSection />}
+            {section === "overview" && <OverviewSection />}
+            {section === "limits" && <LimitsSection />}
+            {section === "storage" && <StorageSection />}
+            {section === "connection" && <ConnectionSection />}
+            {section === "advanced" && <AdvancedSection />}
+          </ErrorBoundary>
         </main>
       </div>
     </div>

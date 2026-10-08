@@ -5,10 +5,11 @@ export function LimitsSection(): JSX.Element {
   const limits = draftConfig.value?.limits ?? {};
 
   const updateLimit = (field: keyof typeof limits, value: number) => {
+    if (!draftConfig.value) return;
     draftConfig.value = {
-      ...draftConfig.value!,
+      ...draftConfig.value,
       limits: {
-        ...(draftConfig.value?.limits ?? {}),
+        ...(draftConfig.value.limits ?? {}),
         [field]: value,
       },
     };

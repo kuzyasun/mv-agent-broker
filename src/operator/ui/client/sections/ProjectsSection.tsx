@@ -117,8 +117,10 @@ export function ProjectsSection(): JSX.Element {
       }));
     }
 
+    if (!draftConfig.value) return;
+
     const nextConfig = {
-      ...draftConfig.value!,
+      ...draftConfig.value,
       projects: [...projects, newProject],
       workspaces: [...workspaces, newWorkspace],
       coverage_profiles: [...(config?.coverage_profiles ?? []), newCoverage],
@@ -143,12 +145,14 @@ export function ProjectsSection(): JSX.Element {
     );
     if (!proceed) return;
 
+    if (!draftConfig.value) return;
+
     const nextProjects = projects.filter((p) => p.project_id !== projectId);
     const nextWorkspaces = workspaces.filter((w) => w.project_id !== projectId);
     const nextRoutes = routes.filter((r) => r.project_id !== projectId);
 
     draftConfig.value = {
-      ...draftConfig.value!,
+      ...draftConfig.value,
       projects: nextProjects,
       workspaces: nextWorkspaces,
       routes: nextRoutes,

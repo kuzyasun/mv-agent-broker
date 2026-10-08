@@ -1,5 +1,6 @@
 import { useSignal } from "@preact/signals";
 import type { JSX } from "preact";
+import { useEffect } from "preact/hooks";
 import { executeStorage, previewStorage } from "../api.ts";
 import { draftConfig, setActionMessage } from "../store.ts";
 import type { StoragePreview } from "../types.ts";
@@ -8,6 +9,12 @@ export function StorageSection(): JSX.Element {
   const projects = draftConfig.value?.projects ?? [];
   const selectedProject = useSignal<string>(projects[0]?.project_id ?? "");
   const retentionDays = useSignal<string>("30");
+
+  useEffect(() => {
+    if (projects.length > 0 && (!selectedProject.value || !projects.some((p) => p.project_id === selectedProject.value))) {
+      selectedProject.value = projects[0]?.project_id ?? "";
+    }
+  }, [projects]);
 
   const preview = useSignal<StoragePreview | null>(null);
   const isPreviewing = useSignal<boolean>(false);

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/preact";
 import { Header } from "../../../src/operator/ui/client/components/Header.tsx";
 import { NavigationRail } from "../../../src/operator/ui/client/components/NavigationRail.tsx";
+import { ErrorBoundary } from "../../../src/operator/ui/client/components/ErrorBoundary.tsx";
 import { PoolsSection } from "../../../src/operator/ui/client/sections/PoolsSection.tsx";
 import {
   activeSection,
@@ -126,5 +127,26 @@ describe("operator UI Preact components", () => {
     expect(rerendered.getByLabelText("Profile Inspector")).toBeTruthy();
     expect(rerendered.getByText("Apply to draft")).toBeTruthy();
     expect(rerendered.getByText("Cancel")).toBeTruthy();
+  });
+
+  it("renders ErrorBoundary fallback when a child component throws", () => {
+    const ProblematicChild = () => {
+      throw new Error("Simulated rendering failure");
+    };
+
+    // Suppress console.error in test output for expected error boundary catch
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { getByText } = render(
+      <ErrorBoundary>
+        <ProblematicChild />
+      </ErrorBoundary>,
+    );
+
+    expect(getByText("Rendering Error Occurred")).toBeTruthy();
+    expect(getByText("Simulated rendering failure")).toBeTruthy();
+    expect(getByText("Reload Operator UI")).toBeTruthy();
+
+    spy.mockRestore();
   });
 });

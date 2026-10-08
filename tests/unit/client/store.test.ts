@@ -18,6 +18,7 @@ import {
   isRouteDraftDirty,
   loadConfiguration,
   routeDraft,
+  safeJsonParse,
   saveConfiguration,
   saveConflict,
   savedConfig,
@@ -240,5 +241,14 @@ describe("operator UI reactive store and draft lifecycle", () => {
     expect(draftConfig.value?.accounts).toEqual([]);
     expect(advancedDraft.value?.accountsJson).toBe("[]");
     expect(isAdvancedDirty.value).toBe(false);
+  });
+
+  it("safely parses JSON without prototype pollution keys", () => {
+    const malicious = '{"valid": 123, "__proto__": {"polluted": true}, "constructor": "bad"}';
+    const parsed = safeJsonParse<Record<string, unknown>>(malicious);
+    expect(parsed.valid).toBe(123);
+    expect((parsed as any).polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(parsed, "__proto__")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(parsed, "constructor")).toBe(false);
   });
 });
