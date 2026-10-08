@@ -542,8 +542,12 @@ export class TurnExecutor {
           if (freshObservationFingerprint !== bindingLookup.binding.readiness.fingerprint) {
             throw new BrokerError(
               "PROVIDER_INCOMPATIBLE",
-              "Provider binary, config or catalog drifted between admission and dispatch; refusing native launch — replacement session required (§13.3).",
-              { executionStarted: false, details: { bound_fingerprint: bindingLookup.binding.readiness.fingerprint, fresh_fingerprint: freshObservationFingerprint } },
+              "Provider readiness identity changed between admission and dispatch; refusing native launch — correct provider readiness and create a replacement session (§13.3).",
+              {
+                executionStarted: false,
+                retryGuidance: "correct_provider_readiness_then_spawn_session",
+                details: { bound_fingerprint: bindingLookup.binding.readiness.fingerprint, fresh_fingerprint: freshObservationFingerprint },
+              },
             );
           }
         }
@@ -589,8 +593,8 @@ export class TurnExecutor {
             if (bindingLookup.binding.readiness !== null && freshObservationFingerprint !== bindingLookup.binding.readiness.fingerprint) {
               throw new BrokerError(
                 "PROVIDER_INCOMPATIBLE",
-                "Provider readiness drifted after admission; refusing dispatch — replacement session required (§13.3).",
-                { executionStarted: false },
+                "Provider readiness identity changed after admission; refusing dispatch — correct provider readiness and create a replacement session (§13.3).",
+                { executionStarted: false, retryGuidance: "correct_provider_readiness_then_spawn_session" },
               );
             }
           }

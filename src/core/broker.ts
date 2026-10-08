@@ -2089,8 +2089,9 @@ export class BrokerCore {
     }
     this.assertAdmissionOpen();
     // §13.3 later-turn readiness revalidation (outside the tx): a session with
-    // a durably bound readiness fingerprint refuses on observed CLI/profile/
-    // catalog drift BEFORE any accepted state. Authorization and idempotent
+    // a durably bound readiness fingerprint refuses on observed CLI/binary/
+    // config/auth drift BEFORE any accepted state. Requested model and effort
+    // are validated separately by adapter preflight. Authorization and idempotent
     // replay already ran; the authoritative transaction below never probes.
     this.sendReadinessRevalidation(session0);
     // §7.2 step 3 preflight: expensive filesystem hashing outside the tx.
@@ -2585,7 +2586,7 @@ export class BrokerCore {
    * §13.3 later-turn readiness revalidation (OUTSIDE the tx, §7.2 step 3):
    * sessions with a durably bound readiness fingerprint re-run the adapter's
    * (adapter-side cached, freshness-bounded) preflight and compare the pure
-   * observation fingerprint. Observed CLI/profile/catalog drift refuses
+   * observation fingerprint. Observed CLI/binary/config/auth drift refuses
    * BEFORE acceptance. Sessions without observed readiness (void-compatible
    * adapters, legacy sessions) are unchanged.
    */
@@ -2626,8 +2627,12 @@ export class BrokerCore {
     if (fingerprint !== lookup.binding.readiness.fingerprint) {
       throw new BrokerError(
         "PROVIDER_INCOMPATIBLE",
-        "Observed provider readiness drifted from the session's durable binding (CLI version, catalog or config changed); refusing before acceptance — replacement session with revalidation required.",
-        { executionStarted: false, details: { bound_fingerprint: lookup.binding.readiness.fingerprint } },
+        "Observed provider readiness drifted from the session's durable binding (CLI version, binary/config inputs or auth status changed); refusing before acceptance — correct provider readiness and create a replacement session.",
+        {
+          executionStarted: false,
+          retryGuidance: "correct_provider_readiness_then_spawn_session",
+          details: { bound_fingerprint: lookup.binding.readiness.fingerprint },
+        },
       );
     }
   }

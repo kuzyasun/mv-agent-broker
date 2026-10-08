@@ -9,6 +9,25 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-08: Unrelated catalogue changes invalidated sessions
+
+Beehive reported an Antigravity send refused before inference because provider
+readiness differed from the session binding. The reported diagnostic does not
+identify which input changed, so the cause of that particular refusal remains
+unconfirmed.
+
+Code inspection found an unnecessary guard: the durable readiness fingerprint
+included the entire model catalogue. The broker now excludes catalogue entries
+from this comparison and relies on adapter preflight to validate the requested
+model and effort. CLI/launch-input, authentication and account binding guards
+remain. ZCode still fingerprints its installed provider configuration as a
+launch input. Old session bindings need replacement after this upgrade.
+
+Local fake-provider regressions cover catalogue changes before acceptance and
+before dispatch, selected-route refusal and retained identity guards. This is
+local validation; no paid provider inference or shared-runtime deployment is
+claimed here.
+
 ## 2026-10-03: Cursor catalogue probe exited with Windows fail-fast status
 
 Beehive reported `PROVIDER_INCOMPATIBLE`, `Cursor CLI --list-models probe failed:
