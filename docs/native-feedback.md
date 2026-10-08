@@ -23,7 +23,7 @@ The harness operates over existing public MCP tools and accepted Git runtime pat
 - **No Automatic Fallback**: Failures halt immediately with durable `failed` or `unknown` evidence. The harness never attempts fallback to another provider, model, or session. The opt-in `feedback_mode` replacements (`fresh`/`handoff`, below) are explicit configuration choices, never automatic recovery.
 
 ### 2. Immutable Broker Runtime & Temporary Fixture Repository
-- **Broker Runtime**: Copied from regular Git-tracked source (`src/`) and `package.json` at an accepted, immutable commit SHA (`30d2a4ecd5052af9ae177550b26e8331af616319`). Uncommitted or untracked changes cannot enter the supervising daemon.
+- **Broker Runtime**: Copied from regular Git-tracked source (`src/`) and `package.json` at an accepted, immutable commit SHA (`060a5568296a170ddcf10f27a0a256d0ec3ce841`). Uncommitted or untracked changes cannot enter the supervising daemon.
 - **Temporary Fixture Repo**: The worker operates within an owned, temporary Git repository with a generated package and source baseline (`src/math.js`, `src/obsolete.js`, `tests/math.test.js`). The worker workspace is registered with its canonical path bound to this fixture repository. The worker edits do not touch the main coordinator repository checkout.
 - **Short Owned Root**: Each run creates a fresh `<system temp>/ab-feedback/<random-id>` directory, independent of checkout depth. This keeps Cursor's private SQLite path within the Windows budget. Evidence records the exact root; cleanup still requires its ownership marker and confirmed shutdown. Production cannot adopt a caller-supplied root.
 - **Review Slot Workspace**: The reviewer operates in a `review_slot` workspace (`mode: "review_slot"`), where the broker populates exact snapshot trees separate from the worker's mutable working tree.
@@ -134,7 +134,7 @@ node --experimental-transform-types scripts/native-feedback.mjs --mock --large-f
 
 Coordinator observations verify the actual R1 findings ID receives UNAUTHORIZED through a foreign MCP bridge, and the final review slot exactly matches assigned S2 files. These checks do not prove the native reviewer read those files; native source-read receipts remain unknown.
 
-The current harness pins accepted runtime `30d2a4e`; the strict accepted-SHA guard remains in place. Historical primary integration used `3cf17bd`, and earlier clone validation used `72ecb93`; their evidence is retained separately.
+The current harness pins accepted runtime `060a556`; the strict accepted-SHA guard remains in place. Historical primary integration used `3cf17bd`, and earlier clone validation used `72ecb93`; their evidence is retained separately.
 
 The [2026-10-03 native checkpoint](native-smoke/2026-10-03-native-feedback.md)
 accepted all four turns on Windows with ZCode `GLM-5.3-Flash/max` and Cursor

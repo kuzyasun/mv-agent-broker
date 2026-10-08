@@ -51,3 +51,17 @@ smoke, when used, is bounded and uses only operator-authorized providers.
 
 Shared runtime deployment uses a frozen accepted commit, config/database backup,
 a guarded stop and live MCP/UI verification. Do not terminate active paid jobs.
+
+## Observed validation (2026-10-08)
+
+- TypeScript and UI type checks passed; UI regenerated with project tooling.
+- Independent Luna high review completed. Its read-only worker adapter finding
+  was fixed for Codex and Cursor and covered by adapter regressions.
+- New stdio and trusted-turn regressions: 5/5; frozen-runtime advanced snapshot
+  harness: 22/22. The harness now pins the accepted implementation commit `060a556`.
+- Real isolated ZCode worker (`GLM-5.3-Flash/max`) and physical read-only reviewer
+  (`GLM-5.3/high`) both returned the requested smoke marker with `SUCCEEDED`,
+  `unreviewed`, and no baseline/target/final source snapshots. This proves the
+  plain transport path, not full provider confinement or review quality.
+- Provider output, SQLite and detailed runtime evidence remain outside Git.
+- Final complete suite: 930 passed, 1 skipped, zero failures.

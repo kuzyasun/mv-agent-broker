@@ -44,7 +44,7 @@ import assert from 'node:assert/strict';
 
 export const AUTHORIZED_PROVIDERS = Object.freeze(['zcode', 'antigravity', 'cursor', 'mock']);
 export const FORBIDDEN_PROVIDERS = Object.freeze(['claude', 'codex']);
-export const ACCEPTED_RUNTIME_SHA = '30d2a4ecd5052af9ae177550b26e8331af616319';
+export const ACCEPTED_RUNTIME_SHA = '060a5568296a170ddcf10f27a0a256d0ec3ce841';
 export const INLINE_TOTAL_BYTE_CAP = 16 * 1024;
 export const DEFAULT_MAX_REPORT_BYTES = 8 * 1024 * 1024;
 export const TERMINAL_TURN_STATES = Object.freeze(['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT', 'UNKNOWN', 'ABANDONED']);
