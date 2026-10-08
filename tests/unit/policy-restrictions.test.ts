@@ -582,8 +582,46 @@ describe("whole-project default grant", () => {
       // is not admissible there, before any turn is accepted.
       const spawn = await h.spawnWorkerSession({ policy_profile_id: "pol-root" });
       const before = brokerCounts(h);
-      expectBrokerError(() => h.sendTask(spawn.session_id, "t-uncovered"), "SNAPSHOT_COVERAGE_MISMATCH");
+      const reservationsBefore = (h.db.raw.prepare("SELECT COUNT(*) c FROM reservations WHERE released_at IS NULL").get() as { c: number }).c;
+      const error = expectBrokerError(() => h.sendTask(spawn.session_id, "t-uncovered"), "SNAPSHOT_COVERAGE_MISMATCH");
+      expect(error.executionStarted).toBe(false);
+      expect(error.retryGuidance).toBe("use_covering_workspace_or_spawn_read_only_audit_session");
+      expect(error.message).toContain("cannot be selected per send");
+      expect(error.message).toContain("policy_restrictions.access='read_only'");
+      expect(error.details).toEqual({
+        session_id: spawn.session_id,
+        workspace_id: h.seed.workspaceMain,
+        coverage_profile_id: h.seed.coverageProfileId,
+        coverage_profile_version: "1",
+        actual_write_scope: ["."],
+        uncovered_write_scope: ["."],
+      });
       expect(brokerCounts(h)).toEqual(before);
+      expect((h.db.raw.prepare("SELECT COUNT(*) c FROM reservations WHERE released_at IS NULL").get() as { c: number }).c)
+        .toBe(reservationsBefore);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("accepts a read-only session with narrow source coverage", async () => {
+    const h = createHarness();
+    try {
+      insertPolicyProfile(h.db, {
+        policy_profile_id: "pol-root",
+        version: "1",
+        config: JSON.stringify({ access: "workspace_write" }),
+      });
+      const spawn = await h.spawnWorkerSession({
+        policy_profile_id: "pol-root",
+        policy_restrictions: { access: "read_only" },
+      });
+      expect(h.core.sessionEffectivePolicy(h.seed.coordinatorId, spawn.session_id)).toEqual({
+        access: "read_only",
+        write_scope: [],
+      });
+      const turn = await runCleanTurn(h, spawn.session_id, "t-readonly-audit");
+      expect(turn.state).toBe("SUCCEEDED");
     } finally {
       h.cleanup();
     }

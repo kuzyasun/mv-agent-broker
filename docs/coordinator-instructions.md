@@ -38,6 +38,17 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    and `relevant_paths` as task guidance, never as an inferred edit allowlist.
    Supply narrower `policy_restrictions.write_scope` only when the operator
    explicitly requests that restriction; reviewers remain read-only.
+   For a read-only audit using a worker route, pass
+   `policy_restrictions: {"access":"read_only"}` at spawn. Instructions such
+   as "read-only audit" do not change permissions. After spawn, inspect
+   `agent_session_status.effective_policy`: read-only must show `access:
+   "read_only"` and `write_scope: []`; null means the binding is unavailable.
+   A session's coverage selector comes from its registered workspace and is
+   fixed for that session. A per-send selector cannot replace it. If a writer
+   grants `"."` but its registered coverage lists narrower paths, choose a
+   workspace with covering coverage; for an audit, create a read-only session.
+   Changing the spawn restrictions requires a new idempotency key; do not
+   alter an existing session's stored binding.
    Omit `deadline_ms` to use the operator's configured default (one hour unless
    changed), or supply an explicit duration for this task. Do not hardcode the
    old 15-minute default. Quiet output alone is not evidence of a hung agent;

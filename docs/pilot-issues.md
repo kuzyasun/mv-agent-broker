@@ -9,6 +9,23 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-08: Audit instructions did not narrow a worker's write policy
+
+Beehive's replacement Antigravity worker session stayed IDLE after its send
+returned `SNAPSHOT_COVERAGE_MISMATCH`. Its durable policy granted
+`workspace_write` over `["."]`, with no requested restrictions. The registered
+workspace had a narrower coverage selector. Describing the task as a read-only
+audit did not change that grant, and changing a per-send selector could not
+replace the bound coverage profile.
+
+For this audit, spawn the same authorized route and workspace with
+`policy_restrictions: {"access":"read_only"}` and a new spawn idempotency key.
+The existing session's binding stays unchanged. Session status now exposes a
+compact durable `effective_policy`, and coverage refusals report the affected
+scope, recovery guidance and `execution_started: false`. These diagnostics do
+not expand coverage or change permissions. Validation uses local mock sessions;
+no provider inference or shared-runtime update is claimed here.
+
 ## 2026-10-08: Unrelated catalogue changes invalidated sessions
 
 Beehive reported an Antigravity send refused before inference because provider

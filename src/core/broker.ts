@@ -2465,7 +2465,19 @@ export class BrokerCore {
     if (uncovered.length > 0) {
       throw new BrokerError(
         "SNAPSHOT_COVERAGE_MISMATCH",
-        `Policy write scope is not covered by the source selector (§8.7): ${uncovered.join(", ")}`,
+        "The session's bound write scope is not covered by its workspace source selector (§8.7). Coverage is bound to the session and cannot be selected per send. Use a workspace whose coverage covers the granted write scope; for a read-only audit, spawn a new session with policy_restrictions.access='read_only'.",
+        {
+          executionStarted: false,
+          retryGuidance: "use_covering_workspace_or_spawn_read_only_audit_session",
+          details: {
+            session_id: session.session_id,
+            workspace_id: session.workspace_id,
+            coverage_profile_id: session.coverage_profile_id,
+            coverage_profile_version: session.coverage_profile_version,
+            actual_write_scope: [...scope.prefixes],
+            uncovered_write_scope: uncovered,
+          },
+        },
       );
     }
   }
@@ -3245,6 +3257,17 @@ export class BrokerCore {
 
   sessionStatus(coordinatorId: string, sessionId: string): SessionRecord {
     return this.authorizeSession(coordinatorId, sessionId);
+  }
+
+  /** Compact authorization diagnostic from the immutable spawn-time binding. */
+  sessionEffectivePolicy(coordinatorId: string, sessionId: string): {
+    access: "read_only" | "workspace_write";
+    write_scope: string[];
+  } | null {
+    const session = this.authorizeSession(coordinatorId, sessionId);
+    const lookup = loadSessionWritePolicy(this.db, session);
+    if (lookup.kind !== "effective") return null;
+    return { access: lookup.policy.access, write_scope: [...lookup.policy.write_scope] };
   }
 
   /**

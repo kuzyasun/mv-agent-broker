@@ -87,7 +87,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_spawn",
-      description: "Create a durable logical session (PROVISIONING→IDLE) without inference — launches no provider run (§6.1). Idempotent. mode=worktree with repository_workspace_id+base_commit requests a broker-created detached Git worktree (§8.3). role=reviewer with a registered current/worktree workspace is a Git-native read-only reviewer; role=reviewer with review_slot is the explicit snapshot-review alternative.",
+      description: "Create a durable logical session (PROVISIONING→IDLE) without inference — launches no provider run (§6.1). Idempotent. For a configured route, supply project_id, idempotency_key, route_id, instructions and workspace; do not call with {} to inspect the schema. Task instructions such as 'read-only' do not set session policy. Use policy_restrictions.access='read_only' for an audit. Narrow policy_restrictions.write_scope only when the operator explicitly requests it; task paths never imply a file allowlist. A workspace_write profile without an explicit scope grants the whole project. After spawn, check agent_session_status.effective_policy to confirm the durable binding. mode=worktree with repository_workspace_id+base_commit requests a broker-created detached Git worktree (§8.3). role=reviewer with a registered current/worktree workspace is a Git-native read-only reviewer; role=reviewer with review_slot is the explicit snapshot-review alternative.",
       inputSchema: {
         type: "object",
         properties: {
@@ -142,7 +142,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_session_status",
-      description: "Session/context/runtime states, active turn, snapshots, block/close state, coverage binding (§10.1).",
+      description: "Session/context/runtime states, active turn, snapshots, block/close state, coverage binding, and effective_policy {access, write_scope} from the immutable spawn-time policy binding (§10.1). effective_policy is null when the binding is absent or malformed. Check it after spawn; task instructions do not determine policy.",
       inputSchema: { type: "object", properties: { session_id: str }, required: ["session_id"], additionalProperties: false },
     },
     {
@@ -453,6 +453,7 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
       // and observed readiness evidence — no credentials, unknown stays null.
       return {
         ...sessionDto(session),
+        effective_policy: core.sessionEffectivePolicy(ctx.coordinatorId, session.session_id),
         provider_binding: core.sessionProviderBinding(ctx.coordinatorId, session.session_id),
       };
     }

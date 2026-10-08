@@ -18,6 +18,7 @@ import {
 } from "../../src/bridge/server.ts";
 import { callBridgeTool, bridgeToolDefs } from "../../src/bridge/tools.ts";
 import type { BrokerCore } from "../../src/core/broker.ts";
+import { createHarness } from "../helpers/harness.ts";
 
 const mockDefs: McpToolDef[] = [
   {
@@ -407,5 +408,57 @@ describe("agent_session_spawn additive worktree workspace fields (§8.3)", () =>
     expect(workspace.properties.repository_workspace_id).toEqual({ type: "string" });
     expect(workspace.properties.base_commit).toEqual({ type: "string" });
     expect(workspace.additionalProperties).toBe(false);
+  });
+
+  it("describes explicit policy restrictions and status reports the durable effective policy", async () => {
+    const h = createHarness();
+    try {
+      const spawnDef = bridgeToolDefs().find((d) => d.name === "agent_session_spawn")!;
+      expect(spawnDef.description).toContain("Task instructions such as 'read-only' do not set session policy");
+      expect(spawnDef.description).toContain("policy_restrictions.access='read_only'");
+      expect(spawnDef.description).toContain("policy_restrictions.write_scope");
+      expect(spawnDef.description).toContain("agent_session_status.effective_policy");
+      const statusDef = bridgeToolDefs().find((d) => d.name === "agent_session_status")!;
+      expect(statusDef.description).toContain("effective_policy {access, write_scope}");
+
+      const writer = await h.spawnWorkerSession();
+      const reader = await h.spawnWorkerSession({ policy_restrictions: { access: "read_only" } });
+      h.db.raw.prepare("UPDATE policy_profiles SET config=? WHERE policy_profile_id='pol-writer' AND version='1'")
+        .run(JSON.stringify({ access: "read_only" }));
+
+      const status = (sessionId: string) => callBridgeTool(
+        { coordinatorId: h.seed.coordinatorId, core: h.core },
+        "agent_session_status",
+        { session_id: sessionId },
+      ) as Promise<Record<string, unknown>>;
+      const writerStatus = await status(writer.session_id);
+      expect(writerStatus.effective_policy).toEqual({ access: "workspace_write", write_scope: ["src", "tests"] });
+      ((writerStatus.effective_policy as { write_scope: string[] }).write_scope)[0] = "tampered";
+      expect((await status(writer.session_id)).effective_policy).toEqual({ access: "workspace_write", write_scope: ["src", "tests"] });
+      const readerStatus = await status(reader.session_id);
+      expect(readerStatus.effective_policy).toEqual({ access: "read_only", write_scope: [] });
+      expect(JSON.stringify(writerStatus)).not.toContain("profile_config");
+
+      const legacy = await h.spawnWorkerSession();
+      const legacyPayload = h.db.raw.prepare("SELECT payload FROM intents WHERE kind='provision_session' AND session_id=?")
+        .get(legacy.session_id) as { payload: string };
+      const parsed = JSON.parse(legacyPayload.payload) as Record<string, unknown>;
+      delete parsed.effective_policy;
+      h.db.raw.prepare("UPDATE intents SET payload=? WHERE kind='provision_session' AND session_id=?")
+        .run(JSON.stringify(parsed), legacy.session_id);
+      expect((await status(legacy.session_id)).effective_policy).toBeNull();
+
+      const malformed = await h.spawnWorkerSession();
+      h.db.raw.prepare("UPDATE intents SET payload='{' WHERE kind='provision_session' AND session_id=?")
+        .run(malformed.session_id);
+      expect((await status(malformed.session_id)).effective_policy).toBeNull();
+      await expect(callBridgeTool(
+        { coordinatorId: h.seed.outsiderId, core: h.core },
+        "agent_session_status",
+        { session_id: writer.session_id },
+      )).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    } finally {
+      h.cleanup();
+    }
   });
 });
