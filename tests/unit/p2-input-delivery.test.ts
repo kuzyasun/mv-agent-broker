@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createHarness, settle, start } from "../helpers/harness.ts";
 import { BrokerError } from "../../src/shared/errors.ts";
+import { callBridgeTool } from "../../src/bridge/tools.ts";
+import { getSnapshotRecord, insertProject, insertSnapshotRecord } from "../../src/storage/repo.ts";
 
 function expectBrokerError(fn: () => unknown, code: string): BrokerError {
   try {
@@ -16,6 +18,53 @@ function expectBrokerError(fn: () => unknown, code: string): BrokerError {
 }
 
 describe("required input delivery (§7.1.1)", () => {
+  it("explains a snapshot in artifact_refs before admission, then accepts the corrected read-only audit", async () => {
+    const h = createHarness();
+    try {
+      const session = await h.spawnWorkerSession({ policy_restrictions: { access: "read_only" } });
+      const snapshotId = h.core.sessionStatus(h.seed.coordinatorId, session.session_id).latest_snapshot_id!;
+      const ctx = { coordinatorId: h.seed.coordinatorId, core: h.core };
+      const args = {
+        session_id: session.session_id, idempotency_key: "audit-with-snapshot-artifact",
+        workspace_precondition: { expected_snapshot_id: snapshotId },
+        task: { goal: "Read-only audit.", artifact_refs: [snapshotId] },
+      };
+      await expect(callBridgeTool(ctx, "agent_session_send", args)).rejects.toMatchObject({
+        code: "INVALID_REQUEST", executionStarted: false, retryGuidance: "correct_task_artifact_refs",
+        message: expect.stringContaining("not snapshot IDs"),
+        details: { field: "task.artifact_refs", index: 0, reason: "snapshot_id_is_not_artifact_id" },
+      });
+      expect(h.db.raw.prepare("SELECT COUNT(*) AS n FROM turns").get()).toEqual({ n: 0 });
+      expect(h.core.sessionStatus(h.seed.coordinatorId, session.session_id).state).toBe("IDLE");
+      const sent = await callBridgeTool(ctx, "agent_session_send", {
+        ...args, idempotency_key: "audit-without-artifacts", task: { ...args.task, artifact_refs: [] },
+      }) as { turn_id: string };
+      await start(h, sent);
+      await settle(h);
+      expect(h.core.turnStatus(h.seed.coordinatorId, sent.turn_id).state).toBe("SUCCEEDED");
+    } finally { h.cleanup(); }
+  });
+
+  it("does not distinguish foreign artifacts, foreign snapshots and unknown references", async () => {
+    const h = createHarness();
+    try {
+      const session = await h.spawnWorkerSession();
+      const snapshotId = h.core.sessionStatus(h.seed.coordinatorId, session.session_id).latest_snapshot_id!;
+      insertProject(h.db, { project_id: "project-other", display_name: "Other", configuration_revision: 1, session_cap: 20, created_at: h.clock.now() });
+      insertSnapshotRecord(h.db, { ...getSnapshotRecord(h.db, snapshotId)!, snapshot_id: "snap-foreign", project_id: "project-other" });
+      const artifact = h.publishArtifact("Other project's findings");
+      h.db.raw.prepare("UPDATE artifacts SET project_id='project-other' WHERE artifact_id=?").run(artifact.artifact_id);
+      const responses = ["snap-foreign", artifact.artifact_id, "missing-resource"].map((ref, i) =>
+        expectBrokerError(() => h.sendTask(session.session_id, `bad-ref-${i}`, "g", {
+          task: { goal: "g", artifact_refs: [ref] },
+        }), "UNAUTHORIZED").toJSON());
+      expect(responses[0]).toEqual(responses[1]);
+      expect(responses[1]).toEqual(responses[2]);
+      expect(responses[0].error).toMatchObject({ execution_started: false, retry_guidance: "verify_required_artifact_refs", details: { field: "task.artifact_refs", index: 0 } });
+      expect(h.db.raw.prepare("SELECT COUNT(*) AS n FROM turns").get()).toEqual({ n: 0 });
+    } finally { h.cleanup(); }
+  });
+
   it("inline required artifact: manifest sealed before dispatch, released after terminal", async () => {
     const h = createHarness();
     try {

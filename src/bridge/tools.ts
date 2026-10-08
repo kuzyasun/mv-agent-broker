@@ -168,7 +168,7 @@ export function bridgeToolDefs(): McpToolDef[] {
               acceptance_criteria: { type: "array", items: str },
               relevant_paths: { type: "array", items: str },
               context: str,
-              artifact_refs: { type: "array", items: str },
+              artifact_refs: { type: "array", items: str, description: "Required artifact IDs from this project's broker results (art-...), not snapshot IDs or file paths. Use [] when none. Snapshot IDs belong in workspace_precondition or review_binding." },
               checks: { type: "array", items: str },
             },
             required: ["goal", "artifact_refs"],

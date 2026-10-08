@@ -2043,11 +2043,25 @@ export class BrokerCore {
    */
   private resolveTaskArtifacts(projectId: string, refs: string[]): ArtifactRecord[] {
     const out: ArtifactRecord[] = [];
-    for (const ref of refs) {
+    for (const [index, ref] of refs.entries()) {
       const artifact = getArtifact(this.db, ref);
       if (!artifact || artifact.project_id !== projectId) {
+        // Explain a known same-project resource-kind mistake without revealing
+        // whether an unknown or foreign resource exists.
+        const snapshot = !artifact ? getSnapshotRecord(this.db, ref) : null;
+        if (snapshot?.project_id === projectId) {
+          throw new BrokerError("INVALID_REQUEST", "task.artifact_refs accepts artifact IDs, not snapshot IDs. Put the snapshot in workspace_precondition.expected_snapshot_id (or review_binding for snapshot review); use artifact_refs: [] when there are no required artifacts.", {
+            executionStarted: false,
+            retryGuidance: "correct_task_artifact_refs",
+            details: { field: "task.artifact_refs", index, reason: "snapshot_id_is_not_artifact_id" },
+          });
+        }
         // §7.1.1: unknown/disallowed id → UNAUTHORIZED without disclosure.
-        throw new BrokerError("UNAUTHORIZED", "Access denied for this resource.");
+        throw new BrokerError("UNAUTHORIZED", "A required task.artifact_refs entry is unavailable to this project. Use artifact IDs returned by this project's broker operations, not snapshot IDs or local paths.", {
+          executionStarted: false,
+          retryGuidance: "verify_required_artifact_refs",
+          details: { field: "task.artifact_refs", index },
+        });
       }
       if (artifact.state === "expired") {
         throw new BrokerError("ARTIFACT_EXPIRED", `Required artifact ${ref} has expired.`);

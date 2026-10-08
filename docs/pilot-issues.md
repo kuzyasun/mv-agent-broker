@@ -9,6 +9,24 @@ reproduction, impact, workaround, and status. Link retained evidence without
 publishing credentials, native thinking, or full vendor transcripts. A vendor
 error alone does not establish a broker defect.
 
+## 2026-10-08: A snapshot ID in artifact_refs looked like an authorization failure
+
+Beehive correctly created a read-only Antigravity worker session, then submitted
+the same snapshot ID in both `workspace_precondition.expected_snapshot_id` and
+`task.artifact_refs`. The latter accepts retained artifact IDs, not snapshots.
+The generic `UNAUTHORIZED` response and operator-action guidance obscured that
+request error. No turn was accepted for the affected session.
+
+Use `artifact_refs: []` for an audit with no required retained artifacts; keep
+the snapshot in its workspace precondition and reuse the same read-only session.
+Use a new send key for corrected arguments. Preflight now explains a known
+same-project snapshot in artifact_refs as `INVALID_REQUEST`, with the affected
+field/index and `execution_started: false`. Unknown and foreign resources still
+produce identical authorization refusals, now with artifact-field diagnostics
+and `verify_required_artifact_refs` guidance. Tool/docs clarify the ID types.
+Local mock tests verify successful corrected read-only execution and identical
+foreign/unknown refusals. No native inference or shared deployment is claimed.
+
 ## 2026-10-08: Session-spawn fields were opaque in the client tool catalogue
 
 The coordinator tried resource listings and searches inside Beehive to discover

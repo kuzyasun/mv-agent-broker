@@ -78,7 +78,12 @@ concise. The coordinator owns decomposition, integration and final acceptance.
    subagent smoke evidence exists for Antigravity and Cursor; see
    [native subagent evidence](native-subagents.md). Avoid delegation chains and
    duplicate source investigations.
-4. Send the task with its workspace precondition. Read event deltas with the last
+4. Send the task with its workspace precondition. `task.artifact_refs` lists only
+   required broker artifact IDs (`art-...`), such as retained findings or reports;
+   use `[]` when there are none. A snapshot ID (`snap-...`) belongs in
+   `workspace_precondition.expected_snapshot_id` or the snapshot `review_binding`,
+   never in `artifact_refs`. A project file path belongs in `relevant_paths`.
+   Read event deltas with the last
    consumed numeric cursor and `wait_ms: 10000` (or `20000` for a longer bounded
    wait), advancing the cursor from returned rows. Check status as needed; once
    it is terminal, call `agent_turn_result` once. Do not poll a full transcript.
