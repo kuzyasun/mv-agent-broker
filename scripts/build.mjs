@@ -14,6 +14,7 @@ if (previous) {
   rmSync(output, { recursive: true });
 }
 for (const args of [
+  [path.join(root, "scripts/build-ui.mjs")],
   [path.join(root, "node_modules/typescript/bin/tsc"), "-p", "tsconfig.build.json"],
   [path.join(root, "scripts/copy-package-assets.mjs")],
 ]) {

@@ -23,17 +23,22 @@
   ],
   "scripts": {
     "broker": "node --experimental-transform-types src/operator/main.ts",
-    "build:ui": "tailwindcss -i src/operator/ui/input.css -o src/operator/ui/styles.css --minify",
+    "build:ui": "node scripts/build-ui.mjs",
     "build": "node scripts/build.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.ui.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepack": "npm run build:ui && npm run build && node scripts/generate-runtime-manifest.mjs",
     "release:pack": "npm run typecheck && node scripts/pack-broker.mjs"
   },
   "devDependencies": {
+    "@preact/signals": "^2.11.3",
     "@tailwindcss/cli": "^4.3.3",
+    "@testing-library/preact": "^3.2.4",
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
+    "happy-dom": "^20.14.5",
+    "preact": "^11.0.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

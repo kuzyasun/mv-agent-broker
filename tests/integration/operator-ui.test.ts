@@ -68,8 +68,8 @@ describe("operator UI CLI", () => {
     expect(page.status).toBe(200);
     const pageText = await page.text();
     expect(pageText).toContain("Agent Broker Operator");
-    expect(pageText).toContain("LIVE BROKER");
-    expect(pageText).toContain("Refresh status");
+    expect(pageText).toContain('id="app"');
+    expect(pageText).toContain('/app.js');
     const exited = new Promise<number | null>(resolve => child.once("exit", code => resolve(code)));
     child.kill("SIGINT");
     await expect(exited).resolves.toBe(process.platform === "win32" ? null : 0);
