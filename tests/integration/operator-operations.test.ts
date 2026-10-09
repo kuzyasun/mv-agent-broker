@@ -1,6 +1,7 @@
+import { isStateDirectoryOwned } from "../../src/daemon/lifecycle.ts";
 import { afterEach, describe, expect, it } from "vitest";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { startDaemon } from "../../src/daemon/bootstrap.ts";
@@ -42,6 +43,12 @@ describe("operator runtime RPC", () => {
     const cli = (command: string, extra: string[] = []) => JSON.parse(execFileSync(process.execPath,
       ["--experimental-transform-types", path.join(repo, "src/operator/main.ts"), command, "--config", configPath, ...extra],
       { cwd: repo, encoding: "utf8", windowsHide: true, timeout: 35_000, stdio: ["ignore", "pipe", "pipe"] }));
+    const cliAsync = (command: string, extra: string[] = []): Promise<any> => new Promise((resolve, reject) => {
+      execFile(process.execPath,
+        ["--experimental-transform-types", path.join(repo, "src/operator/main.ts"), command, "--config", configPath, ...extra],
+        {cwd: repo, encoding: "utf8", windowsHide: true, timeout: 35000},
+        (error, stdout) => error ? reject(error) : resolve(JSON.parse(stdout)));
+    });
     // Dirty helper/UI changes before start must not enter the exported Git tree.
     writeFileSync(path.join(repo, "src/operator/ui/styles.css"), "DIRTY_UI");
     writeFileSync(path.join(repo, "src/providers/common/windowsJobHelper.ps1"), "DIRTY_HELPER");
@@ -60,7 +67,7 @@ describe("operator runtime RPC", () => {
     }));
     let started = false;
     try {
-      const running = cli("start", ["--ref", commit]);
+      let running = cli("start", ["--ref", commit]);
       started = true;
       expect(running.readiness).toBe("READY");
       expect(running.runtime_commit).toBe(commit);
@@ -98,7 +105,28 @@ describe("operator runtime RPC", () => {
           maxReviewDiffBytes: 33_554_432,
         });
       } finally { client.close(); }
-      expect(() => cli("start")).toThrow(/DAEMON_ALREADY_RUNNING/);
+      const repeated = cli("start");
+      expect(repeated.already_running).toBe(true);
+      expect(repeated.daemon_pid).toBe(running.daemon_pid);
+      expect(repeated.runtime_path).toBe(running.runtime_path);
+      // Abrupt process termination leaves the ownership file, but not its OS lock.
+      process.kill(running.daemon_pid, "SIGKILL");
+      const exitDeadline = Date.now() + 5000;
+      while (true) {
+        try { process.kill(running.daemon_pid, 0); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") break; throw error; }
+        if (Date.now() > exitDeadline) throw new Error("Fixture daemon did not exit");
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      expect(existsSync(path.join(root, "state/daemon-ownership.sqlite"))).toBe(true);
+      expect(cli("status").status).toBe("stopped");
+      const parallel = await Promise.all([cliAsync("start", ["--ref", commit]), cliAsync("start", ["--ref", commit])]);
+      const recovered = parallel[0];
+      expect(parallel[1].daemon_pid).toBe(recovered.daemon_pid);
+      expect(parallel.every(s => s.readiness === "READY")).toBe(true);
+      expect(recovered.readiness).toBe("READY");
+      expect(recovered.daemon_pid).not.toBe(running.daemon_pid);
+      running = recovered;
       // A stale sidecar must not change the version reported by the running daemon.
       writeFileSync(path.join(root, "state/operator-runtime.json"), JSON.stringify({ runtime_commit: "stale", runtime_path: "stale", manifest_path: "stale", daemon_pid: 1 }));
       expect(cli("status").runtime_commit).toBe(commit);
@@ -113,7 +141,7 @@ describe("operator runtime RPC", () => {
       expect(stopped.runtime_commit).toBe(commit);
       expect(stopped.daemon_pid).toBe(running.daemon_pid);
       started = false;
-      expect(existsSync(path.join(root, "state/daemon.lock"))).toBe(false);
+      expect(isStateDirectoryOwned(path.join(root, "state"))).toBe(false);
       expect(cli("status").status).toBe("stopped");
       expect(cli("status").settings_state).toBe("unknown");
     } finally {
@@ -252,13 +280,11 @@ describe("operator runtime RPC", () => {
       expect(status.active_turns).toEqual([]);
       expect(status.pending_intents).toEqual([]);
 
-      expect(() => execFileSync(process.execPath, [
-        "--experimental-transform-types",
-        entrypoint,
-        "start",
-        "--config",
-        configPath,
-      ], { cwd: process.cwd(), encoding: "utf8", windowsHide: true, stdio: "pipe" })).toThrow(/DAEMON_ALREADY_RUNNING/);
+      const repeated = JSON.parse(execFileSync(process.execPath, [
+        "--experimental-transform-types", entrypoint, "start", "--config", configPath,
+      ], { cwd: process.cwd(), encoding: "utf8", windowsHide: true, stdio: "pipe" }));
+      expect(repeated.already_running).toBe(true);
+      expect(repeated.daemon_pid).toBe(child.pid);
 
       const injectedDb = openRegistryDb(path.join(stateDir, "registry.sqlite"));
       insertIntent(injectedDb, {
@@ -280,7 +306,7 @@ describe("operator runtime RPC", () => {
         configPath,
       ], { cwd: process.cwd(), encoding: "utf8", windowsHide: true, stdio: "pipe" })).toThrow(/RESOURCE_BUSY/);
       expect(child.exitCode).toBeNull();
-      expect(existsSync(path.join(stateDir, "daemon.lock"))).toBe(true);
+      expect(isStateDirectoryOwned(stateDir)).toBe(true);
       const clearDb = openRegistryDb(path.join(stateDir, "registry.sqlite"));
       clearDb.raw.prepare("DELETE FROM intents WHERE kind = ?").run("input_publication");
       clearDb.close();
@@ -297,7 +323,7 @@ describe("operator runtime RPC", () => {
         if (child.exitCode !== null) resolve();
         else child.once("exit", () => resolve());
       });
-      expect(existsSync(path.join(stateDir, "daemon.lock"))).toBe(false);
+      expect(isStateDirectoryOwned(stateDir)).toBe(false);
     } finally {
       if (child.exitCode === null) child.kill();
     }

@@ -42,8 +42,9 @@ recovery:
    while the daemon is running.
    Closing the session is an idle-only lifecycle action and intentionally does
    **not** clear its workspace quarantine.
-2. Stop the daemon cleanly. An existing `<state_dir>/daemon.lock`, including a
-   stale lock, is a refusal condition; never remove it automatically.
+2. Stop the daemon cleanly. Reconciliation refuses a live ownership lock.
+   The persistent `daemon-ownership.sqlite` file is not evidence of a live owner;
+   do not delete it.
 3. Inspect the bounded evidence while offline:
 
    ```powershell
@@ -89,13 +90,13 @@ unsupported and must stay quarantined.
 | 2. Post-acceptance, pre-launch intent | No-dispatch failure: `FINALIZING → FAILED` (`execution_started=false`) | Startup barrier marks turn `FAILED` (`DAEMON_RESTART_PRESTART`), releases pins and leases |
 | 3. Post-launch intent, unrecorded PID | Conservative `UNKNOWN`; process may have spawned | Startup barrier marks turn `UNKNOWN`, session `BLOCKED`, locks held |
 | 4. Worker wrote files, unrecorded completion | Conservative `UNKNOWN`; workspace quarantined | Marked `UNKNOWN`, session `BLOCKED`, lease retained, replay rejected |
-| 5. Known completion, unapplied evidence | Recovery finishes `FINALIZING` via journaled evidence | recovery transitions the nonterminal turn to FINALIZING via turn_outcome_evidence and bootstrap's reconcileJournaledOutcomes() finishes the final snapshot and commits the terminal state WITHOUT new inference |
+| 5. Known completion, unapplied evidence | Recovery finishes `FINALIZING` via journaled evidence | recovery transitions the nonterminal turn to FINALIZING via turn_outcome_evidence and bootstrap's reconcileJournaledOutcomes() publishes the retained report and commits the terminal state WITHOUT new inference |
 | 6. Terminal committed, response lost | Idempotent replay returns existing result | Ledger returns stored terminal capsule by idempotency key without re-execution |
 
 ## 4. Daemon restart procedure
 
-1. **Stop / Termination:** Clean shutdown transitions state to `STOPPING`, rejects new spawn/send admission, drains accepted work with deadline supervision active, then stops the timer and releases `<state_dir>/daemon.lock`. Accepted idempotent requests remain replayable. Use `daemon.stop()` (or the bootstrapped lifecycle shutdown) before closing the database. Concurrent stops share one promise. A failed drain retains ownership and supervision; after resolving the failure an explicit stop retry is allowed. Do not close the database after a rejected stop.
-2. **Crashed Daemon:** A crashed process leaves `daemon.lock`. Starting a new daemon triggers `DAEMON_ALREADY_RUNNING`. Confirm no orphan node processes exist, then manually delete `<state_dir>/daemon.lock`.
+1. **Stop / Termination:** Clean shutdown transitions state to `STOPPING`, rejects new spawn/send admission, drains accepted work with deadline supervision active, then stops the timer and releases its OS-backed ownership transaction. Accepted idempotent requests remain replayable. Use `daemon.stop()` (or the bootstrapped lifecycle shutdown) before closing the database. Concurrent stops share one promise. A failed drain retains ownership and supervision; after resolving the failure an explicit stop retry is allowed. Do not close the database after a rejected stop.
+2. **Crashed Daemon:** Process termination releases ownership automatically. Run the ordinary `start --config <config>` command again; no PID inspection or lock-file deletion is required. `daemon-ownership.sqlite` stays in place. A live owner still excludes a second daemon, and a repeated `start` reports the existing READY instance without restarting it. Restarting the daemon does not prove orphan provider processes are gone; their normal recovery handling still applies.
 3. **Recovery barrier (`RECOVERING`):** On startup, the daemon generates a new `daemon_incarnation`, audits pending intents, fails unfinished provisioning/capture tasks, marks running turns `UNKNOWN`, and restores reservations before entering `READY`.
 4. **Post-READY state:** Quarantined workspaces and `BLOCKED` sessions stay blocked. Only unaffected workspaces accept new turns.
 

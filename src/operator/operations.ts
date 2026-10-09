@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { DaemonRpcError, DaemonRpcClient } from "../bridge/rpcClient.ts";
 import { readBridgeToken, socketPathFor } from "../daemon/rpc.ts";
+import { isStateDirectoryOwned } from "../daemon/lifecycle.ts";
 import { operatorConfigFingerprint, type OperatorConfig } from "./config.ts";
 import { sha256Hex } from "../shared/ids.ts";
 import {
@@ -332,9 +333,6 @@ async function waitForReady(config: OperatorConfig): Promise<Record<string, unkn
 }
 
 async function assertNotOwned(config: OperatorConfig): Promise<void> {
-  if (existsSync(path.join(config.state_dir, "daemon.lock"))) {
-    throw new Error("DAEMON_ALREADY_RUNNING: the configured state directory is owned or has an unresolved lock.");
-  }
   const client = new DaemonRpcClient(socketPathFor(config.state_dir), () => readBridgeToken(config.state_dir));
   try {
     await client.connect(config.coordinator_id);
@@ -362,7 +360,15 @@ export async function startOperator(config: OperatorConfig, configPath: string, 
   if (installed && ref !== "HEAD") {
     throw new Error("--ref requires running from a development Git checkout; an installed package freezes its own manifest-verified files.");
   }
-  await assertNotOwned(config);
+  const existing = await statusOperator(config);
+  if (existing.status === "ready") return { ...existing, already_running: true };
+  try {
+    await assertNotOwned(config);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith("DAEMON_ALREADY_RUNNING")) throw error;
+    await waitForReady(config);
+    return { ...await statusOperator(config), already_running: true };
+  }
   const extracted = installed
     ? extractPackageRuntime(packageRoot, config.state_dir, configPath)
     : extractRuntime(ref, config.state_dir, configPath);
@@ -376,7 +382,9 @@ export async function startOperator(config: OperatorConfig, configPath: string, 
     status.runtime_identity !== record.runtime_identity ||
     !sameRuntimePath(status.runtime_path, record.runtime_path)
   ) {
-    throw new Error("Daemon READY identity does not match the launched runtime.");
+    // A concurrent starter may have acquired ownership first. Report its
+    // authenticated live identity without replacing its runtime record.
+    return { ...await statusOperator(config), already_running: true };
   }
   saveRuntimeRecord(config.state_dir, record);
   return {
@@ -456,7 +464,7 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
   } catch (error) {
     if (error instanceof DaemonRpcError && error.code === "UNAUTHORIZED") throw error;
     return {
-      status: error instanceof DaemonRpcError || existsSync(path.join(config.state_dir, "daemon.lock")) ? "unavailable" : "stopped",
+      status: error instanceof DaemonRpcError || isStateDirectoryOwned(config.state_dir) ? "unavailable" : "stopped",
       readiness: "UNAVAILABLE",
       runtime_observation: record ? "last-known" : "unknown",
       settings_state: "unknown",
@@ -480,7 +488,7 @@ export async function statusOperator(config: OperatorConfig): Promise<OperatorSt
 async function waitForStopped(config: OperatorConfig): Promise<void> {
   const deadline = Date.now() + STOP_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const lockExists = existsSync(path.join(config.state_dir, "daemon.lock"));
+    const owned = isStateDirectoryOwned(config.state_dir);
     let reachable = false;
     try {
       const client = new DaemonRpcClient(socketPathFor(config.state_dir), () => readBridgeToken(config.state_dir));
@@ -490,7 +498,7 @@ async function waitForStopped(config: OperatorConfig): Promise<void> {
     } catch {
       // The daemon is expected to become unavailable after releasing ownership.
     }
-    if (!lockExists && !reachable) return;
+    if (!owned && !reachable) return;
     await sleep(100);
   }
   throw new Error(`Daemon did not become unavailable within ${STOP_TIMEOUT_MS}ms.`);

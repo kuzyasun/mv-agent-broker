@@ -1,3 +1,4 @@
+import { isStateDirectoryOwned } from "../../src/daemon/lifecycle.ts";
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
@@ -49,7 +50,7 @@ describe("operator owned startup", () => {
     const stateDir = mkdtempSync(path.join(os.tmpdir(), "broker-startup-")); roots.push(stateDir);
     await expect(startDaemon({ stateDir, coordinatorId: "coord", configureRegistry: () => { throw new Error("invalid registry config"); } }))
       .rejects.toThrow("invalid registry config");
-    expect(existsSync(path.join(stateDir, "daemon.lock"))).toBe(false);
+    expect(isStateDirectoryOwned(stateDir)).toBe(false);
     const daemon = await startDaemon({ stateDir, coordinatorId: "coord" });
     try {
       expect(existsSync(path.join(stateDir, "inputs"))).toBe(true);

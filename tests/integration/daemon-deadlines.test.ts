@@ -1,3 +1,4 @@
+import { isStateDirectoryOwned } from "../../src/daemon/lifecycle.ts";
 /**
  * Integration tests for daemon deadline supervision (spec §14.6, §16.1).
  *
@@ -394,7 +395,7 @@ describe("daemon deadline supervision (spec §14.6)", () => {
       const stopping = entry === "stop" ? daemon.stop() : daemon.lifecycle.shutdown();
       expect(daemon.stop()).toBe(stopping);
       expect(daemon.lifecycle.shutdown()).toBe(stopping);
-      expect(existsSync(path.join(fixture.stateDir, "daemon.lock"))).toBe(true);
+      expect(isStateDirectoryOwned(fixture.stateDir)).toBe(true);
       expect(daemon.deadlineMonitor.isRunning).toBe(true);
       expect(() => daemon.core.spawn("coord-dl", {
         project_id: "p-dl", idempotency_key: "spawn-after-stop", provider: "mock",
@@ -415,7 +416,7 @@ describe("daemon deadline supervision (spec §14.6)", () => {
       await expect(startDaemon({ stateDir: fixture.stateDir, coordinatorId: "second" }))
         .rejects.toMatchObject({ code: "DAEMON_ALREADY_RUNNING" });
       await stopping;
-      expect(existsSync(path.join(fixture.stateDir, "daemon.lock"))).toBe(false);
+      expect(isStateDirectoryOwned(fixture.stateDir)).toBe(false);
 
       const turnAfterDrain = daemon.core.turnStatus("coord-dl", send.turn_id);
       expect(turnAfterDrain.state).toBe("TIMED_OUT");
@@ -492,11 +493,11 @@ describe("daemon deadline supervision (spec §14.6)", () => {
     try {
       await expect(fixture.daemon.stop()).rejects.toThrow("drain failure");
       expect(fixture.daemon.deadlineMonitor.isRunning).toBe(true);
-      expect(existsSync(path.join(fixture.stateDir, "daemon.lock"))).toBe(true);
+      expect(isStateDirectoryOwned(fixture.stateDir)).toBe(true);
       drain.mockRestore();
       await fixture.daemon.stop();
       expect(fixture.daemon.deadlineMonitor.isStopped).toBe(true);
-      expect(existsSync(path.join(fixture.stateDir, "daemon.lock"))).toBe(false);
+      expect(isStateDirectoryOwned(fixture.stateDir)).toBe(false);
     } finally {
       drain.mockRestore();
       fixture.daemon.stopDeadlineMonitor();

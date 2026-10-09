@@ -1,14 +1,7 @@
-/**
- * Daemon lifecycle: lifetime-exclusive state-directory ownership and the
- * startup recovery barrier (spec §4.1.1, §14.7).
- *
- * Ownership model (P1, dev platform Windows; Unix variant later): an
- * exclusively-opened lock file inside the canonical state directory. A second
- * daemon cannot open it → DAEMON_ALREADY_RUNNING. The handle is held for the
- * daemon's whole life; heartbeat/socket presence is NOT ownership (§4.1.1).
- */
-import { open, mkdir, unlink } from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
+/** State-directory ownership uses an OS-held SQLite lock, released on process exit. */
+import { mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { isNonterminalTurnState } from "../core/transitions.ts";
 import { BrokerError } from "../shared/errors.ts";
@@ -41,39 +34,64 @@ export interface StateDirectoryOwnership {
   release(): Promise<void>;
 }
 
+const OWNERSHIP_FILE = "daemon-ownership.sqlite";
+
+function ownershipBusy(error: unknown): boolean {
+  const code = (error as { errcode?: number })?.errcode;
+  return typeof code === "number" && ((code & 255) === 5 || (code & 255) === 6);
+}
+
+function openOwnership(directory: string, busyTimeoutMs = 0): DatabaseSync {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(path.join(directory, OWNERSHIP_FILE));
+    db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; BEGIN EXCLUSIVE`);
+    return db;
+  } catch (error) {
+    db?.close();
+    throw error;
+  }
+}
+
+/** File existence is not ownership: the kernel-held transaction is authoritative. */
+export function isStateDirectoryOwned(directory: string): boolean {
+  if (!existsSync(path.join(directory, OWNERSHIP_FILE))) return false;
+  try {
+    const db = openOwnership(directory);
+    db.close();
+    return false;
+  } catch (error) {
+    if (ownershipBusy(error)) return true;
+    throw error;
+  }
+}
+
 /**
- * OS-backed ownership: exclusive create of `<dir>/daemon.lock` (O_EXCL-like
- * via wx flag). The open handle itself is the lock; deleting the file does
- * not steal ownership because we never delete/re-create it while held.
- * On platforms where wx+handle semantics are insufficient this is augmented
- * in the tested-platform phase (ADR-0001 §6).
+ * Hold a separate SQLite transaction for the daemon lifetime, before opening
+ * the registry. SQLite uses OS locks, so a crash releases ownership without
+ * PID guesses, stale-file deletion or a heartbeat. Never unlink this file:
+ * concurrent starters must contend on the same inode. No registry writes are
+ * held by this connection.
  */
 export async function acquireStateDirectoryOwnership(directory: string): Promise<StateDirectoryOwnership> {
   await mkdir(directory, { recursive: true });
-  const lockPath = path.join(directory, "daemon.lock");
-  let handle: FileHandle;
+  let db: DatabaseSync;
   try {
-    handle = await open(lockPath, "wx");
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === "EEXIST") {
-      throw new BrokerError(
-        "DAEMON_ALREADY_RUNNING",
-        "Another daemon owns this state directory.",
-        { details: { lock_path: lockPath } },
-      );
+    // Status probes hold the lock only briefly; wait through that contention.
+    db = openOwnership(directory, 250);
+  } catch (error) {
+    if (ownershipBusy(error)) {
+      throw new BrokerError("DAEMON_ALREADY_RUNNING", "Another daemon owns this state directory.");
     }
-    throw e;
+    throw error;
   }
+  let released = false;
   return {
     directory,
     async release() {
-      // Clean shutdown releases ownership completely (§14.2 daemon restart):
-      // close the handle AND unlink the lock file. A crashed owner leaves
-      // the file behind — recovering that requires an explicit operator
-      // action; a new daemon must not steal a possibly-live lock (§4.1.1).
-      await handle.close().catch(() => undefined);
-      await unlink(lockPath).catch(() => undefined);
+      if (released) return;
+      db.close();
+      released = true;
     },
   };
 }

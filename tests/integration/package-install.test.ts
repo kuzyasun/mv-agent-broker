@@ -1,3 +1,4 @@
+import { isStateDirectoryOwned } from "../../src/daemon/lifecycle.ts";
 import { beforeAll, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
@@ -309,12 +310,12 @@ describe("installed package lifecycle", () => {
       const stopped = jsonCli(frozenMain, ["stop", "--config", configPath], work);
       expect(stopped.status).toBe("stopped");
       expect(stopped.runtime_identity).toBe(running.runtime_identity);
-      expect(existsSync(path.join(stateDir, "daemon.lock"))).toBe(false);
+      expect(isStateDirectoryOwned(stateDir)).toBe(false);
       const afterStop = jsonCli(frozenMain, ["status", "--config", configPath], work);
       expect(afterStop.status).toBe("stopped");
       expect(afterStop.runtime_identity).toBe(running.runtime_identity);
     } finally {
-      if (stateDir && existsSync(path.join(stateDir, "daemon.lock"))) {
+      if (stateDir && isStateDirectoryOwned(stateDir)) {
         try {
           const record = JSON.parse(readFileSync(path.join(stateDir, "operator-runtime.json"), "utf8")) as { runtime_path?: string };
           if (record.runtime_path && existsSync(record.runtime_path)) {

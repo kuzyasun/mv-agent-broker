@@ -144,6 +144,11 @@ independently of the CLI terminal and MCP client. It uses a frozen copy of its
 code in the state folder. Git development runs identify a commit; installed
 package runs identify the package version and content checksum.
 
+Repeating `start` returns the existing READY daemon with `already_running: true`;
+it does not restart jobs or apply newly saved settings. After an abrupt daemon
+exit, run the same `start` command again. Ownership is held by an OS-backed lock
+that is released when the process exits; leftover files do not require removal.
+
 Later edits require **Save**, then **Restart daemon** in the UI while idle.
 Restart applies settings to new sessions using the same frozen code. To use
 changed model/effort settings, create a new session. Restart refuses active or

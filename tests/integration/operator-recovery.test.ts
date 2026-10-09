@@ -346,6 +346,7 @@ describe("offline operator workspace recovery", () => {
   }, 15_000);
 
   it("refuses an owned state lock, open sessions, active reservations, occupied paths, and dispatched PIDs unchanged", async () => {
+    let ownedLock: DatabaseSync | undefined;
     const cases = [
       {
         name: "UNKNOWN turn",
@@ -383,9 +384,12 @@ describe("offline operator workspace recovery", () => {
       },
       {
         name: "owned state lock",
-        setup: (f: Fixture) => { mkdirSync(f.stateDir, { recursive: true }); writeFileSync(path.join(f.stateDir, "daemon.lock"), "owned\n"); },
+        setup: (f: Fixture) => {
+          ownedLock = new DatabaseSync(path.join(f.stateDir, "daemon-ownership.sqlite"));
+          ownedLock.exec("BEGIN EXCLUSIVE");
+        },
         expected: /Another daemon owns this state directory/,
-        cleanup: (f: Fixture) => rmSync(path.join(f.stateDir, "daemon.lock"), { force: true }),
+        cleanup: () => { ownedLock?.close(); ownedLock = undefined; },
       },
       {
         name: "open target session",

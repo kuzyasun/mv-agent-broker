@@ -478,11 +478,17 @@ npm run --silent broker -- stop --config 'C:\ops\agent-broker.json'
 ```
 
 `start` waits for an authenticated `READY` response and reports the pinned
-commit, runtime path, state directory, and daemon PID. A second owner is
-refused by the state-directory lock. `status` reports live readiness, active
+commit, runtime path, state directory, and daemon PID. Repeating `start` when
+the daemon is READY returns it with `already_running: true`, without launching
+another process or applying saved settings. Direct duplicate daemon ownership
+is refused by the state-directory lock. `status` reports live readiness, active
 turns, and pending intents. The commit comes from the responding daemon's
 exported manifest. An absent connection reports `stopped` only when there is
-no ownership lock; an unresolved lock or RPC failure reports `unavailable`.
+no live ownership lock; a live owner without RPC reports `unavailable`.
+Ownership uses a lifetime SQLite transaction in `daemon-ownership.sqlite`,
+separate from the registry. OS locks are released on process termination; the
+file stays in place and never needs stale-lock deletion. After a crash, use the
+same `start` command; normal persisted-state recovery still runs.
 Authentication refusals remain explicit errors. After `start`, generate the
 client snippet with `mcp-config --connect`: it uses the exported bridge path.
 `stop` is graceful and idle-only: any active or unknown
