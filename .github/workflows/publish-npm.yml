@@ -1,0 +1,71 @@
+name: Publish npm package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "yes" to confirm publication'
+        required: true
+        default: 'no'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ (github.event_name == 'release' && !github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'yes') }}
+    name: Verify, build, pack, and publish
+    runs-on: windows-latest
+    environment: npm
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Verify release version matches tag
+        if: ${{ github.event_name == 'release' }}
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($env:RELEASE_TAG -ne "v$($pkg.version)") {
+            throw "Release tag '$env:RELEASE_TAG' must equal 'v$($pkg.version)'"
+          }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build UI and runtime
+        run: |
+          npm run build:ui
+          npm run typecheck
+          npm run build
+
+      - name: Run verification tests
+        run: npm test -- --maxWorkers=2
+
+      - name: Pack release tarball and verify manifest
+        run: npm run release:pack
+
+      - name: Publish with npm Trusted Publishing
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm run release:publish -- --yes

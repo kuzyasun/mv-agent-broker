@@ -8,6 +8,8 @@ selects your profiles, checks results and asks a separate agent for review.
 One shared daemon serves several projects. Each project has its own folders,
 sessions and artifacts; provider quotas and broker concurrency limits are shared.
 
+![Agent Broker Operator UI](docs/images/agent-broker-operator.png)
+
 ## Install and start
 
 Requirements: **Node.js 24 or newer**, Git for project worktrees, and the CLIs

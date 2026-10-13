@@ -4,6 +4,21 @@
   "description": "Local deterministic execution/session layer with MCP interface for multi-vendor coding agents",
   "license": "MIT",
   "type": "module",
+  "author": {
+    "name": "Serge Martyniuk",
+    "email": "smdev42@proton.me"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuzyasun/mv-agent-broker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kuzyasun/mv-agent-broker/issues"
+  },
+  "homepage": "https://github.com/kuzyasun/mv-agent-broker#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=24.0.0"
   },
@@ -29,7 +44,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "prepack": "npm run build:ui && npm run build && node scripts/generate-runtime-manifest.mjs",
-    "release:pack": "npm run typecheck && node scripts/pack-broker.mjs"
+    "release:pack": "npm run typecheck && node scripts/pack-broker.mjs",
+    "release:publish": "node scripts/publish-broker.mjs"
   },
   "devDependencies": {
     "@preact/signals": "^2.11.3",
