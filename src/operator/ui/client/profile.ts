@@ -12,40 +12,58 @@ let displayFormatter: Intl.DateTimeFormat | null = null;
 let cachedPreferences: HostDisplayPreferences | null = null;
 
 export function formatTimestamp(
-  value: number | null | undefined,
+  value: number | string | null | undefined,
   prefs?: HostDisplayPreferences | null,
 ): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "Unknown";
-  const date = new Date(value);
+  if (value === null || value === undefined || value === "") return "Unknown";
+  let time: number;
+  if (typeof value === "number") {
+    time = value;
+  } else {
+    const num = Number(value);
+    if (Number.isFinite(num) && !isNaN(num)) {
+      time = num;
+    } else {
+      time = Date.parse(value);
+    }
+  }
+  if (!Number.isFinite(time) || time <= 0) return "Unknown";
+  const date = new Date(time);
   if (!Number.isFinite(date.getTime())) return "Unknown";
 
-  if (prefs && (!displayFormatter || prefs !== cachedPreferences)) {
-    try {
-      const options: Intl.DateTimeFormatOptions = {
-        timeZone: prefs.timeZone || undefined,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      };
-      if (
-        prefs.hourCycle === "h11" ||
-        prefs.hourCycle === "h12" ||
-        prefs.hourCycle === "h23" ||
-        prefs.hourCycle === "h24"
-      ) {
-        options.hourCycle = prefs.hourCycle;
+  if (prefs) {
+    if (!displayFormatter || prefs !== cachedPreferences) {
+      try {
+        const options: Intl.DateTimeFormatOptions = {
+          timeZone: prefs.timeZone || undefined,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        };
+        if (
+          prefs.hourCycle === "h11" ||
+          prefs.hourCycle === "h12" ||
+          prefs.hourCycle === "h23" ||
+          prefs.hourCycle === "h24"
+        ) {
+          options.hourCycle = prefs.hourCycle;
+        }
+        displayFormatter = new Intl.DateTimeFormat(prefs.locale || undefined, options);
+        cachedPreferences = prefs;
+      } catch {
+        displayFormatter = null;
+        cachedPreferences = null;
       }
-      displayFormatter = new Intl.DateTimeFormat(prefs.locale || undefined, options);
-      cachedPreferences = prefs;
-    } catch {
-      displayFormatter = null;
+    }
+    if (displayFormatter) {
+      return displayFormatter.format(date);
     }
   }
 
-  return displayFormatter ? displayFormatter.format(date) : date.toLocaleString();
+  return date.toLocaleString();
 }
 
 export function effectiveRouteTags(

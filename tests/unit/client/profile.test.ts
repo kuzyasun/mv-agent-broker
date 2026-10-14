@@ -143,8 +143,17 @@ describe("profile helpers and business rules", () => {
     expect(formatted).toContain("2026");
     expect(formatted).toContain("12:34:56");
 
+    // Accepts numeric strings and ISO strings
+    expect(formatTimestamp(String(ts), prefs)).toBe(formatted);
+    expect(formatTimestamp(new Date(ts).toISOString(), prefs)).toBe(formatted);
+
+    // Rejects null, undefined, empty, invalid strings, zero and negative timestamps
     expect(formatTimestamp(null)).toBe("Unknown");
     expect(formatTimestamp(undefined)).toBe("Unknown");
+    expect(formatTimestamp("")).toBe("Unknown");
+    expect(formatTimestamp("not-a-date")).toBe("Unknown");
+    expect(formatTimestamp(0)).toBe("Unknown");
+    expect(formatTimestamp(-100)).toBe("Unknown");
   });
 
   it("parses catalog models and sorts effort options", () => {

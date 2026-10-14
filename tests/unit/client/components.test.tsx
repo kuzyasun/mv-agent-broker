@@ -5,18 +5,22 @@ import { Header } from "../../../src/operator/ui/client/components/Header.tsx";
 import { NavigationRail } from "../../../src/operator/ui/client/components/NavigationRail.tsx";
 import { ErrorBoundary } from "../../../src/operator/ui/client/components/ErrorBoundary.tsx";
 import { PoolsSection } from "../../../src/operator/ui/client/sections/PoolsSection.tsx";
+import { OverviewSection } from "../../../src/operator/ui/client/sections/OverviewSection.tsx";
 import {
   activeSection,
   actionMessage,
   cancelRouteDraft,
   catalogModelOptions,
   catalogObservations,
+  displayPreferences,
   draftConfig,
   editingRouteId,
   routeDraft,
   savedConfig,
   savedRevision,
+  selectedTurnError,
   startEditRoute,
+  statusData,
 } from "../../../src/operator/ui/client/store.ts";
 import { setBootstrapForTesting } from "../../../src/operator/ui/client/api.ts";
 import type { OperatorConfig } from "../../../src/operator/ui/client/types.ts";
@@ -91,6 +95,9 @@ describe("operator UI Preact components", () => {
     catalogObservations.value = new Map();
     catalogModelOptions.value = new Map();
     actionMessage.value = null;
+    statusData.value = null;
+    displayPreferences.value = null;
+    selectedTurnError.value = null;
     cancelRouteDraft();
   });
 
@@ -263,5 +270,85 @@ describe("operator UI Preact components", () => {
     expect(getByText("Reload Operator UI")).toBeTruthy();
 
     spy.mockRestore();
+  });
+
+  it("renders Recent Turn Errors with formatted date and time", () => {
+    displayPreferences.value = {
+      locale: "en-US",
+      timeZone: "UTC",
+      hourCycle: "h23",
+    };
+    const failTimestamp = Date.UTC(2026, 9, 14, 15, 30, 45);
+    statusData.value = {
+      status: "ready",
+      readiness: "READY",
+      runtime_observation: "observed-running",
+      settings_state: "applied",
+      saved_config_fingerprint: "cfg-1",
+      applied_config_fingerprint: "cfg-1",
+      runtime_commit: "abcdef1234",
+      runtime_version: "0.3.0",
+      runtime_origin: null,
+      runtime_identity: "pid:999",
+      runtime_path: "C:/test",
+      daemon_pid: 999,
+      state_dir: "C:/test-state",
+      active_turn_count: 0,
+      active_turns: [],
+      error_turn_count: 1,
+      error_turns: [
+        {
+          turn_id: "turn-error-abc",
+          timestamp: failTimestamp,
+          error_code: "EXECUTION_TIMEOUT",
+          provider: "cursor",
+          model: "gpt-5.6-luna",
+        },
+      ],
+    };
+
+    const { getByText, queryByText } = render(<OverviewSection />);
+    expect(getByText("Recent Turn Errors (1)")).toBeTruthy();
+    expect(getByText("turn-error-abc")).toBeTruthy();
+
+    // Must NOT say Failed: Unknown
+    expect(queryByText(/Failed: Unknown/)).toBeNull();
+
+    // Must include both date and time
+    const infoText = getByText(/Failed:/).textContent;
+    expect(infoText).toContain("2026");
+    expect(infoText).toContain("15:30:45");
+    expect(infoText).toContain("Code: EXECUTION_TIMEOUT");
+    expect(infoText).toContain("cursor (gpt-5.6-luna)");
+  });
+
+  it("renders Turn Error Inspector Drawer with formatted Failed at and Created at timestamps", () => {
+    displayPreferences.value = {
+      locale: "en-US",
+      timeZone: "UTC",
+      hourCycle: "h23",
+    };
+    const terminalTime = Date.UTC(2026, 9, 14, 15, 31, 0);
+    const createdTime = Date.UTC(2026, 9, 14, 15, 30, 0);
+    selectedTurnError.value = {
+      turn_id: "turn-drawer-test",
+      timestamps: {
+        terminal_at: terminalTime,
+        created_at: createdTime,
+      },
+    };
+
+    const { getByText } = render(<OverviewSection />);
+    expect(getByText("Turn Error: turn-drawer-test")).toBeTruthy();
+    expect(getByText("Failed at:")).toBeTruthy();
+    expect(getByText("Created at:")).toBeTruthy();
+
+    const drawerFailed = getByText("Failed at:").parentElement?.textContent;
+    expect(drawerFailed).toContain("2026");
+    expect(drawerFailed).toContain("15:31:00");
+
+    const drawerCreated = getByText("Created at:").parentElement?.textContent;
+    expect(drawerCreated).toContain("2026");
+    expect(drawerCreated).toContain("15:30:00");
   });
 });

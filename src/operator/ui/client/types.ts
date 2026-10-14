@@ -123,8 +123,15 @@ export interface TurnErrorItem {
   task_id?: string;
   session_id?: string;
   project_id?: string;
+  provider?: string;
+  model?: string;
+  effort?: string | null;
+  state?: string;
   created_at?: number;
   failed_at?: number;
+  terminal_at?: number | null;
+  updated_at?: number;
+  timestamp?: number;
   error_code?: string;
   error_message?: string;
   [key: string]: unknown;
@@ -136,8 +143,15 @@ export interface ActiveTurnItem {
   session_id?: string;
   project_id?: string;
   started_at?: number;
+  accepted_at?: number | null;
+  deadline_at?: number | null;
+  execution_started?: boolean | null;
+  last_activity_at?: number | null;
+  timestamp?: number;
   provider?: string;
   model?: string;
+  effort?: string | null;
+  state?: string;
   role?: string;
   [key: string]: unknown;
 }
@@ -167,9 +181,19 @@ export interface OperatorStatus {
   [key: string]: unknown;
 }
 
+export interface TurnErrorTimestamps {
+  created_at?: number;
+  accepted_at?: number | null;
+  terminal_at?: number | null;
+  failure_event_at?: number | null;
+  updated_at?: number;
+  [key: string]: unknown;
+}
+
 export interface TurnErrorDetail {
   turn_id: string;
-  error: Record<string, unknown>;
+  error?: Record<string, unknown>;
+  timestamps?: TurnErrorTimestamps;
   [key: string]: unknown;
 }
 

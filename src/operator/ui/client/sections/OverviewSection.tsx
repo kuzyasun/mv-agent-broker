@@ -168,21 +168,24 @@ export function OverviewSection(): JSX.Element {
             </div>
           ) : (
             <div className="divide-y divide-[#e5e7eb]">
-              {activeTurns.map((turn) => (
-                <div key={turn.turn_id} className="p-3 flex items-center justify-between gap-3 text-xs">
-                  <div className="space-y-0.5">
-                    <div className="font-mono font-semibold text-[#141b2b]">{turn.turn_id}</div>
-                    <div className="text-[11px] text-[#434655]">
-                      Started: {formatTimestamp(turn.started_at, prefs)}
-                      {turn.model && ` | Model: ${turn.model}`}
-                      {turn.role && ` | Role: ${turn.role}`}
+              {activeTurns.map((turn) => {
+                const startedTime = turn.started_at ?? turn.accepted_at ?? turn.timestamp;
+                return (
+                  <div key={turn.turn_id} className="p-3 flex items-center justify-between gap-3 text-xs">
+                    <div className="space-y-0.5">
+                      <div className="font-mono font-semibold text-[#141b2b]">{turn.turn_id}</div>
+                      <div className="text-[11px] text-[#434655]">
+                        Started: {formatTimestamp(startedTime, prefs)}
+                        {turn.model && ` | Model: ${turn.model}`}
+                        {turn.role && ` | Role: ${turn.role}`}
+                      </div>
                     </div>
+                    <span className="px-2 py-0.5 text-[11px] font-mono uppercase bg-[#ecfdf5] border border-[#a7f3d0] text-[#059669]">
+                      Active
+                    </span>
                   </div>
-                  <span className="px-2 py-0.5 text-[11px] font-mono uppercase bg-[#ecfdf5] border border-[#a7f3d0] text-[#059669]">
-                    Active
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -199,30 +202,39 @@ export function OverviewSection(): JSX.Element {
             </div>
           ) : (
             <div className="divide-y divide-[#e5e7eb]">
-              {errorTurns.map((turn) => (
-                <div
-                  key={turn.turn_id}
-                  className="p-3 flex items-start justify-between gap-3 text-xs hover:bg-[#f8f9fa] cursor-pointer"
-                  onClick={() => void loadTurnErrorAction(turn.turn_id)}
-                >
-                  <div className="space-y-0.5">
-                    <div className="font-mono font-semibold text-[#dc2626]">{turn.turn_id}</div>
-                    <div className="text-[11px] text-[#434655]">
-                      Failed: {formatTimestamp(turn.failed_at, prefs)}
-                      {turn.error_code && ` | Code: ${turn.error_code}`}
-                    </div>
-                    {turn.error_message && (
-                      <div className="text-xs text-[#141b2b]">{turn.error_message}</div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="h-7 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] cursor-pointer"
+              {errorTurns.map((turn) => {
+                const failureTime =
+                  turn.failed_at ??
+                  turn.timestamp ??
+                  turn.terminal_at ??
+                  turn.updated_at ??
+                  turn.created_at;
+                return (
+                  <div
+                    key={turn.turn_id}
+                    className="p-3 flex items-start justify-between gap-3 text-xs hover:bg-[#f8f9fa] cursor-pointer"
+                    onClick={() => void loadTurnErrorAction(turn.turn_id)}
                   >
-                    Inspect
-                  </button>
-                </div>
-              ))}
+                    <div className="space-y-0.5">
+                      <div className="font-mono font-semibold text-[#dc2626]">{turn.turn_id}</div>
+                      <div className="text-[11px] text-[#434655]">
+                        Failed: {formatTimestamp(failureTime, prefs)}
+                        {turn.error_code && ` | Code: ${turn.error_code}`}
+                        {turn.provider && ` | ${turn.provider}${turn.model ? ` (${turn.model})` : ""}`}
+                      </div>
+                      {turn.error_message && (
+                        <div className="text-xs text-[#141b2b]">{turn.error_message}</div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="h-7 px-2.5 bg-white border border-[#c4c5d7] text-xs font-medium text-[#141b2b] hover:bg-[#e9edff] cursor-pointer"
+                    >
+                      Inspect
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -248,9 +260,45 @@ export function OverviewSection(): JSX.Element {
             {turnErrorLoading.value ? (
               <div className="text-xs text-[#434655]">Loading turn error diagnostics…</div>
             ) : (
-              <pre className="font-mono text-[11px] bg-[#f1f3f5] p-3 border border-[#e5e7eb] overflow-x-auto whitespace-pre-wrap text-[#141b2b]">
-                {JSON.stringify(errorDetail, null, 2)}
-              </pre>
+              <div>
+                {(() => {
+                  const ts = errorDetail.timestamps;
+                  const failedTimestamp =
+                    typeof ts?.terminal_at === "number"
+                      ? ts.terminal_at
+                      : typeof ts?.failure_event_at === "number"
+                        ? ts.failure_event_at
+                        : typeof ts?.updated_at === "number"
+                          ? ts.updated_at
+                          : null;
+                  const createdTimestamp =
+                    typeof ts?.created_at === "number" ? ts.created_at : null;
+                  if (failedTimestamp === null && createdTimestamp === null) return null;
+                  return (
+                    <div className="mb-3 p-2.5 bg-[#f8f9fa] border border-[#e5e7eb] text-xs space-y-1">
+                      {failedTimestamp !== null && (
+                        <div>
+                          <span className="text-[#434655]">Failed at: </span>
+                          <span className="font-mono font-medium text-[#141b2b]">
+                            {formatTimestamp(failedTimestamp, prefs)}
+                          </span>
+                        </div>
+                      )}
+                      {createdTimestamp !== null && (
+                        <div>
+                          <span className="text-[#434655]">Created at: </span>
+                          <span className="font-mono text-[#141b2b]">
+                            {formatTimestamp(createdTimestamp, prefs)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+                <pre className="font-mono text-[11px] bg-[#f1f3f5] p-3 border border-[#e5e7eb] overflow-x-auto whitespace-pre-wrap text-[#141b2b]">
+                  {JSON.stringify(errorDetail, null, 2)}
+                </pre>
+              </div>
             )}
           </div>
         </aside>

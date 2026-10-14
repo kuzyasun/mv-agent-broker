@@ -63,7 +63,9 @@ export const connectionSnippets = signal<ConnectionSnippets | null>(
         .__OPERATOR_BOOTSTRAP__!.snippets!
     : null,
 );
-export const displayPreferences = signal<HostDisplayPreferences | null>(null);
+export const displayPreferences = signal<HostDisplayPreferences | null>(
+  getBootstrap().display ?? null,
+);
 
 // Route Profile Inspector state
 export const editingRouteId = signal<string | null>(null);
