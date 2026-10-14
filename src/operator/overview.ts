@@ -232,6 +232,32 @@ function guidanceFor(input: {
         explanation: "The recorded code is associated with provider quota or rate limiting.",
         next_step: "Wait for the provider limit to clear, then start a new turn if the work is still needed.",
       };
+    case "PROVIDER_RESULT_AMBIGUOUS":
+      return {
+        kind: "guidance",
+        explanation: "The resumed provider result could not be attributed to the current turn.",
+        next_step: "Inspect the retained report and native conversation. Use a fresh conversation with the needed context if the old error keeps repeating.",
+      };
+    case "PROVIDER_STREAM_INTERRUPTED":
+    case "PROVIDER_NETWORK_ERROR":
+    case "PROVIDER_UNAVAILABLE":
+      return {
+        kind: "guidance",
+        explanation: "The provider reported a stream, network, or service failure in the current turn.",
+        next_step: "Inspect the retained response and partial work before deciding whether another turn is needed.",
+      };
+    case "PROVIDER_OUTPUT_LIMIT":
+      return {
+        kind: "guidance",
+        explanation: "The provider response or broker output budget was exceeded.",
+        next_step: "Inspect the retained response and request a shorter, focused continuation if needed.",
+      };
+    case "PROVIDER_EXECUTION_ERROR":
+      return {
+        kind: "guidance",
+        explanation: "The provider reported an execution failure.",
+        next_step: "Use the recorded cause and retained response to decide the next step.",
+      };
     case "AUTH_REQUIRED":
     case "UNAUTHORIZED":
       return {

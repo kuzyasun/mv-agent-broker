@@ -6,6 +6,7 @@
 
 export type AntigravityStreamEvent =
   | { kind: "text_delta"; text: string; conversation_id?: string }
+  | { kind: "step"; index: number; state: string; stepType: string; text: string | null; conversation_id?: string }
   | {
       kind: "result";
       status: "SUCCESS" | "FAILED" | string;
@@ -23,6 +24,9 @@ export interface AntigravityTurnSummary {
   status: string | null;
   error: string | null;
   sawResult: boolean;
+  steps?: Extract<AntigravityStreamEvent, { kind: "step" }>[];
+  currentUserStepIndex?: number;
+  identityMismatch?: boolean;
 }
 
 const CONVERSATION_ID_KEYS = ["conversationId", "conversation_id", "session_id"] as const;
@@ -84,6 +88,15 @@ export function parseAntigravityStreamLine(line: string): AntigravityStreamEvent
   // Check for step_update text_delta (may also carry an observed conversation id).
   if (obj.event === "step_update" && obj.step_update && typeof obj.step_update === "object" && !Array.isArray(obj.step_update)) {
     const su = obj.step_update as Record<string, unknown>;
+    if (Number.isSafeInteger(su.step_index) && (su.step_index as number) >= 0 &&
+        typeof su.state === "string" && su.state.length <= 64 &&
+        typeof su.step_type === "string" && su.step_type.length <= 64) {
+      return {
+        kind: "step", index: su.step_index as number, state: su.state, stepType: su.step_type,
+        text: typeof su.text_delta === "string" ? su.text_delta : null,
+        ...(observedId !== null ? { conversation_id: observedId } : {}),
+      };
+    }
     if (typeof su.text_delta === "string") {
       return observedId !== null
         ? { kind: "text_delta", text: su.text_delta, conversation_id: observedId }
@@ -121,15 +134,33 @@ export function summarizeAntigravityTurn(events: AntigravityStreamEvent[]): Anti
   let status: string | null = null;
   let error: string | null = null;
   let sawResult = false;
+  const steps: Extract<AntigravityStreamEvent, { kind: "step" }>[] = [];
+  let currentUserStepIndex: number | undefined;
+  let identityMismatch = false;
 
   const noteId = (id: string | undefined) => {
     if (conversationId === null && id && id.trim().length > 0) {
       conversationId = id.trim();
+    } else if (id && conversationId !== id.trim()) {
+      identityMismatch = true;
     }
   };
 
   for (const ev of events) {
     switch (ev.kind) {
+      case "step":
+        noteId(ev.conversation_id);
+        if (ev.stepType === "user_input" && (currentUserStepIndex === undefined || ev.index > currentUserStepIndex)) {
+          currentUserStepIndex = ev.index;
+          text = "";
+          steps.length = 0;
+        }
+        if (currentUserStepIndex === undefined || ev.index >= currentUserStepIndex) {
+          steps.push(ev);
+          // Error and tool prose are never an agent report.
+          if (ev.stepType === "agent_response" && ev.text !== null) text += ev.text;
+        }
+        break;
       case "text_delta":
         text += ev.text;
         noteId(ev.conversation_id);
@@ -156,5 +187,8 @@ export function summarizeAntigravityTurn(events: AntigravityStreamEvent[]): Anti
     status,
     error,
     sawResult,
+    ...(steps.length > 0 ? { steps } : {}),
+    ...(currentUserStepIndex !== undefined ? { currentUserStepIndex } : {}),
+    ...(identityMismatch ? { identityMismatch: true } : {}),
   };
 }

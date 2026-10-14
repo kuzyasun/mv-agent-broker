@@ -9,9 +9,10 @@
  * already accepted turns so they cannot bypass a newly learned pause.
  *
  * The vendor suffix "Resets in 54m59s." is parsed into a bounded
- * retry_after_ms when present; without a valid suffix the documented 15-minute
- * conservative policy applies (this is broker policy, never a claimed vendor
- * reset time).
+ * retry_after_ms when present. Explicit bounded provider retry metadata takes
+ * precedence, with separate source attribution when it differs from the suffix.
+ * Without either, the documented 15-minute conservative policy applies (this
+ * is broker policy, never a claimed vendor reset time).
  */
 import type { RegistryDb } from "../storage/db.ts";
 
@@ -21,7 +22,7 @@ export const DEFAULT_QUOTA_COOLDOWN_MS = 15 * 60_000;
 /** Vendor reset suffixes are trusted only within this bound (finite positive ≤ 24h). */
 export const MAX_VENDOR_RESET_MS = 24 * 3_600_000;
 
-export type QuotaCooldownSource = "vendor_reset_suffix" | "conservative_policy";
+export type QuotaCooldownSource = "vendor_reset_suffix" | "provider_retry_after" | "conservative_policy";
 
 export interface QuotaCooldownRecord {
   quota_scope_id: string;
@@ -71,7 +72,8 @@ function rowToRecord(row: CooldownRow): QuotaCooldownRecord {
     provider: String(row.provider),
     until_ms: Number(row.until_ms),
     retry_after_ms: Number(row.retry_after_ms),
-    source: row.source === "vendor_reset_suffix" ? "vendor_reset_suffix" : "conservative_policy",
+    source: row.source === "vendor_reset_suffix" || row.source === "provider_retry_after"
+      ? row.source : "conservative_policy",
     recorded_at: Number(row.recorded_at),
     recorded_by_turn_id: String(row.recorded_by_turn_id),
   };
@@ -83,6 +85,8 @@ export interface RecordQuotaCooldownArgs {
   turnId: string;
   /** The bounded QUOTA_EXHAUSTED detail; scanned for the optional vendor reset suffix. */
   detail: string | null | undefined;
+  /** Explicit bounded retry metadata from the definitive provider failure. */
+  retryAfterMs?: number;
   now: number;
 }
 
@@ -94,8 +98,12 @@ export interface RecordQuotaCooldownArgs {
  */
 export function recordQuotaCooldown(db: RegistryDb, args: RecordQuotaCooldownArgs): QuotaCooldownRecord {
   const vendorMs = parseVendorResetMs(args.detail);
-  const retryAfterMs = vendorMs ?? DEFAULT_QUOTA_COOLDOWN_MS;
-  const source: QuotaCooldownSource = vendorMs === null ? "conservative_policy" : "vendor_reset_suffix";
+  const explicitRetry = args.retryAfterMs;
+  const explicitMs = typeof explicitRetry === "number" && Number.isSafeInteger(explicitRetry) && explicitRetry > 0 && explicitRetry <= MAX_VENDOR_RESET_MS
+    ? explicitRetry : null;
+  const retryAfterMs = explicitMs ?? vendorMs ?? DEFAULT_QUOTA_COOLDOWN_MS;
+  const source: QuotaCooldownSource = vendorMs === retryAfterMs ? "vendor_reset_suffix"
+    : explicitMs !== null ? "provider_retry_after" : "conservative_policy";
   const until = args.now + retryAfterMs;
   db.raw.prepare("DELETE FROM quota_scope_cooldowns WHERE until_ms <= ?").run(args.now);
   const existing = db.raw

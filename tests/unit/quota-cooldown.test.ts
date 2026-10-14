@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import {
   DEFAULT_QUOTA_COOLDOWN_MS,
@@ -17,7 +18,7 @@ import {
   parseVendorResetMs,
   recordQuotaCooldown,
 } from "../../src/core/quotaCooldown.ts";
-import { openRegistryDb } from "../../src/storage/db.ts";
+import { MIGRATIONS, openRegistryDb } from "../../src/storage/db.ts";
 import { insertProject, insertWorkspace } from "../../src/storage/repo.ts";
 import { BrokerError, createHarness, settle, start } from "../helpers/harness.ts";
 
@@ -95,6 +96,45 @@ describe("cooldown storage", () => {
       expect(extended.until_ms).toBe(1_000_600 + 7_200_000);
       expect(listActiveQuotaCooldowns(db, 1_000_600)).toHaveLength(1);
     } finally { db.close(); }
+  });
+
+  it("uses bounded machine retry metadata with honest source attribution", () => {
+    const db = openRegistryDb(":memory:");
+    try {
+      const record = (scope: string, retryAfterMs: number | undefined, detail = "Provider quota exhausted.") => recordQuotaCooldown(db, {
+        quotaScopeId: scope, provider: "mock", turnId: "turn-1", detail, retryAfterMs, now: 1000,
+      });
+      expect(record("machine", 12_345)).toMatchObject({ retry_after_ms: 12_345, source: "provider_retry_after" });
+      expect(record("matching", 45_000, "Resets in 45s.")).toMatchObject({ retry_after_ms: 45_000, source: "vendor_reset_suffix" });
+      expect(record("conflicting", 12_345, "Resets in 45s.")).toMatchObject({ retry_after_ms: 12_345, source: "provider_retry_after" });
+      for (const invalid of [0, -1, 1.5, NaN, Infinity, MAX_VENDOR_RESET_MS + 1]) {
+        expect(record(`invalid-${invalid}`, invalid)).toMatchObject({ retry_after_ms: DEFAULT_QUOTA_COOLDOWN_MS, source: "conservative_policy" });
+      }
+      expect(record("invalid-with-suffix", 0, "Resets in 45s.")).toMatchObject({ retry_after_ms: 45_000, source: "vendor_reset_suffix" });
+    } finally { db.close(); }
+  });
+
+  it("migrates v7 cooldown rows without losing their recorded scope or expiry", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "broker-quota-migration-"));
+    roots.push(root);
+    const dbPath = path.join(root, "registry.sqlite");
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)");
+    for (const migration of MIGRATIONS.filter(m => m.version <= 7)) {
+      legacy.exec(migration.sql);
+      legacy.prepare("INSERT INTO schema_migrations VALUES (?, 0)").run(migration.version);
+    }
+    legacy.prepare("INSERT INTO quota_scope_cooldowns VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run("qs-old", "mock", 50_000, 45_000, "vendor_reset_suffix", 5000, "turn-old");
+    legacy.close();
+    const migrated = openRegistryDb(dbPath);
+    try {
+      expect(activeQuotaCooldown(migrated, "qs-old", 6000)).toMatchObject({ until_ms: 50_000, source: "vendor_reset_suffix", recorded_by_turn_id: "turn-old" });
+      expect(recordQuotaCooldown(migrated, {
+        quotaScopeId: "qs-new", provider: "mock", turnId: "turn-new", detail: null, retryAfterMs: 12_345, now: 6000,
+      }).source).toBe("provider_retry_after");
+      expect((migrated.raw.prepare("PRAGMA table_info(turn_outcome_evidence)").all() as Array<{ name: string }>).some(column => column.name === "failure")).toBe(true);
+    } finally { migrated.close(); }
   });
 
   it("persists across a close/reopen (daemon restart) and clears explicitly", () => {

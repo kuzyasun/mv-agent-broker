@@ -15,7 +15,7 @@ Setup, auth ownership, model/effort rules and limitations for every provider:
 [provider operations guide](providers.md).
 
 Current managed Windows transport versions are Cursor 0.2.9, ZCode 0.2.6,
-Antigravity 0.2.3 and Claude/Codex 0.2.2. Native smoke rows below retain their original
+Antigravity 0.2.4 and Claude/Codex 0.2.2. Native smoke rows below retain their original
 tested adapter versions; they do not validate a new version-bound profile.
 The [Windows supervision checkpoint](native-smoke/2026-10-01-windows-job/report.md)
 uses offline owned processes and makes no full native support claim.
@@ -135,7 +135,7 @@ public MCP; [integrated acceptance](native-smoke/2026-10-01-provider-preflight/r
 includes independent Cursor review and coordinator repairs. This establishes
 that development scenario, not a full native worker security profile.
 
-## antigravity (adapter 0.2.3; native smoke on 0.1.0, `src/providers/antigravity/`)
+## antigravity (adapter 0.2.4; native smoke on 0.1.0, `src/providers/antigravity/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
@@ -148,14 +148,19 @@ that development scenario, not a full native worker security profile.
 | cancellation (taskkill/SIGKILL tree) | native | documented | common headless infra |
 | structured final output | unsupported | documented | text_only |
 
-Quota-error classification is **limited / documented**: an explicit `FAILED`
-`result.error` beginning `Individual quota reached.` becomes `QUOTA_EXHAUSTED`.
-The original native incident is retained; the new mapping is tested offline,
-without a new live quota replay. The pilot operations follow-up learns a shared
-scope pause from executed quota failures: a strictly validated vendor reset
-suffix or a labeled 15-minute policy. Admission, dispatch recheck, persistence,
-expiry and operator clearing are tested offline. Other quota/error formats and
-live quota telemetry remain unverified.
+Failure classification is **limited / documented**: explicit current-turn
+`FAILED`/`ERROR` diagnostics distinguish quota, stream interruption, API 500/503,
+network failure, output limits, rate limits and authentication. Failed responses
+remain readable as unreviewed reports. Adapter 0.2.4 scopes resumed errors using
+an optional read-only native-store observation and matching current stream step
+indices. Verified historical errors cannot create quota pauses; missing or
+ambiguous attribution returns `PROVIDER_RESULT_AMBIGUOUS`. The original native
+incidents are retained, and the new mapping/correction is tested offline without
+a new live replay. A strictly validated vendor reset suffix or machine retry
+metadata supplies the quota duration; absence uses the labeled 15-minute policy.
+Report/failure crash recovery, admission, dispatch recheck, persistence, expiry
+and operator clearing are tested offline. Other native-store layouts, error
+formats and live quota telemetry remain unverified.
 [Classification checkpoint](native-smoke/2026-10-03-antigravity-quota.md),
 [operations checkpoint](native-smoke/2026-10-03-pilot-operations.md).
 
@@ -170,7 +175,7 @@ live quota telemetry remain unverified.
 ## Readiness observations and durable binding
 
 See the [native readiness checkpoint](native-smoke/2026-10-01-native-readiness/report.md).
-Current contracts are Cursor 0.2.9, Antigravity 0.2.3 and ZCode 0.2.6.
+Current contracts are Cursor 0.2.9, Antigravity 0.2.4 and ZCode 0.2.6.
 Cursor reports observed version/catalog and a recognized CLI authentication marker;
 Agy reports its model catalog; ZCode reports its installed PROGRAM model catalog.
 Unavailable CLI versions or authentication stay null. Runtime/config fingerprints

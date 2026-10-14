@@ -69,6 +69,7 @@ import {
 import type {
   DispatchGate,
   ProviderAdapter,
+  ProviderFailure,
   TurnExecutionRequest,
   TurnExecutionResult,
 } from "../runtime/adapter.ts";
@@ -627,6 +628,7 @@ export class TurnExecutor {
             candidate: deadlineInterrupt ? "TIMED_OUT" : watch.reason !== null ? "CANCELLED" : "FAILED",
             execution_started: true,
             native_conversation_ref: after.native_conversation_ref,
+            ...(watch.reason === null ? { failure: { code: failure.code, message: failure.message } } : {}),
           });
         }
         this.finalizeWithFailure(after, session, failure, preDispatchStartup, watch.reason, continuation);
@@ -661,13 +663,17 @@ export class TurnExecutor {
     const resultNativeRef = result.native_conversation_ref !== ""
       ? result.native_conversation_ref
       : (after.native_conversation_ref ?? null);
+    const providerFailure = result.native_outcome === "failed" && watch.reason === null
+      ? result.failure
+      : undefined;
+    const supervisedFailure = result.native_outcome === "failed" && watch.reason !== null;
+    const timedOut = supervisedFailure && after.termination_reason === "deadline";
 
     {
       // Known native outcome is journaled BEFORE publication (§5.3, §14.3):
       // the evidence row is the authoritative recovery guard even when the
       // publication is interrupted before any durable report identity, and a
       // late UNKNOWN result stays retained but never overrides it.
-      const timedOut = after.deadline_at !== null && this.clock.now() > after.deadline_at && watch.reason === "deadline";
       const candidate = result.native_outcome === "completed"
         ? "SUCCEEDED"
         : timedOut
@@ -689,6 +695,7 @@ export class TurnExecutor {
             candidate,
             execution_started: true,
             native_conversation_ref: resultNativeRef,
+            failure: providerFailure,
           });
           // Outcome and required-final declaration share one durable commit.
           if (declaredReport) this.journalDeclaredReportLocked(after, session, reported);
@@ -697,9 +704,12 @@ export class TurnExecutor {
         if (this.staleIncarnation()) return;
         const reason = (error instanceof Error ? error.message : String(error)).slice(0, 512);
         this.commitTerminal(after, session, {
-          candidate: "FAILED", native_outcome: result.native_outcome, termination_reason: "normal",
+          candidate: timedOut ? "TIMED_OUT" : supervisedFailure ? "CANCELLED" : "FAILED",
+          native_outcome: result.native_outcome, termination_reason: timedOut ? "deadline" : supervisedFailure ? "cancelled" : "normal",
           execution_started: true, finalization_error: `EVIDENCE_CAPTURE_FAILED: ${reason}`,
-          error_code: "EVIDENCE_CAPTURE_FAILED", detail: { report_publication_failed: true },
+          error_code: supervisedFailure ? null : providerFailure?.code ?? "EVIDENCE_CAPTURE_FAILED",
+          detail: { report_publication_failed: true, ...(providerFailure ? { message: providerFailure.message } : {}) },
+          ...(providerFailure?.code === "QUOTA_EXHAUSTED" ? { quotaCooldown: { detail: providerFailure.message, retryAfterMs: providerFailure.retry_after_ms } } : {}),
         }, continuation, resultNativeRef ?? undefined);
         return;
       }
@@ -721,13 +731,14 @@ export class TurnExecutor {
         const msg = err instanceof Error ? err.message : String(err);
         // Known native completion stands; publication failure is explicit evidence failure.
         this.commitTerminal(after, session, {
-          candidate: "FAILED",
+          candidate: timedOut ? "TIMED_OUT" : supervisedFailure ? "CANCELLED" : "FAILED",
           native_outcome: result.native_outcome,
-          termination_reason: "normal",
+          termination_reason: timedOut ? "deadline" : supervisedFailure ? "cancelled" : "normal",
           execution_started: true,
           finalization_error: `EVIDENCE_CAPTURE_FAILED: ${msg}`,
-          error_code: "EVIDENCE_CAPTURE_FAILED",
-          detail: { report_publication_failed: true },
+          error_code: supervisedFailure ? null : providerFailure?.code ?? "EVIDENCE_CAPTURE_FAILED",
+          detail: { report_publication_failed: true, ...(providerFailure ? { message: providerFailure.message } : {}) },
+          ...(providerFailure?.code === "QUOTA_EXHAUSTED" ? { quotaCooldown: { detail: providerFailure.message, retryAfterMs: providerFailure.retry_after_ms } } : {}),
         }, continuation, resultNativeRef ?? undefined);
         return;
       }
@@ -1232,6 +1243,7 @@ export class TurnExecutor {
       candidate: "SUCCEEDED" | "FAILED" | "CANCELLED" | "TIMED_OUT";
       execution_started: boolean;
       native_conversation_ref: string | null;
+      failure?: ProviderFailure;
     },
   ): void {
     if (this.expectedIncarnation !== null) {
@@ -1250,8 +1262,9 @@ export class TurnExecutor {
           native_conversation_ref,
           recorded_at,
           incarnation,
+          failure,
           applied
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         turn.turn_id,
@@ -1262,6 +1275,7 @@ export class TurnExecutor {
         outcome.native_conversation_ref,
         now,
         this.expectedIncarnation ?? "unattached",
+        outcome.failure ? JSON.stringify(outcome.failure) : null,
       );
   }
 
@@ -2105,7 +2119,8 @@ export class TurnExecutor {
   ): void {
     // §14.6: a completion that verifiably happened stands, even with a late
     // cancel request; the cancellation stays in the audit trail.
-    const timedOut = turn.deadline_at !== null && this.clock.now() > turn.deadline_at && cancelReason === "deadline";
+    const timedOut = result.native_outcome === "failed" && cancelReason !== null && turn.termination_reason === "deadline";
+    const failure = result.native_outcome === "failed" && cancelReason === null ? result.failure : undefined;
 
     this.commitTerminal(turn, session, {
       candidate: result.native_outcome === "completed" ? "SUCCEEDED" : timedOut ? "TIMED_OUT" : cancelReason !== null && result.native_outcome === "failed" ? "CANCELLED" : "FAILED",
@@ -2113,11 +2128,13 @@ export class TurnExecutor {
       termination_reason: timedOut ? "deadline" : cancelReason !== null && result.native_outcome === "failed" ? "cancelled" : "normal",
       execution_started: true,
       finalization_error: null,
-      error_code: null,
+      error_code: failure?.code ?? null,
       detail: {
         malformed: result.malformed === true,
         cancel_reason: cancelReason,
+        ...(failure ? { message: failure.message } : {}),
       },
+      ...(failure?.code === "QUOTA_EXHAUSTED" ? { quotaCooldown: { detail: failure.message, retryAfterMs: failure.retry_after_ms } } : {}),
     }, continuation, result.native_conversation_ref !== "" ? result.native_conversation_ref : undefined);
   }
 
@@ -2167,7 +2184,7 @@ export class TurnExecutor {
       error_code: string | null;
       detail: Record<string, unknown>;
       /** Set only for a definitive native QUOTA_EXHAUSTED (see finalizeWithFailure). */
-      quotaCooldown?: { detail: string };
+      quotaCooldown?: { detail: string; retryAfterMs?: number; observedAt?: number };
     },
     continuation?: "new_native_conversation" | "native_resume",
     nativeRef?: string,
@@ -2242,8 +2259,8 @@ export class TurnExecutor {
 
       // Learn the shared quota-scope pause in the SAME transaction as the
       // terminal commit: only a definitive native QUOTA_EXHAUSTED reaches
-      // here (finalizeWithFailure sets quotaCooldown; journaled-evidence
-      // reconciliation never does, so timeout history is never backfilled).
+      // here, including a journaled definitive failure recovered after a crash.
+      // Cancelled/deadline/UNKNOWN outcomes never fabricate quota evidence.
       if (outcome.quotaCooldown && outcome.candidate === "FAILED" &&
           outcome.error_code === "QUOTA_EXHAUSTED" && outcome.execution_started) {
         const pause = recordQuotaCooldown(this.db, {
@@ -2251,7 +2268,8 @@ export class TurnExecutor {
           provider: session.provider,
           turnId: turn.turn_id,
           detail: outcome.quotaCooldown.detail,
-          now,
+          retryAfterMs: outcome.quotaCooldown.retryAfterMs,
+          now: outcome.quotaCooldown.observedAt ?? now,
         });
         appendEvent(this.db, {
           turn_id: turn.turn_id,
@@ -2435,6 +2453,7 @@ export class TurnExecutor {
         recorded_at: number;
         incarnation: string;
         applied: number;
+        failure: string | null;
       }>;
 
     for (const row of rows) {
@@ -2450,6 +2469,10 @@ export class TurnExecutor {
 
       const unrecoverableReport = reportStatus.get(turn.turn_id);
       const forceReportFailure = unrecoverableReport?.ok === false;
+      const failure: ProviderFailure | undefined = row.candidate === "FAILED" &&
+          row.native_outcome === "failed" && row.termination_hint === "normal" && row.failure
+        ? JSON.parse(row.failure) as ProviderFailure
+        : undefined;
 
       const nativeRef = row.native_conversation_ref ?? undefined;
       if (nativeRef && session.native_conversation_ref === null) {
@@ -2474,24 +2497,26 @@ export class TurnExecutor {
         ?? requestedContinuationFor(session);
 
       if (forceReportFailure) {
-        // Missing/corrupt/foreign report evidence: explicit EVIDENCE_CAPTURE_FAILED
-        // that PRESERVES the completed native outcome — never invented success,
-        // never UNKNOWN, and never a block on unrelated turns' recovery.
+        // Missing/corrupt/foreign reports keep native failure and supervision
+        // intact; evidence capture failure is recorded separately. Completed
+        // native outcomes still fail explicitly, never inventing success.
         this.commitTerminal(
           turn,
           session,
           {
-            candidate: "FAILED",
+            candidate: row.candidate === "CANCELLED" || row.candidate === "TIMED_OUT" ? row.candidate : "FAILED",
             native_outcome: row.native_outcome,
             termination_reason: row.termination_hint ?? (row.execution_started === 1 ? "normal" : "startup_failure"),
             execution_started: row.execution_started === 1,
             finalization_error: `EVIDENCE_CAPTURE_FAILED: ${unrecoverableReport.reason ?? "report publication unrecoverable"}`,
-            error_code: "EVIDENCE_CAPTURE_FAILED",
+            error_code: row.candidate === "CANCELLED" || row.candidate === "TIMED_OUT" ? null : failure?.code ?? "EVIDENCE_CAPTURE_FAILED",
             detail: {
               report_publication_failed: true,
               cancel_reason: row.termination_hint === "cancelled" ? "cancelled" : null,
               final_snapshot_id: null,
+              ...(failure ? { message: failure.message } : {}),
             },
+            ...(failure?.code === "QUOTA_EXHAUSTED" ? { quotaCooldown: { detail: failure.message, retryAfterMs: failure.retry_after_ms, observedAt: row.recorded_at } } : {}),
           },
           continuation,
           nativeRef,
@@ -2508,10 +2533,12 @@ export class TurnExecutor {
             termination_reason: row.termination_hint ?? (row.execution_started === 0 ? "startup_failure" : "normal"),
             execution_started: row.execution_started === 1,
             finalization_error: null,
-            error_code: null,
+            error_code: failure?.code ?? null,
             detail: {
               cancel_reason: row.termination_hint === "cancelled" ? "cancelled" : null,
-                  },
+              ...(failure ? { message: failure.message } : {}),
+            },
+            ...(failure?.code === "QUOTA_EXHAUSTED" ? { quotaCooldown: { detail: failure.message, retryAfterMs: failure.retry_after_ms, observedAt: row.recorded_at } } : {}),
           },
           continuation,
           nativeRef,
@@ -2524,7 +2551,7 @@ export class TurnExecutor {
         turn_id: turn.turn_id,
         session_id: session.session_id,
         type: "recovery_outcome_reconciled",
-        payload: { candidate: forceReportFailure ? "FAILED" : row.candidate },
+        payload: { candidate: forceReportFailure && row.candidate !== "CANCELLED" && row.candidate !== "TIMED_OUT" ? "FAILED" : row.candidate },
         created_at: this.clock.now(),
       });
     }

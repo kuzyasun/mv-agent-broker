@@ -202,6 +202,32 @@ describe("Antigravity stream parser", () => {
   });
 
   describe("summarizeAntigravityTurn", () => {
+    it("scopes step text and errors after the current user_input on resume", () => {
+      const records = [
+        { step_index: 1, state: "DONE", step_type: "agent_response", text_delta: "old answer" },
+        { step_index: 2, state: "DONE", step_type: "error", text_delta: "old error" },
+        { step_index: 3, state: "DONE", step_type: "user_input" },
+        { step_index: 4, state: "ACTIVE", step_type: "agent_response", text_delta: "new " },
+        { step_index: 4, state: "DONE", step_type: "agent_response", text_delta: "answer" },
+      ].map(step_update => parseAntigravityStreamLine(JSON.stringify({ event: "step_update", step_update })));
+      const summary = summarizeAntigravityTurn(records);
+      expect(summary.currentUserStepIndex).toBe(3);
+      expect(summary.text).toBe("new answer");
+      expect(summary.steps?.map(step => step.stepType)).toEqual(["user_input", "agent_response", "agent_response"]);
+    });
+
+    it("keeps current error steps and flags mixed conversation identities", () => {
+      const records = [
+        { step_index: 5, state: "DONE", step_type: "user_input", conversation_id: "current" },
+        { step_index: 6, state: "DONE", step_type: "error", conversation_id: "current", text_delta: "current error" },
+        { step_index: 7, state: "DONE", step_type: "agent_response", conversation_id: "foreign", text_delta: "foreign report" },
+      ].map(step_update => parseAntigravityStreamLine(JSON.stringify({ event: "step_update", step_update })));
+      const summary = summarizeAntigravityTurn(records);
+      expect(summary.steps?.some(step => step.stepType === "error")).toBe(true);
+      expect(summary.text).not.toContain("current error");
+      expect(summary.identityMismatch).toBe(true);
+    });
+
     it("returns default values for empty event stream", () => {
       const summary = summarizeAntigravityTurn([]);
       expect(summary).toEqual({
@@ -237,6 +263,7 @@ describe("Antigravity stream parser", () => {
         status: "SUCCESS",
         error: null,
         sawResult: true,
+        identityMismatch: true,
       });
     });
 
@@ -281,7 +308,7 @@ describe("Antigravity stream parser", () => {
     it("initializes with default binary and version", () => {
       const adapter = new AntigravityAdapter();
       expect(adapter.providerId).toBe("antigravity");
-      expect(adapter.adapterVersion).toBe("0.2.3");
+      expect(adapter.adapterVersion).toBe("0.2.4");
       expect(adapter.inspectRuntime("sess-1")).toBeNull();
     });
 

@@ -115,10 +115,19 @@ jobs are not cancelled. Successfully recorded operations still replay by their
 original keys. Expiry admits an explicit new task; it never retries a failed turn.
 
 A validated Antigravity diagnostic suffix such as `Resets in 54m59s.` supplies
-the pause duration (positive, at most 24 hours). Without a usable suffix the
+the pause duration (positive, at most 24 hours). Valid explicit provider retry
+metadata has separate attribution when it differs from the suffix. Without either the
 broker uses a **15-minute conservative policy**, explicitly labeled as policy
 rather than a confirmed vendor reset. Timeouts, silence, cancellation and unknown
 execution do not establish exhausted quota and never backfill a pause.
+
+Antigravity responses remain available as unreviewed reports even when the turn
+fails. Inspect both the recorded failure and the retained response before
+deciding on a continuation. A historical error after resume is corrected only
+when the current native and stream completion observations agree. Otherwise
+`PROVIDER_RESULT_AMBIGUOUS` retains the response without inferring an exhausted
+quota. A fresh conversation with the required context can avoid repeating an old
+conversation error; the broker does not retry or switch routes automatically.
 
 Runtime overview shows **Quota pauses** and their local end times. If you know
 quota has recovered, **Clear quota pause** removes only that scope's active

@@ -317,6 +317,24 @@ ALTER TABLE turns ADD COLUMN git_working_tree_digest TEXT;
 
 export type Migration = { version: number; sql: string };
 
+const MIGRATION_V8_SQL = `
+-- Keep definitive provider errors with the native outcome across publication/recovery.
+ALTER TABLE turn_outcome_evidence ADD COLUMN failure TEXT;
+-- Distinguish machine retry metadata from a duration observed in provider prose.
+ALTER TABLE quota_scope_cooldowns RENAME TO quota_scope_cooldowns_v7;
+CREATE TABLE quota_scope_cooldowns (
+  quota_scope_id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  until_ms INTEGER NOT NULL,
+  retry_after_ms INTEGER NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('vendor_reset_suffix','provider_retry_after','conservative_policy')),
+  recorded_at INTEGER NOT NULL,
+  recorded_by_turn_id TEXT NOT NULL
+);
+INSERT INTO quota_scope_cooldowns SELECT * FROM quota_scope_cooldowns_v7;
+DROP TABLE quota_scope_cooldowns_v7;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: MIGRATION_V1_SQL },
   { version: 2, sql: MIGRATION_V2_SQL },
@@ -325,6 +343,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 5, sql: MIGRATION_V5_SQL },
   { version: 6, sql: MIGRATION_V6_SQL },
   { version: 7, sql: MIGRATION_V7_SQL },
+  { version: 8, sql: MIGRATION_V8_SQL },
 ];
 
 export class RegistryDb {

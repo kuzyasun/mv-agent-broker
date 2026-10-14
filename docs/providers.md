@@ -6,7 +6,7 @@ not every feature a vendor application might offer. The per-capability
 [verification matrix](provider-capabilities.md) and linked native evidence
 distinguish implementation, local tests and actual provider execution.
 
-Current transport versions are Cursor 0.2.9, ZCode 0.2.6, Antigravity 0.2.3
+Current transport versions are Cursor 0.2.9, ZCode 0.2.6, Antigravity 0.2.4
 and Claude/Codex 0.2.2. Historical smoke versions are identified separately
 below. [Native policy observations](native-policy-controls.md) explain why
 CLI flags, readiness and individual marker tests do not prove a complete
@@ -264,18 +264,47 @@ deadline, with a 65-second margin for daemon deadline supervision; the default
 turn deadline is one hour and is configurable. Permission bypass does not
 enforce reviewer read-only behavior.
 
-An explicit `FAILED` result whose `error` starts with the observed diagnostic
-`Individual quota reached.` maps to `QUOTA_EXHAUSTED`. The bounded, sanitized
-diagnostic remains available. A strict final `Resets in 54m59s.`-style suffix
-provides bounded retry duration (positive and at most 24 hours). An executed
-`QUOTA_EXHAUSTED` establishes a persisted shared quota-scope pause; without a
-valid duration the broker applies a labeled 15-minute conservative policy.
-This is not a subscription-state query. The same shared pause also applies to
-ZCode's already classified explicit quota errors.
-Successful responses, response-only failures, stderr prose and other errors
-are not quota evidence. No automatic retry or provider/account fallback occurs.
-This classification is tested with fake native processes; a new live quota
-failure has not been exercised. See the
+Adapter 0.2.4 retains the response of an explicit `FAILED` or `ERROR` result as
+an unreviewed report, together with the native failure code and message. The
+report remains readable through `agent_turn_result` and `agent_artifact_read`;
+retaining it does not make a failed turn successful. Failure metadata survives
+report-publication crash recovery. Publication errors remain visible separately
+in `finalization_error`.
+
+On resume, the adapter optionally reads agy 1.3's local SQLite conversation
+store before and after the run. The pre-run step index separates historical
+error steps from the current user input and its steps. This is a read-only
+provider observation, not a snapshot or an authorization gate. A historical
+result error is ignored only when the current native segment has no error,
+its completed final response matches the result, the stream confirms the same
+current user/final step indices and `DONE` response, and the process exits
+normally. The retained report records `recovered_current_turn` provenance.
+Cancellation, unknown execution and output overflow cannot use this correction.
+Missing, changed, or ambiguous native evidence leaves the turn failed with
+`PROVIDER_RESULT_AMBIGUOUS` and its response retained; no quota pause is inferred.
+
+Only explicit current-turn errors are classified:
+
+| Diagnostic | Code |
+| --- | --- |
+| `Individual quota reached.` | `QUOTA_EXHAUSTED` |
+| Stream interruption | `PROVIDER_STREAM_INTERRUPTED` |
+| Native API 500/503 | `PROVIDER_UNAVAILABLE` |
+| Observed native TCP receive failure | `PROVIDER_NETWORK_ERROR` |
+| Output token limit or broker output budget | `PROVIDER_OUTPUT_LIMIT` |
+| Explicit native API 429 | `RATE_LIMITED` |
+| Explicit native authentication failure | `AUTH_REQUIRED` |
+| Other native execution failure | `PROVIDER_EXECUTION_ERROR` |
+| Invalid/missing result or foreign conversation identity | `PROVIDER_PROTOCOL_ERROR` |
+
+A strict `Resets in 54m59s.` suffix supplies a positive retry duration of at
+most 24 hours. Valid machine retry metadata is labeled `provider_retry_after`
+when it differs from the suffix; absence uses the labeled 15-minute conservative
+policy. Only a definitive executed current-turn quota failure creates a shared
+pause. Successful report prose, response-only failures, arbitrary stderr and
+historical quota errors do not. No automatic retry or provider/account fallback
+occurs. Classifier, native-store and report-recovery regressions run offline;
+the new adapter has not been qualified with another paid native turn. See the
 [quota checkpoint](native-smoke/2026-10-03-antigravity-quota.md) and
 [pilot operations checkpoint](native-smoke/2026-10-03-pilot-operations.md).
 

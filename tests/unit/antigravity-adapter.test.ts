@@ -115,9 +115,9 @@ function gate() {
 }
 
 describe("Antigravity adapter", () => {
-  it("exposes adapter version 0.2.3", () => {
+  it("exposes adapter version 0.2.4", () => {
     const adapter = new AntigravityAdapter();
-    expect(adapter.adapterVersion).toBe("0.2.3");
+    expect(adapter.adapterVersion).toBe("0.2.4");
   });
 
   describe("effort mapping in argv", () => {
@@ -282,7 +282,7 @@ describe("Antigravity adapter", () => {
           },
           cancellationRequested: () => null,
         }, () => {}),
-      ).rejects.toMatchObject({ code: "PROVIDER_PROTOCOL_ERROR", executionStarted: true });
+      ).resolves.toMatchObject({ native_outcome: "failed", failure: { code: "PROVIDER_EXECUTION_ERROR" } });
 
       expect(observedDir).not.toBeNull();
       expect(existsSync(observedDir!)).toBe(false);
@@ -311,7 +311,7 @@ describe("Antigravity adapter", () => {
         }, (ev) => {
           if (ev.type === "native_ref_obtained") cancelReason = "operator cancel";
         }),
-      ).rejects.toMatchObject({ code: "PROVIDER_PROTOCOL_ERROR", executionStarted: true });
+      ).resolves.toMatchObject({ native_outcome: "failed", failure: { code: "PROVIDER_EXECUTION_ERROR" } });
 
       expect(observedDir).not.toBeNull();
       expect(existsSync(observedDir!)).toBe(false);
@@ -362,31 +362,26 @@ describe("Antigravity adapter", () => {
     });
   });
 
-  describe("quota classification from explicit FAILED error", () => {
-    it("maps the observed individual-quota FAILED error to QUOTA_EXHAUSTED with executionStarted true", async () => {
+  describe("quota classification from explicit current-turn FAILED error", () => {
+    it("returns the observed individual-quota FAILED error as QUOTA_EXHAUSTED", async () => {
       const f = fixture();
       await expect(
         f.adapter.executeTurn(request({ task_envelope: "quota" }), gate(), () => {}),
-      ).rejects.toMatchObject({
+      ).resolves.toMatchObject({ native_outcome: "failed", failure: {
         code: "QUOTA_EXHAUSTED",
-        executionStarted: true,
         message:
           "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 54m59s.",
-        details: { retry_after_ms: 54 * 60_000 + 59_000 },
-      });
+        retry_after_ms: 54 * 60_000 + 59_000,
+      } });
     });
 
     it("retains vendor detail bounded via sanitized truncation", async () => {
       const f = fixture();
-      const err = await f.adapter
-        .executeTurn(request({ task_envelope: "quota-long" }), gate(), () => {})
-        .catch((e: unknown) => e as Error);
-      expect(err).toBeInstanceOf(BrokerError);
-      const brokerErr = err as BrokerError;
-      expect(brokerErr.code).toBe("QUOTA_EXHAUSTED");
-      expect(brokerErr.executionStarted).toBe(true);
-      expect(err.message).toHaveLength(513);
-      expect(err.message).toMatch(/^Individual quota reached\. D+…$/);
+      const result = await f.adapter.executeTurn(request({ task_envelope: "quota-long" }), gate(), () => {});
+      expect(result.native_outcome).toBe("failed");
+      expect(result.failure?.code).toBe("QUOTA_EXHAUSTED");
+      expect(result.failure?.message).toHaveLength(513);
+      expect(result.failure?.message).toMatch(/^Individual quota reached\. D+…$/);
     });
 
     it("does not classify SUCCESS response containing quota prose as quota", async () => {
@@ -403,34 +398,24 @@ describe("Antigravity adapter", () => {
       const f = fixture();
       await expect(
         f.adapter.executeTurn(request({ task_envelope: "quota-response" }), gate(), () => {}),
-      ).rejects.toMatchObject({
-        code: "PROVIDER_PROTOCOL_ERROR",
-        executionStarted: true,
-        message:
-          "Individual quota reached. Please upgrade your subscription to increase your limits.",
-      });
+      ).resolves.toMatchObject({ native_outcome: "failed", failure: { code: "PROVIDER_EXECUTION_ERROR" },
+        agent_reported: { summary: "Individual quota reached. Please upgrade your subscription to increase your limits." } });
     });
 
-    it("keeps ordinary FAILED errors as PROVIDER_PROTOCOL_ERROR", async () => {
+    it("returns ordinary FAILED errors as PROVIDER_EXECUTION_ERROR", async () => {
       const f = fixture();
       await expect(
         f.adapter.executeTurn(request({ task_envelope: "stream-error" }), gate(), () => {}),
-      ).rejects.toMatchObject({
-        code: "PROVIDER_PROTOCOL_ERROR",
-        executionStarted: true,
-        message: "agy failure",
-      });
+      ).resolves.toMatchObject({ native_outcome: "failed", failure: { code: "PROVIDER_EXECUTION_ERROR", message: "agy failure" } });
     });
 
-    it("keeps generic nonzero-exit stderr as PROVIDER_PROTOCOL_ERROR", async () => {
+    it("returns generic nonzero-exit stderr as PROVIDER_EXECUTION_ERROR", async () => {
       const f = fixture();
       await expect(
         f.adapter.executeTurn(request({ task_envelope: "nonzero" }), gate(), () => {}),
-      ).rejects.toMatchObject({
-        code: "PROVIDER_PROTOCOL_ERROR",
-        executionStarted: true,
-        message: expect.stringContaining("native agy failure"),
-      });
+      ).resolves.toMatchObject({ native_outcome: "failed", failure: {
+        code: "PROVIDER_EXECUTION_ERROR", message: expect.stringContaining("native agy failure"),
+      } });
     });
   });
 });

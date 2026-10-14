@@ -8,7 +8,7 @@
  */
 import type { AgentRole, WorkspaceMode } from "../shared/api-types.ts";
 import type { Clock } from "../shared/clock.ts";
-import { BrokerError } from "../shared/errors.ts";
+import { BrokerError, type ErrorCode } from "../shared/errors.ts";
 import type { EffectiveWritePolicy } from "../core/policy.ts";
 import type { ProviderReadinessObservation } from "../providers/common/readiness.ts";
 
@@ -183,11 +183,20 @@ export function sanitizeAdapterEvent(
   }
 }
 
+/** Definitive current-turn provider failure, separate from any retained report. */
+export interface ProviderFailure {
+  code: ErrorCode;
+  message: string;
+  retry_after_ms?: number;
+}
+
 export interface TurnExecutionResult {
   native_outcome: NativeOutcome;
   /** Empty string = the provider exposes no session identity (print-first CLIs): the broker records NO native conversation and never claims native_resume. */
   native_conversation_ref: string;
   agent_reported?: AgentReportedResult;
+  /** Meaningful only when native_outcome is failed. */
+  failure?: ProviderFailure;
   malformed?: boolean;
 }
 

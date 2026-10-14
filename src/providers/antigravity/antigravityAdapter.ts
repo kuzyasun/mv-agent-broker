@@ -10,6 +10,7 @@ import type {
   AdapterEvent,
   DispatchGate,
   ProviderAdapter,
+  ProviderFailure,
   RuntimeObservation,
   TurnExecutionRequest,
   TurnExecutionResult,
@@ -26,7 +27,8 @@ import {
   type ProviderReadinessObservation,
 } from "../common/readiness.ts";
 import { BrokerError } from "../../shared/errors.ts";
-import { parseVendorResetMs } from "../../core/quotaCooldown.ts";
+import { classifyAntigravityFailure } from "./failureClassifier.ts";
+import { captureAntigravityConversation, readAntigravityTurnEvidence } from "./nativeTurnEvidence.ts";
 import {
   parseAntigravityStreamLine,
   summarizeAntigravityTurn,
@@ -54,19 +56,12 @@ export const ANTIGRAVITY_ENV_ALLOWLIST = [
 export interface AntigravityAdapterOptions {
   binary?: string;
   model?: string;
+  /** Optional native-store location; defaults to agy's per-user conversation directory. */
+  conversationsDir?: string;
 }
 
 const VALID_ANTIGRAVITY_EFFORTS = new Set(["low", "medium", "high", "max"]);
 const MAX_RETAINED_EVENTS = 10_000;
-
-/**
- * Observed vendor diagnostic "Individual quota reached. Please upgrade your
- * subscription … Resets in 54m59s." — matched conservatively at the START of a
- * nonempty explicit FAILED result.error only (optional whitespace/case).
- * Responses, stderr prose, other statuses, and arbitrary errors containing
- * quoted quota words are never quota-classified.
- */
-const ANTIGRAVITY_INDIVIDUAL_QUOTA_PREFIX = /^\s*individual quota reached\./i;
 
 /**
  * Observed `agy models` catalog ids (verified output scheme: "id\tName",
@@ -108,16 +103,18 @@ function agyProvenance(response: string | null, text: string): string | undefine
 
 export class AntigravityAdapter implements ProviderAdapter {
   readonly providerId = "antigravity";
-  readonly adapterVersion = "0.2.3";
+  readonly adapterVersion = "0.2.4";
 
   private readonly binary: string;
   private readonly defaultModel?: string;
+  private readonly conversationsDir?: string;
   private readonly turnPermissionAcquired = new Map<string, boolean>();
   private readonly readinessCache = new ReadinessObservationCache();
 
   constructor(opts: AntigravityAdapterOptions = {}) {
     this.binary = opts.binary ?? "agy";
     this.defaultModel = opts.model;
+    this.conversationsDir = opts.conversationsDir;
   }
 
   dispatchPermissionAcquired(turnId: string): boolean {
@@ -247,6 +244,12 @@ export class AntigravityAdapter implements ProviderAdapter {
       }
       args.push("-p", promptArg);
 
+      // Observe history before this launch, so an agy result cannot turn an old
+      // conversation error into a current error or a new quota pause.
+      const checkpoint = req.native_conversation_ref
+        ? captureAntigravityConversation(req.native_conversation_ref, this.conversationsDir)
+        : null;
+
       // Gate acquired after argument validation and prompt-file preparation
       gate.acquireDispatchPermission();
       const launchBinary = resolveBinaryPath(this.binary);
@@ -307,6 +310,13 @@ export class AntigravityAdapter implements ProviderAdapter {
           }
 
           switch (ev.kind) {
+            case "step": {
+              if (ev.stepType === "agent_response" && ev.text !== null) {
+                onEvent({ type: "progress", payload: { label: "status:text_delta" } });
+              }
+              noteNativeRef(ev.conversation_id);
+              break;
+            }
             case "text_delta": {
               // Discard raw text progress; retain only status labels.
               onEvent({ type: "progress", payload: { label: "status:text_delta" } });
@@ -337,78 +347,93 @@ export class AntigravityAdapter implements ProviderAdapter {
         executionUnknown = true;
         throw new BrokerError("EXECUTION_UNKNOWN", "Windows managed execution has no quiescence receipt.", { executionStarted: null });
       }
-      if (cliResult.outputLimited) {
-        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", `Antigravity output limit exceeded (${cliResult.outputLimitReason ?? "total"}).`, {
-          executionStarted: true,
-        });
-      }
       const summary = summarizeAntigravityTurn(events);
+      const nativeRef = summary.conversationId ?? req.native_conversation_ref ?? "";
+      const rawText = summary.response?.trim() ? summary.response : summary.text;
+      const report = (text: string, provenance?: string, concerns?: string[]) => text.trim()
+        ? boundAgentReport(text, { format_status: "text_only", provenance, concerns }) : undefined;
+      const failed = (failure: ProviderFailure, text = rawText): TurnExecutionResult => {
+        const agent_reported = report(text, eventsCapped ? "partial_projection" : "failed_turn_response");
+        return { native_outcome: "failed", native_conversation_ref: nativeRef, failure,
+          ...(agent_reported ? { agent_reported } : {}) };
+      };
 
-      // 5. Resolve or throw based on outcome.
+      if (summary.identityMismatch || (req.native_conversation_ref && nativeRef !== req.native_conversation_ref)) {
+        return failed({ code: "PROVIDER_PROTOCOL_ERROR", message: "Antigravity returned a different native conversation identity." }, "");
+      }
+      if (cliResult.outputLimited) {
+        return failed({ code: "PROVIDER_OUTPUT_LIMIT", message: `Antigravity output limit exceeded (${cliResult.outputLimitReason ?? "total"}).` });
+      }
+      // An explicit completion stands even if cancellation arrived afterwards.
+      if (summary.sawResult && summary.status === "SUCCESS") {
+        if (cliResult.exitCode !== 0) {
+          return failed({ code: "PROVIDER_EXECUTION_ERROR", message: `Antigravity exited with code ${cliResult.exitCode} after its result.` });
+        }
+        const provenance = eventsCapped ? "partial_projection" : agyProvenance(summary.response, summary.text);
+        return {
+          native_outcome: "completed", native_conversation_ref: nativeRef,
+          agent_reported: boundAgentReport(rawText || "antigravity turn complete", {
+            format_status: "text_only", ...(provenance ? { provenance } : {}),
+          }),
+        };
+      }
+
+      // Abort/deadline results cannot be corrected from an historical error.
+      if (cancelReason !== null || cliResult.timedOut || cliResult.killed) {
+        return failed({ code: "PROVIDER_EXECUTION_ERROR", message: cancelReason
+          ? `Antigravity cancelled: ${cancelReason}` : "Antigravity execution was interrupted before completion." });
+      }
+
       if (summary.sawResult) {
-        if (summary.status === "SUCCESS") {
-          const nativeRef = summary.conversationId ?? req.native_conversation_ref ?? "";
-          const rawText = (summary.response && summary.response.trim().length > 0)
-            ? summary.response
-            : summary.text;
-          const provenance = eventsCapped
-            ? "partial_projection"
-            : agyProvenance(summary.response, summary.text);
-          return {
-            native_outcome: "completed",
-            native_conversation_ref: nativeRef,
-            agent_reported: boundAgentReport(rawText || "antigravity turn complete", {
-              format_status: "text_only",
-              ...(provenance ? { provenance } : {}),
-            }),
-          };
+        if (summary.status !== "FAILED" && summary.status !== "ERROR") {
+          return failed({ code: "PROVIDER_PROTOCOL_ERROR", message: "Antigravity returned an unrecognized result status." });
         }
 
-        if (summary.status === "FAILED") {
-          if (summary.error !== null && ANTIGRAVITY_INDIVIDUAL_QUOTA_PREFIX.test(summary.error)) {
-            const detail = boundedSanitizedDetail(summary.error);
-            // Optional vendor reset suffix ("Resets in 54m59s.") is validated
-            // and surfaced as bounded retry_after_ms metadata; absence keeps
-            // the cooldown policy decision with the broker, not the vendor.
-            const vendorResetMs = parseVendorResetMs(detail);
-            throw new BrokerError("QUOTA_EXHAUSTED", detail, {
-              executionStarted: true,
-              ...(vendorResetMs !== null ? { details: { retry_after_ms: vendorResetMs } } : {}),
-            });
+        // New conversations have no earlier errors. A resumed conversation must
+        // instead attribute the diagnostic to steps created after its checkpoint.
+        if (!req.native_conversation_ref) return failed(classifyAntigravityFailure(summary.error));
+        const evidence = checkpoint ? readAntigravityTurnEvidence(nativeRef, checkpoint, this.conversationsDir) : null;
+        if (evidence && evidence.errors.length > 0) {
+          const currentError = summary.error && evidence.errors.includes(summary.error)
+            ? summary.error : evidence.errors.at(-1)!;
+          return failed(classifyAntigravityFailure(currentError), evidence.response ?? rawText);
+        }
+        const historical = !!summary.error && !!checkpoint?.errors.includes(summary.error);
+        if (historical && evidence && evidence.errors.length === 0 && evidence.completedResponse &&
+            evidence.response?.trim() && evidence.response === summary.response && cliResult.exitCode === 0 &&
+            (process.platform !== "win32" || cliResult.quiesced === true) &&
+            !eventsCapped && summary.currentUserStepIndex === evidence.userIndex) {
+          const last = summary.steps?.at(-1);
+          const latestSteps = new Map(summary.steps?.map(step => [step.index, step]));
+          const user = latestSteps.get(evidence.userIndex);
+          if (user?.stepType === "user_input" && user.state === "DONE" &&
+              [...latestSteps.values()].every(step => step.state === "DONE") &&
+              last?.stepType === "agent_response" && last.state === "DONE" && last.index === evidence.lastIndex &&
+              !summary.steps?.some(step => step.stepType === "error" || step.state === "ERROR" || step.state === "FAILED")) {
+            return {
+              native_outcome: "completed", native_conversation_ref: nativeRef,
+              agent_reported: report(evidence.response, "recovered_current_turn", ["Ignored a native error recorded before the current turn."]),
+            };
           }
-          const msg = summary.error || summary.response || "antigravity execution failed";
-          throw new BrokerError("PROVIDER_PROTOCOL_ERROR", boundedSanitizedDetail(msg), {
-            executionStarted: true,
-          });
         }
-
-        const msg = summary.error || summary.response || `antigravity turn ended with status: ${summary.status}`;
-        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", boundedSanitizedDetail(msg), {
-          executionStarted: true,
-        });
+        // No source binding means no inferred quota/current failure. Retain the
+        // answer for review without pretending this ambiguous result succeeded.
+        return failed({ code: "PROVIDER_RESULT_AMBIGUOUS", message: historical
+          ? "Antigravity repeated an historical error; current-turn completion could not be established."
+          : "Antigravity's resumed result error could not be attributed to the current turn." }, evidence?.response ?? rawText);
       }
 
       // !summary.sawResult:
-      if (cliResult.timedOut) {
-        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "antigravity timed out", {
-          executionStarted: true,
-        });
-      }
-
       if (cliResult.exitCode !== 0) {
         const msg = cliResult.stderrTail.trim().length > 0
           ? boundedSanitizedDetail(cliResult.stderrTail)
           : cancelReason
             ? `antigravity cancelled: ${cancelReason}`
             : `antigravity process exited with code ${cliResult.exitCode}`;
-        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", msg, {
-          executionStarted: true,
-        });
+        return failed({ code: "PROVIDER_EXECUTION_ERROR", message: msg });
       }
 
-      throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "stream closed without result", {
-        executionStarted: true,
-      });
+      return failed({ code: "PROVIDER_PROTOCOL_ERROR", message: "Antigravity stream closed without a result." });
     } catch (err) {
       if (err instanceof BrokerError && err.code === "EXECUTION_UNKNOWN") {
         executionUnknown = true;

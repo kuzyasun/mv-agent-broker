@@ -10,6 +10,28 @@ import { DaemonRpcClient } from "../../src/bridge/rpcClient.ts";
 import { startOperatorUi } from "../../src/operator/ui.ts";
 
 describe("operator turn error details", () => {
+  it.each([
+    ["PROVIDER_RESULT_AMBIGUOUS", "current turn", "fresh conversation"],
+    ["PROVIDER_STREAM_INTERRUPTED", "current turn", "retained response"],
+    ["PROVIDER_NETWORK_ERROR", "current turn", "retained response"],
+    ["PROVIDER_UNAVAILABLE", "current turn", "retained response"],
+    ["PROVIDER_OUTPUT_LIMIT", "budget", "shorter"],
+    ["PROVIDER_EXECUTION_ERROR", "execution failure", "retained response"],
+  ])("explains provider failure %s with its retained cause", async (code, explanation, nextStep) => {
+    const h = createHarness();
+    try {
+      const session = await h.spawnWorkerSession();
+      const turn = h.sendTask(session.session_id, "provider-detail");
+      h.db.raw.prepare("UPDATE turns SET state='FAILED',error_code=?,execution_started=1,termination_reason='normal' WHERE turn_id=?").run(code, turn.turn_id);
+      appendEvent(h.db, { turn_id: turn.turn_id, session_id: session.session_id, type: "turn_terminal", created_at: h.clock.now(), payload: { message: "Recorded provider cause" } });
+      const detail = projectOperatorTurnError(h.db, turn.turn_id)!;
+      expect(detail.error_code).toBe(code);
+      expect(detail.recorded_failure_message).toBe("Recorded provider cause");
+      expect(detail.guidance.explanation).toContain(explanation);
+      expect(detail.guidance.next_step).toContain(nextStep);
+    } finally { h.cleanup(); }
+  });
+
   it("returns the retained cause and observed flags while masking credentials and omitting private fields", async () => {
     const h = createHarness();
     try {
