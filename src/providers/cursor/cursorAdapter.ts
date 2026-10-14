@@ -34,6 +34,7 @@ import {
   type CursorStreamEvent,
 } from "./streamParser.ts";
 import { buildCursorReviewerConfig } from "./reviewerProfile.ts";
+import { isAllowedMacSystemSymlink, normalizeSystemPath, pathsEqual } from "../../shared/paths.ts";
 import {
   atomicWriteFile,
   buildReviewerHookPolicy,
@@ -76,8 +77,11 @@ export function cursorNativeChatStorePath(configDir: string, workspaceCwd: strin
   if (!/^[A-Za-z0-9_-]{1,256}$/.test(nativeConversationId)) {
     throw new BrokerError("SESSION_NOT_RESUMABLE", "Cursor native reference is not a safe opaque path component.", { executionStarted: false });
   }
-  const workspaceKey = createHash("md5").update(path.resolve(workspaceCwd)).digest("hex");
-  return path.join(configDir, "chats", workspaceKey, nativeConversationId, "store.db");
+  let resolvedCwd = path.resolve(workspaceCwd);
+  try { resolvedCwd = realpathSync(resolvedCwd); } catch {}
+  resolvedCwd = normalizeSystemPath(resolvedCwd);
+  const workspaceKey = createHash("md5").update(resolvedCwd).digest("hex");
+  return path.join(normalizeSystemPath(configDir), "chats", workspaceKey, nativeConversationId, "store.db");
 }
 
 /**
@@ -91,7 +95,7 @@ export function cursorNativeChatStorePath(configDir: string, workspaceCwd: strin
  * conversations); the last-resort temp fallback has no operator-owned layout,
  * so its limits stay unknown instead of guessed.
  */
-export const CURSOR_CHAT_STORE_PATH_BUDGET = 260;
+export const CURSOR_CHAT_STORE_PATH_BUDGET = process.platform === "win32" ? 260 : 1024;
 const CURSOR_CHAT_STORE_LONGEST_SIDECAR = "-journal";
 const NATIVE_WINDOWS_UUID_CHARS = 36;
 
@@ -109,8 +113,9 @@ export function cursorChatStorePathBudgetViolation(
   }
   const projected = storePath.length + CURSOR_CHAT_STORE_LONGEST_SIDECAR.length;
   if (projected <= CURSOR_CHAT_STORE_PATH_BUDGET) return null;
+  const platformLabel = process.platform === "win32" ? "conservative Windows" : "POSIX";
   return (
-    `Cursor private chat-store path exceeds the conservative Windows budget before dispatch: ` +
+    `Cursor private chat-store path exceeds the ${platformLabel} budget before dispatch: ` +
     `projected ${projected} chars (store ${storePath.length} + SQLite "${CURSOR_CHAT_STORE_LONGEST_SIDECAR}" sidecar) ` +
     `> ${CURSOR_CHAT_STORE_PATH_BUDGET} for ${storePath}. Shorten AB_STATE_DIR (the broker state directory) ` +
     `so the owned session config path fits; an oversized store verifiably fails with SQLITE_CANTOPEN. Refused before dispatch with zero inference (unsupported native path does not prove quota usage).`
@@ -191,29 +196,30 @@ export function resolveCursorModel(model: string, effort: string | null): string
 }
 
 function hasSafeNativeStore(storePath: string): boolean {
-  const root = path.parse(storePath).root;
+  const norm = normalizeSystemPath(storePath);
+  const root = path.parse(norm).root;
   let current = root;
-  const components = storePath.slice(root.length).split(path.sep).filter(Boolean);
+  const components = norm.slice(root.length).split(path.sep).filter(Boolean);
   for (const [index, component] of components.entries()) {
     current = path.join(current, component);
     const stat = lstatSync(current, { throwIfNoEntry: false });
-    if (!stat || stat.isSymbolicLink() || (index === components.length - 1 ? !stat.isFile() : !stat.isDirectory())) return false;
+    if (!stat || (stat.isSymbolicLink() && !isAllowedMacSystemSymlink(current)) || (index === components.length - 1 ? !stat.isFile() : !stat.isDirectory())) return false;
     const resolved = path.resolve(realpathSync(current));
-    if (process.platform === "win32" ? resolved.toLowerCase() !== current.toLowerCase() : resolved !== current) return false;
+    if (!pathsEqual(resolved, current)) return false;
   }
   return true;
 }
 
 /** Check every existing component before creating descendants or following links. */
 function ensurePrivateDirectory(directory: string): void {
-  const absolute = path.resolve(directory);
+  const absolute = normalizeSystemPath(directory);
   const root = path.parse(absolute).root;
   let current = root;
   try {
     for (const part of absolute.slice(root.length).split(path.sep).filter(Boolean)) {
       current = path.join(current, part);
       const stat = lstatSync(current, { throwIfNoEntry: false });
-      if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) {
+      if (stat && (!stat.isDirectory() || (stat.isSymbolicLink() && !isAllowedMacSystemSymlink(current)))) {
         throw new Error("Directory component is a link or is not a directory");
       }
       if (!stat) {
@@ -223,11 +229,9 @@ function ensurePrivateDirectory(directory: string): void {
         }
       }
       const fresh = lstatSync(current);
-      if (!fresh.isDirectory() || fresh.isSymbolicLink()) throw new Error("Unsafe directory after creation");
+      if (!fresh.isDirectory() || (fresh.isSymbolicLink() && !isAllowedMacSystemSymlink(current))) throw new Error("Unsafe directory after creation");
       const observed = path.resolve(realpathSync(current));
-      const same = process.platform === "win32"
-        ? observed.toLowerCase() === current.toLowerCase()
-        : observed === current;
+      const same = pathsEqual(observed, current);
       if (!same) throw new Error("Directory component resolves outside its expected path");
     }
   } catch {
@@ -357,8 +361,13 @@ export class CursorAdapter implements ProviderAdapter {
   ): Promise<TurnExecutionResult> {
     const requestSessionHash = createHash("sha256").update(req.session_id).digest("hex");
     const knownRoot = this.stateRoot ?? this.fallbackStateRoot;
-    if (this.sessionConfigOwners.has(requestSessionHash) || (knownRoot !== null && knownRoot !== undefined &&
-        lstatSync(path.join(path.resolve(knownRoot), "sessions", requestSessionHash, "unsettled-unknown"), { throwIfNoEntry: false }))) {
+    let isUnsettled = false;
+    if (knownRoot !== null && knownRoot !== undefined) {
+      try {
+        isUnsettled = !!lstatSync(path.join(path.resolve(knownRoot), "sessions", requestSessionHash, "unsettled-unknown"), { throwIfNoEntry: false });
+      } catch {}
+    }
+    if (this.sessionConfigOwners.has(requestSessionHash) || isUnsettled) {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", "Cursor session configuration is busy or execution is unsettled.", { executionStarted: false });
     }
     // Require an operator-selected model; historical defaults can disappear.
@@ -408,10 +417,19 @@ export class CursorAdapter implements ProviderAdapter {
           allow_read_only_git: allowReadOnlyGit,
         });
 
-        const stateRoot = path.resolve(this.stateRoot ??
-          (this.fallbackStateRoot ??= mkdtempSync(path.join(realpathSync(os.tmpdir()), "agent-broker-cursor-history-"))));
+        const stateRoot = path.resolve(normalizeSystemPath(this.stateRoot ??
+          (this.fallbackStateRoot ??= mkdtempSync(path.join(realpathSync(os.tmpdir()), "agent-broker-cursor-history-")))));
         const sessionHash = createHash("sha256").update(req.session_id).digest("hex");
         const sessionDir = path.join(stateRoot, "sessions", sessionHash);
+
+        stableConfigDir = path.join(sessionDir, "config");
+        const spawnCwd = req.workspace_path ?? process.cwd();
+        const budgetViolation = this.stateRoot !== undefined
+          ? cursorChatStorePathBudgetViolation(stableConfigDir, spawnCwd, req.native_conversation_ref)
+          : null;
+        if (budgetViolation !== null) {
+          throw new BrokerError("PROVIDER_INCOMPATIBLE", budgetViolation, { executionStarted: false });
+        }
 
         ensurePrivateDirectory(sessionDir);
 
@@ -420,7 +438,6 @@ export class CursorAdapter implements ProviderAdapter {
         const xdgConfigHome = path.join(sessionDir, "xdg-config");
         const xdgCacheHome = path.join(sessionDir, "xdg-cache");
         const xdgDataHome = dataDir;
-        stableConfigDir = path.join(sessionDir, "config");
         const turnsRoot = path.join(sessionDir, "turns");
 
         for (const directory of [homeDir, dataDir, xdgConfigHome, xdgCacheHome, stableConfigDir, turnsRoot]) {
@@ -455,18 +472,6 @@ export class CursorAdapter implements ProviderAdapter {
         turnPolicyDir = candidatePolicyDir;
         ensurePrivateDirectory(turnPolicyDir);
 
-        const spawnCwd = req.workspace_path ?? process.cwd();
-        // Before-gate budget for the operator-owned stateRoot layout: the
-        // chat-store path (native Windows UUID + SQLite journal sidecars)
-        // must fit the conservative Windows budget or the run is refused with
-        // a precise hint — inference is never consumed only to fail late
-        // with SQLITE_CANTOPEN.
-        const budgetViolation = this.stateRoot !== undefined
-          ? cursorChatStorePathBudgetViolation(stableConfigDir, spawnCwd, req.native_conversation_ref)
-          : null;
-        if (budgetViolation !== null) {
-          throw new BrokerError("PROVIDER_INCOMPATIBLE", budgetViolation, { executionStarted: false });
-        }
         if (req.native_conversation_ref !== null && req.native_conversation_ref !== undefined && req.native_conversation_ref.length > 0) {
           // Metadata-only availability: exact PROGRAM path contract, immutable cwd bytes, never read store contents.
           const storePath = cursorNativeChatStorePath(stableConfigDir, spawnCwd, req.native_conversation_ref);

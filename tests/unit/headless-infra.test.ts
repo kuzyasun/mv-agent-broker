@@ -250,14 +250,10 @@ describe("runHeadlessCli output bounds", () => {
       },
     );
     // Windows owned-job path surfaces the failed callback as a definite
-    // evidence failure after quiescence; POSIX resolves with a bounded result.
-    if (process.platform === "win32") {
-      await expect(run).rejects.toMatchObject({ code: "EVIDENCE_CAPTURE_FAILED" });
-    } else {
-      const result = await run;
-      expect(result.outputLimited).toBe(true);
-      expect(result.terminationReason).toBe("stream_callback_failed");
-    }
+    // evidence failure after quiescence; POSIX settles conservatively with EXECUTION_UNKNOWN.
+    await expect(run).rejects.toMatchObject({
+      code: process.platform === "win32" ? "EVIDENCE_CAPTURE_FAILED" : "EXECUTION_UNKNOWN",
+    });
     expect(deliveries).toBe(1); // never re-invoked for buffered lines
   }, 30_000);
 

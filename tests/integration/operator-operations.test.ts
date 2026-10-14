@@ -13,6 +13,7 @@ import { ID_PREFIX, newId } from "../../src/shared/ids.ts";
 import { extractRuntime } from "../../src/operator/operations.ts";
 import { packageContentDigest } from "../../src/operator/packageOrigin.ts";
 import { sha256Hex } from "../../src/shared/ids.ts";
+import { normalizeSystemPath } from "../../src/shared/paths.ts";
 
 const roots: string[] = [];
 
@@ -154,7 +155,7 @@ describe("operator runtime RPC", () => {
     roots.push(stateDir);
     const extracted = extractRuntime("HEAD", stateDir, path.join(stateDir, "operator.json"));
     expect(path.isAbsolute(extracted.record.runtime_path)).toBe(true);
-    expect(extracted.record.runtime_path.startsWith(path.join(stateDir, "runtimes"))).toBe(true);
+    expect(normalizeSystemPath(extracted.record.runtime_path).startsWith(normalizeSystemPath(path.join(stateDir, "runtimes")))).toBe(true);
     expect(extracted.manifest.files.some(file => file.path === "package.json")).toBe(true);
     const commit = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: process.cwd(),

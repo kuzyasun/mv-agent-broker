@@ -28,7 +28,7 @@ import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHarness } from "../helpers/harness.ts";
@@ -109,8 +109,14 @@ describe("Native feedback harness integration", () => {
     const root = mkdtempSync(path.join(tmpdir(), "ab-native-serve-"));
     const runtime = path.join(root, "runtime");
     const state = path.join(root, "state");
+    mkdirSync(state, { recursive: true });
     extractRuntime(process.cwd(), runtime, ACCEPTED_RUNTIME_SHA);
-    const env: NodeJS.ProcessEnv = { ...process.env, AB_ROLE: "daemon", AB_STATE_DIR: state, AB_COORDINATOR_ID: "startup-only" };
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      AB_ROLE: "daemon",
+      AB_STATE_DIR: process.platform === "darwin" ? realpathSync(state) : state,
+      AB_COORDINATOR_ID: "startup-only",
+    };
     delete env.AB_MOCK_FEEDBACK;
     const child = spawn(process.execPath, ["--experimental-transform-types", path.resolve("scripts/native-feedback.mjs"), "--serve", runtime], { cwd: runtime, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     const closed = once(child, "close");

@@ -200,8 +200,7 @@ if (prompt === 'sensitive-with-quota') {
 }
 
 if (prompt === 'output-cap') {
-  process.stdout.write('x'.repeat(1_100_000));
-  process.exit(0);
+  process.stdout.write('x'.repeat(1_100_000), () => process.exit(0));
 }
 `,
   );

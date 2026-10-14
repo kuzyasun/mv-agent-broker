@@ -146,18 +146,24 @@ function main() {
   const packOutput = runNpm(["pack", "--json", "--pack-destination", destination]);
   const workspaceManifest = JSON.parse(readFileSync(path.join(packageRoot, "runtime-manifest.json"), "utf8"));
   // Lifecycle script output (prepack) precedes the pretty-printed JSON array
-  // on stdout; parse everything from its opening bracket.
-  const jsonStart = packOutput.indexOf("\n[");
+  // or object on stdout; parse everything from its opening delimiter.
+  const candidates = [packOutput.indexOf("\n["), packOutput.indexOf("\n{")].filter(i => i !== -1);
+  const jsonStart = candidates.length > 0 ? Math.min(...candidates) : -1;
   let packed = null;
   try {
     packed = JSON.parse(jsonStart === -1 ? packOutput : packOutput.slice(jsonStart + 1));
   } catch {
     packed = null;
   }
-  if (!Array.isArray(packed) || !packed[0]?.filename) {
+  const records = Array.isArray(packed)
+    ? packed
+    : packed && typeof packed === "object"
+      ? Object.values(packed)
+      : [];
+  if (!records[0]?.filename) {
     throw new Error(`npm pack did not report a tarball filename:\n${packOutput}`);
   }
-  const tarballPath = path.join(destination, packed[0].filename);
+  const tarballPath = path.join(destination, records[0].filename);
   const entries = verifyTarballEntries(tarballPath);
   const manifest = verifyPackedManifest(tarballPath, workspaceManifest);
   process.stdout.write(`${JSON.stringify({

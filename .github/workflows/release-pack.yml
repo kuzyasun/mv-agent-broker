@@ -20,8 +20,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  windows-package:
-    runs-on: windows-latest
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +41,6 @@ jobs:
       - run: npm run release:pack
       - uses: actions/upload-artifact@v4
         with:
-          name: agent-broker-tarball
+          name: agent-broker-tarball-${{ matrix.os }}
           path: releases/*.tgz
           if-no-files-found: error

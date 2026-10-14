@@ -252,7 +252,8 @@ describe("cursor chat-store path budget", () => {
   });
 
   it("reports the precise violation with the shorter-AB_STATE_DIR hint over budget", () => {
-    const deepConfig = path.join(tempRoot("broker-budget-"), ...Array.from({ length: 4 }, () => "owned-segment-padding-0123456789"));
+    const segments = process.platform === "win32" ? 4 : 27;
+    const deepConfig = path.join(tempRoot("broker-budget-"), ...Array.from({ length: segments }, () => "owned-segment-padding-0123456789"));
     const violation = cursorChatStorePathBudgetViolation(deepConfig, "C:\\ws", null);
     expect(violation).toMatch(/AB_STATE_DIR/);
     expect(violation!).toContain(String(CURSOR_CHAT_STORE_PATH_BUDGET));
@@ -263,7 +264,8 @@ describe("cursor chat-store path budget", () => {
 
   it("refuses the owned stateRoot turn BEFORE the dispatch gate when over budget", async () => {
     const root = tempRoot("broker-cursor-budget-");
-    const stateRoot = path.join(root, ...Array.from({ length: 4 }, () => "owned-segment-padding-0123456789"));
+    const segments = process.platform === "win32" ? 4 : 24;
+    const stateRoot = path.join(root, ...Array.from({ length: segments }, () => "owned-segment-padding-0123456789"));
     const f = cursorFixture({ stateRoot });
     const gate = { count: 0, acquireDispatchPermission: () => { gate.count++; }, cancellationRequested: () => null };
     const error = await f.adapter.executeTurn({

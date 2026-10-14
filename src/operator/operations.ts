@@ -1,6 +1,7 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -17,6 +18,7 @@ import { readBridgeToken, socketPathFor } from "../daemon/rpc.ts";
 import { isStateDirectoryOwned } from "../daemon/lifecycle.ts";
 import { operatorConfigFingerprint, type OperatorConfig } from "./config.ts";
 import { sha256Hex } from "../shared/ids.ts";
+import { normalizeSystemPath, pathsEqual } from "../shared/paths.ts";
 import {
   PACKAGE_MANIFEST_NAME,
   extractPackageRuntime,
@@ -136,7 +138,8 @@ export function extractRuntime(
   configPath = process.cwd(),
 ): { record: RuntimeRecord; manifest: RuntimeManifest } {
   const repoRoot = repoRootFromSource();
-  const runtimeRoot = path.join(path.resolve(stateDir), "runtimes");
+  const normalizedStateDir = normalizeSystemPath(stateDir);
+  const runtimeRoot = path.join(path.resolve(normalizedStateDir), "runtimes");
   mkdirSync(runtimeRoot, { recursive: true });
   const runtimePath = path.join(runtimeRoot, `${Date.now()}-${randomUUID()}`);
   mkdirSync(runtimePath, { recursive: true });
@@ -199,7 +202,7 @@ function launchDaemon(runtimePath: string, configPath: string, stateDir: string)
     throw new Error(`Frozen runtime entrypoint is missing in '${runtimePath}'.`);
   }
   const logDir = path.join(runtimePath, "logs");
-  mkdirSync(logDir, { recursive: true });
+  mkdirSync(logDir, { recursive: true, mode: 0o700 });
   if (process.platform === "win32") {
     const launcher = path.join(path.dirname(entry.entryPath), "launchDaemon.ps1");
     const output = execFileSync(
@@ -220,16 +223,27 @@ function launchDaemon(runtimePath: string, configPath: string, stateDir: string)
     return { pid: parsed.pid, identity: parsed.creationDate };
   }
 
-  const stdout = openSync(path.join(logDir, "daemon.stdout.log"), "a");
-  const stderr = openSync(path.join(logDir, "daemon.stderr.log"), "a");
-  const child = spawn(
-    process.execPath,
-    [...entry.nodeArgs, entry.entryPath, "daemon", "--config", path.resolve(configPath)],
-    { cwd: runtimePath, detached: true, stdio: ["ignore", stdout, stderr], windowsHide: true },
-  );
+  const stdout = openSync(path.join(logDir, "daemon.stdout.log"), "a", 0o600);
+  const stderr = openSync(path.join(logDir, "daemon.stderr.log"), "a", 0o600);
+  let child: ChildProcess;
+  try {
+    child = spawn(
+      process.execPath,
+      [...entry.nodeArgs, entry.entryPath, "daemon", "--config", path.resolve(configPath)],
+      { cwd: runtimePath, detached: true, stdio: ["ignore", stdout, stderr], windowsHide: true },
+    );
+  } finally {
+    try { closeSync(stdout); } catch {}
+    try { closeSync(stderr); } catch {}
+  }
   child.unref();
   if (!child.pid) throw new Error("Daemon launcher did not return a PID.");
-  return { pid: child.pid, identity: `started:${Date.now()}`, child };
+  let identity = `started:${Date.now()}`;
+  try {
+    const lstart = execFileSync("ps", ["-p", String(child.pid), "-o", "lstart="], { encoding: "utf8", timeout: 1000 }).trim();
+    if (lstart) identity = lstart;
+  } catch {}
+  return { pid: child.pid, identity, child };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -505,7 +519,7 @@ async function waitForStopped(config: OperatorConfig): Promise<void> {
 }
 
 function sameRuntimePath(value: unknown, runtimePath: string): boolean {
-  return typeof value === "string" && path.resolve(value) === path.resolve(runtimePath);
+  return typeof value === "string" && pathsEqual(value, runtimePath);
 }
 
 export async function restartOperator(config: OperatorConfig, configPath: string): Promise<Record<string, unknown>> {
@@ -522,7 +536,7 @@ export async function restartOperator(config: OperatorConfig, configPath: string
   const runtimePath = path.resolve(record.runtime_path);
   const manifestPath = path.resolve(record.manifest_path);
   const savedConfigPath = path.resolve(configPath);
-  if (manifestPath !== path.join(runtimePath, PACKAGE_MANIFEST_NAME) || path.resolve(record.config_path) !== savedConfigPath) {
+  if (!pathsEqual(manifestPath, path.join(runtimePath, PACKAGE_MANIFEST_NAME)) || !pathsEqual(record.config_path, savedConfigPath)) {
     throw new Error("NO_ACCEPTED_RUNTIME: the accepted runtime record does not match its manifest and saved config; restart was not started.");
   }
   let manifestOrigin: RuntimeOrigin | null = null;

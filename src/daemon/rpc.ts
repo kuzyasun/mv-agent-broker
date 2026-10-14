@@ -15,6 +15,7 @@ import { getCoordinator } from "../storage/repo.ts";
 import { callBridgeTool, bridgeToolDefs } from "../bridge/tools.ts";
 import { BrokerError } from "../shared/errors.ts";
 import { sha256Hex } from "../shared/ids.ts";
+import { normalizeSystemPath } from "../shared/paths.ts";
 
 export interface DaemonRpcServer {
   readonly socketPath: string;
@@ -46,13 +47,22 @@ export interface DaemonRpcOptions {
 }
 
 export function socketPathFor(stateDir: string): string {
-  const resolved = path.resolve(stateDir);
+  const norm = normalizeSystemPath(stateDir);
+  const resolved = process.platform === "win32" || process.platform === "darwin"
+    ? norm.toLowerCase()
+    : norm;
   if (process.platform === "win32") {
-    const base = path.basename(resolved).replace(/[\\/]/g, "") || "state";
+    const base = path.basename(norm).replace(/[\\/]/g, "") || "state";
     const hash16 = sha256Hex(resolved).slice(0, 16);
     return `\\\\.\\pipe\\agent-broker-${base}-${hash16}`;
   }
-  return path.join(resolved, "daemon.sock");
+  const defaultPath = path.join(norm, "daemon.sock");
+  if (process.platform === "darwin" || defaultPath.length > 100) {
+    const uid = typeof process.getuid === "function" ? process.getuid() : "user";
+    const hash16 = sha256Hex(resolved).slice(0, 16);
+    return path.join("/tmp", `ab-${uid}-${hash16}.sock`);
+  }
+  return defaultPath;
 }
 
 export function writeBridgeToken(stateDir: string, token?: string): string {

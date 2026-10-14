@@ -33,13 +33,22 @@ helper scripts. Runtime installation has no npm dependencies.
 
 Create a configuration outside the installed package:
 
+**Windows (PowerShell)**:
 ```powershell
 $config = Join-Path $env:LOCALAPPDATA 'AgentBroker\operator.json'
 agent-broker init --config $config
 agent-broker ui --config $config
 ```
 
-Open **http://127.0.0.1:4318/**. Keep the UI terminal open. `init` creates an
+**macOS (zsh / bash)**:
+```bash
+config="$HOME/Library/Application Support/AgentBroker/operator.json"
+mkdir -p "$(dirname "$config")"
+agent-broker init --config "$config"
+agent-broker ui --config "$config"
+```
+
+Open **http://127.0.0.1:4318/**. Keep the UI terminal open (or use `./scripts/start-ui.sh --config "$config"` on macOS / `scripts/start-ui.ps1` on Windows). `init` creates an
 empty configuration and refuses to overwrite an existing file. The state
 folder is `agent-broker-state` beside that configuration.
 

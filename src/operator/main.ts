@@ -413,7 +413,9 @@ async function main(): Promise<void> {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+import { pathsEqual } from "../shared/paths.ts";
+
+if (process.argv[1] && pathsEqual(path.resolve(process.argv[1]), fileURLToPath(import.meta.url))) {
   void main().catch(error => {
     process.stderr.write(`agent-broker operator fatal: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

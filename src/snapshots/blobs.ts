@@ -40,7 +40,10 @@ function assertIds(projectId: string, hash: string): void {
   }
 }
 
-export function openBlobStore(rootDir: string): BlobStore {
+import { normalizeSystemPath } from "../shared/paths.ts";
+
+export function openBlobStore(rawRootDir: string): BlobStore {
+  const rootDir = normalizeSystemPath(rawRootDir);
   const blobPath = (projectId: string, hash: string): string => {
     assertIds(projectId, hash);
     return path.join(rootDir, projectId, hash.slice(0, 2), hash);

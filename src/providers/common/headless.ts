@@ -213,11 +213,15 @@ function envToPairs(env: NodeJS.ProcessEnv): string[] {
 }
 
 function killTree(child: ChildProcess): void {
-  if (child.pid === undefined || child.exitCode !== null) return;
+  if (!child.pid || child.pid <= 0) return;
+  const pid = child.pid;
   try {
-    child.kill("SIGKILL");
+    process.kill(-pid, "SIGTERM");
+    setTimeout(() => {
+      try { process.kill(-pid, "SIGKILL"); } catch {}
+    }, 500).unref();
   } catch {
-    /* already gone; this function is only used by the POSIX runner */
+    try { child.kill("SIGKILL"); } catch {}
   }
 }
 
@@ -228,9 +232,14 @@ function runHeadlessCliPosix(spec: HeadlessSpawnSpec, events: HeadlessCliEvents)
       cwd: spec.cwd,
       env: buildEnv(spec),
       stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
       windowsHide: true,
       windowsVerbatimArguments: windowsVerbatim,
     });
+
+    if (child.pid) {
+      events.onOwnershipEvent?.({ type: "owned_resumed", payload: { root_pid: child.pid } });
+    }
 
     let killed = false;
     let timedOut: HeadlessCliResult["timedOut"] = null;
@@ -306,6 +315,7 @@ function runHeadlessCliPosix(spec: HeadlessSpawnSpec, events: HeadlessCliEvents)
         reject(new BrokerError("EXECUTION_UNKNOWN", "Native stream callback failed; POSIX descendant quiescence is unproven.", { executionStarted: null }));
         return;
       }
+      events.onOwnershipEvent?.({ type: "owned_quiescence", payload: { op: "exit", exitCode } });
       resolve({
         exitCode,
         killed: killed || quota.overflowed,

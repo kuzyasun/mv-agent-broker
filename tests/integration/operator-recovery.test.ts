@@ -435,7 +435,7 @@ describe("offline operator workspace recovery", () => {
             db.raw.prepare("UPDATE intents SET payload = ? WHERE intent_id = ?").run(JSON.stringify(payload), f.provisionIntentId);
           } finally { db.close(); }
         },
-        expected: process.platform === "win32" ? /recorded provisioning process/ : /unavailable on this platform/,
+        expected: /recorded provisioning process/,
       },
     ] as const;
     for (const testCase of cases) {

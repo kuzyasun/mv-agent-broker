@@ -49,8 +49,10 @@ export interface InputViewStore {
   exists(turnId: string): boolean;
 }
 
+import { normalizeSystemPath } from "../shared/paths.ts";
+
 function assertOwnedDirectory(dir: string): void {
-  for (let current = path.resolve(dir);;) {
+  for (let current = normalizeSystemPath(dir);;) {
     let entry;
     try { entry = lstatSync(current); } catch { throw new Error("INPUT_VIEW_PATH_INVALID"); }
     if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error("INPUT_VIEW_PATH_INVALID");

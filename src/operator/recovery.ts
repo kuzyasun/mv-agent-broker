@@ -226,8 +226,23 @@ function diskDisposition(journal: WorktreeProvisionJournal): DiskDisposition {
 
 function probeRecordedProcesses(journal: WorktreeProvisionJournal): { available: boolean; alive: number[]; reason?: string } {
   if (!journal.launch) return { available: true, alive: [] };
-  if (process.platform !== "win32") return { available: false, alive: [], reason: "Windows process probe is unavailable on this platform." };
-  const pids = [journal.launch.root_pid, journal.launch.owner_pid, journal.launch.helper_pid];
+  const pids = [journal.launch.root_pid, journal.launch.owner_pid, journal.launch.helper_pid].filter(
+    (pid) => Number.isSafeInteger(pid) && pid > 0,
+  );
+  if (process.platform !== "win32") {
+    const alive: number[] = [];
+    for (const pid of [...new Set(pids)]) {
+      try {
+        process.kill(pid, 0);
+        alive.push(pid);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "EPERM") {
+          alive.push(pid);
+        }
+      }
+    }
+    return { available: true, alive };
+  }
   try {
     const filter = [...new Set(pids)].map(pid => `ProcessId = ${pid}`).join(" OR ");
     const output = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",

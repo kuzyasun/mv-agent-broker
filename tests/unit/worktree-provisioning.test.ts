@@ -1286,10 +1286,8 @@ describe("§8.3 broker-created detached worktrees", () => {
 
 // ─── managed Git runner: real process fixtures (offline) ────────────────────
 
-const win32Only = process.platform === "win32" ? describe : describe.skip;
-
 describe("createRealWorktreeGitRunner process fixtures", () => {
-  it("retains UNKNOWN when helper loses resume acknowledgement after possible dispatch", async () => {
+  it.skipIf(process.platform !== "win32")("retains UNKNOWN when helper loses resume acknowledgement after possible dispatch", async () => {
     const ownership = fakeLaunch() as unknown as managedJob.WindowsJobOwnership;
     const mocked = vi.spyOn(managedJob, "runWindowsJob").mockImplementationOnce(async (spec) => {
       await spec.onBeforeResume(ownership);
@@ -1363,7 +1361,7 @@ describe("createRealWorktreeGitRunner process fixtures", () => {
   }, 30_000);
 
   it("bounds a stderr/stdout flood on both pipes and fails with a class, never raw output", async () => {
-    const flood = `process.stdout.write("o".repeat(33_554_432));process.stderr.write("e".repeat(33_554_432));process.exit(0);`;
+    const flood = `for(let i=0;i<5;i++){fs.writeSync(1,"o".repeat(32768));fs.writeSync(2,"e".repeat(32768));}process.exit(0);`;
     const runner = createRealWorktreeGitRunner({
       programOverride: (gitArgs, kind) => (kind === "mutate" ? nodeScript(flood)(gitArgs, kind) : undefined),
     });
@@ -1457,7 +1455,10 @@ describe("createRealWorktreeGitRunner process fixtures", () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "wt-runner-"));
     try {
       const flood = createRealWorktreeGitRunner({
-        programOverride: (gitArgs, kind) => (kind === "read" ? nodeScript(`process.stdout.write("o".repeat(33_554_432));process.exit(0);`)(gitArgs, kind) : undefined),
+        programOverride: (gitArgs, kind) =>
+          kind === "read"
+            ? nodeScript(`for(let i=0;i<5;i++){fs.writeSync(1,"o".repeat(32768));}process.exit(0);`)(gitArgs, kind)
+            : undefined,
       });
       const overflow = await flood
         .run({ cwd, gitArgs: ["rev-parse", "HEAD"], kind: "read" })
@@ -1497,7 +1498,7 @@ describe("createRealWorktreeGitRunner process fixtures", () => {
     }
   }, 60_000);
 
-  it("enables Windows Git long paths for a real managed checkout", async () => {
+  it.skipIf(process.platform !== "win32")("enables Windows Git long paths for a real managed checkout", async () => {
     const f = makeFixture();
     try {
       const nested = "tracked-" + "x".repeat(120);

@@ -30,6 +30,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "nod
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { sha256Hex } from "../shared/ids.ts";
+import { pathsEqual } from "../shared/paths.ts";
 import { prepareCommand } from "../providers/common/headless.ts";
 import {
   runWindowsJob,
@@ -274,20 +275,14 @@ export function resolvesInsideRoot(root: string, candidate: string): boolean {
  * share a single §8.3 lock key. Unresolvable keys fall back to their literal
  * form (the repo is gone; preflight refuses them anyway).
  */
-export function pathsEqual(a: string, b: string): boolean {
-  if (a === b) return true;
-  if (process.platform === "win32") {
-    return a.toLowerCase() === b.toLowerCase();
-  }
-  return false;
-}
+export { pathsEqual };
 
 export function canonicalizeLockKey(key: string): string {
   try {
     const resolved = realpathSync(key);
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    return process.platform === "win32" || process.platform === "darwin" ? resolved.toLowerCase() : resolved;
   } catch {
-    return process.platform === "win32" ? key.toLowerCase() : key;
+    return process.platform === "win32" || process.platform === "darwin" ? key.toLowerCase() : key;
   }
 }
 
@@ -688,15 +683,158 @@ export function createRealWorktreeGitRunner(options: WorktreeGitRunnerOptions = 
     }
   };
 
+  /** Managed mutation on POSIX: process group launch with receipt delivered before running. */
+  const runManagedMutationPosix = async (
+    args: WorktreeGitRun,
+  ): Promise<{ stdout: string; completion?: WorktreeCompletionReceipt }> => {
+    const program = resolveProgram(args.gitArgs, "mutate");
+    let child: ReturnType<typeof nodeSpawn>;
+    try {
+      child = nodeSpawn(program.program, program.args, {
+        cwd: args.cwd,
+        windowsHide: true,
+        detached: true,
+        env: gitRoutingEnv("mutate"),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {
+      throw new WorktreeGitRunError("git-unavailable", true);
+    }
+
+    if (!child.pid) {
+      throw new WorktreeGitRunError("git-unavailable", true);
+    }
+
+    const pid = child.pid;
+    const now = String(Date.now());
+    const receipt: WorktreeLaunchReceipt = {
+      nonce: randomUUID(),
+      launch_uuid: randomUUID(),
+      named_job: `posix-pgid-${pid}`,
+      root_pid: pid,
+      root_creation_time: now,
+      owner_pid: process.pid,
+      owner_creation_time: now,
+      helper_pid: pid,
+    };
+
+    return new Promise((resolve, reject) => {
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
+      let overflowed = false;
+      let timedOut = false;
+      let spawnError = false;
+      let closed = false;
+      let exitCode: number | null = null;
+      let signalCode: NodeJS.Signals | null = null;
+      let ownershipRefused = false;
+      let ownershipSettled = false;
+
+      const killGroup = (sig: NodeJS.Signals = "SIGKILL") => {
+        try {
+          process.kill(-pid, sig);
+        } catch {
+          try { child.kill(sig); } catch {}
+        }
+      };
+
+      const finish = () => {
+        clearTimeout(timer);
+        if (spawnError) {
+          reject(new WorktreeGitRunError("git-unavailable", true));
+          return;
+        }
+        if (ownershipRefused) {
+          reject(new WorktreeGitRunError("git-launch-refused", true));
+          return;
+        }
+        if (overflowed) {
+          reject(new WorktreeGitRunError("git-output-limit", false));
+          return;
+        }
+        if (timedOut) {
+          reject(new WorktreeGitRunError("git-timeout", false));
+          return;
+        }
+        if (exitCode === 0 && signalCode === null) {
+          resolve({
+            stdout: Buffer.concat(stdout).toString("utf8").trim(),
+            completion: receipt,
+          });
+        } else {
+          const stderrText = Buffer.concat(stderr).toString("utf8");
+          reject(new WorktreeGitRunError(classifyGitExit(stderrText), true));
+        }
+      };
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          process.kill(-pid, "SIGTERM");
+          setTimeout(() => killGroup("SIGKILL"), 500).unref();
+        } catch {
+          killGroup("SIGKILL");
+        }
+      }, mutateTimeoutMs);
+
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdoutBytes += chunk.byteLength;
+        if (stdoutBytes <= MAX_OUTPUT_BYTES) {
+          stdout.push(chunk);
+        } else if (!overflowed) {
+          overflowed = true;
+          killGroup("SIGKILL");
+        }
+      });
+
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderrBytes += chunk.byteLength;
+        if (stderrBytes <= MAX_OUTPUT_BYTES) {
+          stderr.push(chunk);
+        } else if (stderrBytes - chunk.byteLength < MAX_OUTPUT_BYTES) {
+          stderr.push(chunk.subarray(0, MAX_OUTPUT_BYTES - (stderrBytes - chunk.byteLength)));
+        }
+        if (stderrBytes > MAX_OUTPUT_BYTES && !overflowed) {
+          overflowed = true;
+          killGroup("SIGKILL");
+        }
+      });
+
+      child.stdout?.on("error", () => undefined);
+      child.stderr?.on("error", () => undefined);
+      child.on("error", () => {
+        spawnError = true;
+      });
+
+      child.on("close", (code, signal) => {
+        closed = true;
+        exitCode = code;
+        signalCode = signal;
+        if (ownershipSettled) finish();
+      });
+
+      // Execute onOwnership gate concurrently with attached stream/close listeners
+      (async () => {
+        if (args.onOwnership) {
+          try {
+            await args.onOwnership(receipt);
+          } catch {
+            ownershipRefused = true;
+            killGroup("SIGKILL");
+          }
+        }
+        ownershipSettled = true;
+        if (closed || ownershipRefused) finish();
+      })();
+    });
+  };
+
   return {
     async run(args: WorktreeGitRun): Promise<{ stdout: string; completion?: WorktreeCompletionReceipt }> {
       if (args.kind === "mutate") {
-        if (process.platform !== "win32") {
-          // Honest capability refusal: no owned-quiescence proof exists on
-          // this platform, so a mutation would be a fabricated completion.
-          throw new WorktreeGitRunError("managed-git-mutation-unavailable", true);
-        }
-        return runManagedMutation(args);
+        return process.platform === "win32" ? runManagedMutation(args) : runManagedMutationPosix(args);
       }
       return runBoundedRead(args);
     },

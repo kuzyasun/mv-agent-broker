@@ -24,10 +24,20 @@ async function boundedClose(child, closed, requestStop = true) {
     return await Promise.race([closed.then(value => value !== false, () => false), new Promise(r => { timer=setTimeout(() => r(false),4000); })]);
   } finally { clearTimeout(timer); }
 }
+function isAllowedMacSystemSymlink(p) {
+  if (process.platform !== 'darwin') return false;
+  const resolved = path.resolve(p);
+  return resolved === '/var' || resolved === '/tmp' || resolved === '/etc';
+}
+
 function assertNoLinkAncestors(target) {
   let current = path.resolve(target);
   for (;;) {
-    try { if (lstatSync(current).isSymbolicLink()) throw new Error('Refusing symlink ancestor.'); }
+    try {
+      if (lstatSync(current).isSymbolicLink() && !isAllowedMacSystemSymlink(current)) {
+        throw new Error('Refusing symlink ancestor.');
+      }
+    }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     const parent = path.dirname(current);
     if (current === parent) break;
@@ -35,7 +45,7 @@ function assertNoLinkAncestors(target) {
   }
 }
 
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -998,7 +1008,7 @@ export async function runNativeFeedback(taskConfig = {}) {
   // Environment setup: strip Claude and Codex credentials and binaries
   const env = {
     ...process.env,
-    AB_STATE_DIR: state,
+    AB_STATE_DIR: process.platform === 'darwin' ? realpathSync(state) : state,
     AB_COORDINATOR_ID: 'self-coordinator',
     AB_ROLE: 'daemon',
     NODE_PATH: path.join(repoRoot, 'node_modules'),

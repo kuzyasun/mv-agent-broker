@@ -199,6 +199,8 @@ function writeJsonAtomically(filePath: string, value: unknown): void {
  * the frozen copy keeps the same manifest, so restart identity survives
  * replacement or removal of the installed package.
  */
+import { normalizeSystemPath } from "../shared/paths.ts";
+
 export function extractPackageRuntime(
   packageRoot: string,
   stateDir: string,
@@ -210,7 +212,7 @@ export function extractPackageRuntime(
       `INSTALLED_PACKAGE_INVALID: '${PACKAGE_MANIFEST_NAME}' is missing or failed verification in '${packageRoot}'.`,
     );
   }
-  const runtimeRoot = path.join(path.resolve(stateDir), "runtimes");
+  const runtimeRoot = path.join(path.resolve(normalizeSystemPath(stateDir)), "runtimes");
   mkdirSync(runtimeRoot, { recursive: true });
   const runtimePath = path.join(runtimeRoot, `${Date.now()}-${randomUUID()}`);
   mkdirSync(runtimePath, { recursive: true });

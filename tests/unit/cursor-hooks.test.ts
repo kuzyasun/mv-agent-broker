@@ -592,7 +592,7 @@ describe("Cursor Reviewer trusted preToolUse hook", () => {
     const resAllow = spawnSync(command, {
       input: JSON.stringify(readPayload("Read", { file_path: path.join(env.workspace, "index.ts") }, "call-e2e-allow")),
       encoding: "utf8",
-      shell: process.platform === "win32",
+      shell: true,
       windowsHide: true,
     });
     expect(JSON.parse(resAllow.stdout.trim())).toEqual({ permission: "allow" });
@@ -600,7 +600,7 @@ describe("Cursor Reviewer trusted preToolUse hook", () => {
     const resDeny = spawnSync(command, {
       input: JSON.stringify(readPayload("Read", { file_path: path.join(env.homeDir, "native-history.json") }, "call-e2e-deny")),
       encoding: "utf8",
-      shell: process.platform === "win32",
+      shell: true,
       windowsHide: true,
     });
     expect(JSON.parse(resDeny.stdout.trim()).permission).toBe("deny");
@@ -614,7 +614,7 @@ describe("Cursor Reviewer trusted preToolUse hook", () => {
       expect(selected).toHaveLength(1);
       const denied = spawnSync(selected[0].command, {
         input: JSON.stringify(readPayload(toolName, {})), encoding: "utf8",
-        shell: process.platform === "win32", windowsHide: true,
+        shell: true, windowsHide: true,
       });
       expect(JSON.parse(denied.stdout.trim()).permission).toBe("deny");
     }

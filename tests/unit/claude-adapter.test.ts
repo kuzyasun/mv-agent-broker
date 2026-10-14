@@ -1,6 +1,6 @@
 /** Fake native processes only; no Claude requests or quota use. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ClaudeAdapter } from "../../src/providers/claude/claudeAdapter.ts";
@@ -14,7 +14,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function fixture() {
-  const root = mkdtempSync(path.join(os.tmpdir(), "broker-claude-test-")); roots.push(root);
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "broker-claude-test-"))); roots.push(root);
   const script = path.join(root, "fake.cjs"); const sentinel = path.join(root, "launched.txt");
   writeFileSync(script, `
 const fs = require('fs');

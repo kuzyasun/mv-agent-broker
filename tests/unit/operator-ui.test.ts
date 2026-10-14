@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -149,7 +149,7 @@ describe("operator settings UI service", () => {
   });
 
   it("lists one authenticated folder level without exposing file contents", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "operator-ui-folders-"));
+    const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "operator-ui-folders-")));
     roots.push(root);
     const child = path.join(root, "child");
     mkdirSync(child);

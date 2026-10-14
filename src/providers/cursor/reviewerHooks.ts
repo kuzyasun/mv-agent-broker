@@ -13,6 +13,7 @@ import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { BrokerError } from "../../shared/errors.ts";
+import { isAllowedMacSystemSymlink, normalizeSystemPath, pathsEqual } from "../../shared/paths.ts";
 import { validateCanonicalPath } from "./reviewerProfile.ts";
 
 /**
@@ -152,7 +153,7 @@ export function canonicalizeExistingPath(rawPath: unknown, fieldName: string): s
   if (!stat) {
     throw new BrokerError("POLICY_UNSUPPORTED", `${fieldName} does not exist: ${validated}`, { executionStarted: false });
   }
-  if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) {
+  if ((stat.isSymbolicLink() && !isAllowedMacSystemSymlink(validated)) || (!stat.isFile() && !stat.isDirectory())) {
     throw new BrokerError("POLICY_UNSUPPORTED", `${fieldName} is a symlink or unsupported file type: ${validated}`, { executionStarted: false });
   }
   try {
@@ -172,13 +173,13 @@ function canonicalizeAuditLogPath(rawPath: string, fieldName: string): string {
   const resolved = path.resolve(validated);
   const parent = path.dirname(resolved);
   const parentStat = lstatSync(parent, { throwIfNoEntry: false });
-  if (!parentStat || !parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+  if (!parentStat || !parentStat.isDirectory() || (parentStat.isSymbolicLink() && !isAllowedMacSystemSymlink(parent))) {
     throw new BrokerError("POLICY_UNSUPPORTED", `${fieldName} parent directory does not exist or contains a link: ${parent}`, { executionStarted: false });
   }
   const realParent = path.resolve(realpathSync(parent));
   const canonical = path.join(realParent, path.basename(resolved));
   const stat = lstatSync(canonical, { throwIfNoEntry: false });
-  if (stat && (stat.isSymbolicLink() || !stat.isFile())) {
+  if (stat && ((stat.isSymbolicLink() && !isAllowedMacSystemSymlink(canonical)) || !stat.isFile())) {
     throw new BrokerError("POLICY_UNSUPPORTED", `${fieldName} exists but is a symlink or unsupported file type: ${canonical}`, { executionStarted: false });
   }
   return canonical;
@@ -251,13 +252,13 @@ function assertSafeCommandPath(p: string, fieldName: string): void {
  * creation.
  */
 function ensurePrivateDirectory(directory: string, fieldName: string): void {
-  const absolute = path.resolve(directory);
+  const absolute = normalizeSystemPath(directory);
   const root = path.parse(absolute).root;
   let current = root;
   for (const part of absolute.slice(root.length).split(path.sep).filter(Boolean)) {
     current = path.join(current, part);
     const stat = lstatSync(current, { throwIfNoEntry: false });
-    if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) {
+    if (stat && (!stat.isDirectory() || (stat.isSymbolicLink() && !isAllowedMacSystemSymlink(current)))) {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", `${fieldName} component is a link or is not a directory.`, { executionStarted: false });
     }
     if (!stat) {
@@ -270,16 +271,14 @@ function ensurePrivateDirectory(directory: string, fieldName: string): void {
       }
     }
     const fresh = lstatSync(current);
-    if (!fresh.isDirectory() || fresh.isSymbolicLink()) {
+    if (!fresh.isDirectory() || (fresh.isSymbolicLink() && !isAllowedMacSystemSymlink(current))) {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", `${fieldName} component is unsafe after creation.`, { executionStarted: false });
     }
     // The filesystem's own identity for this component must match the path we
-    // created (case-insensitively on Windows) — catches link and aliasing
+    // created (case-insensitively on Windows/macOS) — catches link and aliasing
     // tricks where the component resolves somewhere else entirely.
     const observed = path.resolve(realpathSync(current));
-    const same = process.platform === "win32"
-      ? observed.toLowerCase() === current.toLowerCase()
-      : observed === current;
+    const same = pathsEqual(observed, current);
     if (!same) {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", `${fieldName} component resolves outside its expected path.`, { executionStarted: false });
     }

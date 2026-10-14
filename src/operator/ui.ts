@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { closeSync, chmodSync, existsSync, lstatSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { readdir as readdirAsync, realpath as realpathAsync, stat as statAsync } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DaemonRpcError } from "../bridge/rpcClient.ts";
@@ -183,7 +184,14 @@ function expectedOrigin(port: number): string {
 }
 
 function folderRoots(): string[] {
-  if (process.platform !== "win32") return [path.parse(path.resolve("/")).root];
+  if (process.platform !== "win32") {
+    const root = path.parse(path.resolve("/")).root;
+    const home = os.homedir();
+    if (home && home !== root && existsSync(home)) {
+      return [home, root];
+    }
+    return [root];
+  }
   const roots: string[] = [];
   for (let code = 65; code <= 90; code += 1) {
     const root = `${String.fromCharCode(code)}:\\`;

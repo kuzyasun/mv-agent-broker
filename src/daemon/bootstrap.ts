@@ -53,10 +53,13 @@ export interface DaemonEnv {
   configuredWorkspaceIds?: ReadonlySet<string>;
 }
 
+import { normalizeSystemPath } from "../shared/paths.ts";
+
 function assertDirectoryAncestors(directory: string): void {
-  const root = path.parse(directory).root;
+  const normalized = normalizeSystemPath(directory);
+  const root = path.parse(normalized).root;
   let current = root;
-  for (const segment of directory.slice(root.length).split(path.sep).filter(Boolean)) {
+  for (const segment of normalized.slice(root.length).split(path.sep).filter(Boolean)) {
     current = path.join(current, segment);
     const stat = lstatSync(current, { throwIfNoEntry: false });
     if (!stat) return;

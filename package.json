@@ -34,6 +34,7 @@
     "docs/git-review-plan.md",
     "docs/examples",
     "scripts/start-ui.ps1",
+    "scripts/start-ui.sh",
     "runtime-manifest.json"
   ],
   "scripts": {

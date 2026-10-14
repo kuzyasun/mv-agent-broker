@@ -2,7 +2,7 @@ import { isStateDirectoryOwned } from "../../src/daemon/lifecycle.ts";
 import { beforeAll, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -168,9 +168,9 @@ describe("installed package lifecycle", () => {
   // Pack, install to an isolated prefix, then run the CLI lifecycle with a
   // mock-free empty config: no Git checkout and no inference involved.
   it("packs, installs to an isolated prefix, and runs init/validate/start/status/stop without the Git checkout", async () => {
-    const destination = mkdtempSync(path.join(os.tmpdir(), "broker-inst-dest-"));
-    const prefix = mkdtempSync(path.join(os.tmpdir(), "broker install prefix-"));
-    const work = mkdtempSync(path.join(os.tmpdir(), "broker install work-"));
+    const destination = realpathSync(mkdtempSync(path.join(os.tmpdir(), "broker-inst-dest-")));
+    const prefix = realpathSync(mkdtempSync(path.join(os.tmpdir(), "broker install prefix-")));
+    const work = realpathSync(mkdtempSync(path.join(os.tmpdir(), "broker install work-")));
     const roots = [destination, prefix, work];
     const cleanup = () => {
       for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 3 });

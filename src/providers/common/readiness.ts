@@ -202,6 +202,27 @@ export function resolveBinaryPath(binary: string, customPath?: string): string |
         return path.resolve(whereResolved);
       }
     }
+  } else if (customPath === undefined) {
+    const home = process.env.HOME ?? "";
+    const standardDirs = [
+      "/usr/local/bin",
+      "/opt/homebrew/bin",
+      "/usr/bin",
+      "/bin",
+      home ? path.join(home, ".local", "bin") : "",
+      home ? path.join(home, ".antigravity", "bin") : "",
+    ].filter(Boolean);
+    for (const dir of standardDirs) {
+      if (dirs.includes(dir)) continue;
+      const candidate = path.join(dir, binary);
+      if (existsSync(candidate)) {
+        try {
+          return realpathSync(candidate);
+        } catch {
+          return path.resolve(candidate);
+        }
+      }
+    }
   }
   return null;
 }
@@ -256,9 +277,18 @@ export function fingerprintBinaryTarget(resolvedPath: string): LaunchedBinaryFin
     interpreter=identity(path.join(programDir,"node.exe"));
     runtimeTarget=identity(path.join(programDir,"index.js"));
   } else if (process.platform !== "win32" && header.startsWith("#!")) {
-    const shebang=header.split(/\r?\n/)[0]!.slice(2).trim();
-    // Only exact absolute interpreter with no optional arguments is resolved.
-    if (path.isAbsolute(shebang) && !/\s/.test(shebang)) interpreter=identity(shebang);
+    const shebang = header.split(/\r?\n/)[0]!.slice(2).trim();
+    if (path.isAbsolute(shebang) && !/\s/.test(shebang)) {
+      try { interpreter = identity(shebang); } catch {}
+    } else if (shebang.startsWith("/usr/bin/env ")) {
+      const tool = shebang.slice("/usr/bin/env ".length).trim();
+      if (!/\s/.test(tool)) {
+        const resolvedTool = resolveBinaryPath(tool);
+        if (resolvedTool) {
+          try { interpreter = identity(resolvedTool); } catch {}
+        }
+      }
+    }
   }
   return {canonical_path:canonical,file_bytes_sha256:fileHash,wrapper_kind:wrapperKind,shell_identity:shellIdentity,shell_file_bytes_sha256:shellIdentity?hashFileBounded(shellIdentity):null,interpreter_identity:interpreter,runtime_target:runtimeTarget};
 }

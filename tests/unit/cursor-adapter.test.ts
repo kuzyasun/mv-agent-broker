@@ -1,6 +1,6 @@
 /** Fake process tests only; no Cursor requests or quota use. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -16,7 +16,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function fixture() {
-  const root = mkdtempSync(path.join(os.tmpdir(), "broker-cursor-test-")); roots.push(root);
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "broker-cursor-test-"))); roots.push(root);
   const script = path.join(root, "fake.cjs");
   const sentinel = path.join(root, "launched.txt");
   writeFileSync(script, `

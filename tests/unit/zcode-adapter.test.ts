@@ -1,6 +1,6 @@
 /** Process-level adapter checks use a fake Node CLI; no provider inference. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ZcodeAdapter } from "../../src/providers/zcode/zcodeAdapter.ts";
@@ -11,7 +11,7 @@ import type { AdapterEvent, TurnExecutionRequest } from "../../src/runtime/adapt
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture() {
-  const root = mkdtempSync(path.join(os.tmpdir(), "broker-zcode-test-")); roots.push(root);
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "broker-zcode-test-"))); roots.push(root);
   const bundle = path.join(root, "fake.cjs");
   const builtin = path.join(root, "zcode-builtin.json");
   writeFileSync(builtin, JSON.stringify({ schemaVersion: 1, config: {
