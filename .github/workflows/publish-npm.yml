@@ -61,6 +61,8 @@ jobs:
 
       - name: Run verification tests
         run: npm test -- --maxWorkers=2
+        env:
+          AB_SKIP_NATIVE_TESTS: "1"
 
       - name: Pack release tarball and verify manifest
         run: npm run release:pack

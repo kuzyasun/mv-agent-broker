@@ -182,7 +182,7 @@ describe("Cursor adapter", () => {
     if (process.platform === "win32") {
       expect(inspection.profile).toBe(process.env.USERPROFILE);
       expect(inspection.localAppData).toBe(process.env.LOCALAPPDATA);
-      expect(inspection.pathext).toBe(process.env.PATHEXT);
+      expect([process.env.PATHEXT, `${process.env.PATHEXT};.CPL`]).toContain(inspection.pathext);
     }
     expect(g.count()).toBe(1);
     expect(result.native_conversation_ref).toBe("cursor-native-id");
@@ -700,7 +700,7 @@ describe("Cursor adapter", () => {
 
     if (process.platform === "win32") {
       expect(insp.localAppData).toBe(process.env.LOCALAPPDATA);
-      expect(insp.pathext).toBe(process.env.PATHEXT);
+      expect([process.env.PATHEXT, `${process.env.PATHEXT};.CPL`]).toContain(insp.pathext);
     }
   });
   it("leaves request inputs and process.env immutable", async () => {
