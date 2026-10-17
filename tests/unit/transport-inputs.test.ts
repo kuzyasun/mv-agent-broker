@@ -70,7 +70,8 @@ process.stdout.write(JSON.stringify(result) + '\\n');
 }
 
 describe("normative complete envelope transport (§7.1.1, §13.2, §15.1)", () => {
-  it("reviewer diff 3..12KiB becomes path when inline would exceed 6000, all tail bytes retrievable and proper exact readonly grants", async () => {
+  // Executes a fake zcode bundle through the PowerShell job-object helper: developer machine only.
+  it.skipIf(process.env.AB_SKIP_NATIVE_TESTS === "1")("reviewer diff 3..12KiB becomes path when inline would exceed 6000, all tail bytes retrievable and proper exact readonly grants", async () => {
     const h = createHarness();
     try {
       const { bundle, builtin } = createFakeZcodeBundle();

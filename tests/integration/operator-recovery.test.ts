@@ -334,7 +334,8 @@ describe("offline operator workspace recovery", () => {
     }
   });
 
-  it.skipIf(process.platform !== "win32")("releases the observed launched Git failure after all old PIDs are absent, with no inference", async () => {
+  // Depends on the Windows process probe (PowerShell/WMI), which is unreliable on CI runners: developer machine only.
+  it.skipIf(process.platform !== "win32" || process.env.AB_SKIP_NATIVE_TESTS === "1")("releases the observed launched Git failure after all old PIDs are absent, with no inference", async () => {
     const f = makeFixture(true);
     const beforeIntents = rows(path.join(f.stateDir, "registry.sqlite"), "intents");
     const result = await reconcileWorkspace({ stateDir: f.stateDir, workspaceId: f.workspaceId,

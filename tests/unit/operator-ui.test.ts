@@ -177,9 +177,9 @@ describe("operator settings UI service", () => {
       entries: Array<{ name: string; kind: string }>;
       roots: string[];
     };
-    expect(listing.path).toBe(realpathSync(path.resolve(root)));
-    expect(listing.parent).toBe(realpathSync(path.dirname(path.resolve(root))));
-    expect(listing.directories).toEqual([{ name: "child", path: realpathSync(path.resolve(child)) }]);
+    expect(listing.path).toBe(realpathSync.native(path.resolve(root)));
+    expect(listing.parent).toBe(realpathSync.native(path.dirname(path.resolve(root))));
+    expect(listing.directories).toEqual([{ name: "child", path: realpathSync.native(path.resolve(child)) }]);
     expect(listing.entries).toEqual([
       { name: "child", kind: "directory" },
       { name: "operator.json", kind: "file" },
