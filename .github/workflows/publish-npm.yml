@@ -68,6 +68,4 @@ jobs:
         run: npm run release:pack
 
       - name: Publish with npm Trusted Publishing
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm run release:publish -- --yes
