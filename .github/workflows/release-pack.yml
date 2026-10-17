@@ -8,7 +8,7 @@ name: packaging
 # claims registry credentials.
 on:
   push:
-    branches: [master]
+    branches: [master, ci-test-split]
   pull_request:
   workflow_dispatch:
 
