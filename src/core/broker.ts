@@ -36,6 +36,7 @@ import {
   latestCoverageProfileVersion,
   listSessionsByOwner,
   listEventsByTurn,
+  lastProviderEventAt,
   listPendingIntents,
   releaseReservation,
   releasePin,
@@ -2986,6 +2987,27 @@ export class BrokerCore {
 
   turnStatus(coordinatorId: string, turnId: string): TurnRecord {
     return this.authorizeTurn(coordinatorId, turnId);
+  }
+
+  /** Ephemeral poll receipt: no synthetic progress, journal writes or timers. */
+  turnHeartbeat(coordinatorId: string, turnId: string) {
+    const turn = this.authorizeTurn(coordinatorId, turnId);
+    const observedAt = this.clock.now();
+    const terminal = isTerminalTurnState(turn.state);
+    const supervised = !terminal && turn.state !== "UNKNOWN" && (this.executor?.isSupervising(turnId) ?? false);
+    const nextAction = terminal ? "read_result"
+      : turn.state === "UNKNOWN" || (turn.deadline_at !== null && observedAt >= turn.deadline_at) || (!supervised && turn.state !== "ACCEPTED") ? "inspect"
+      : "wait";
+    return {
+      source: "broker" as const,
+      observed_at: observedAt,
+      state: turn.state,
+      execution_started: turn.execution_started,
+      supervised,
+      last_provider_event_at: lastProviderEventAt(this.db, turnId),
+      deadline_at: turn.deadline_at,
+      next_action: nextAction,
+    };
   }
 
   turnAgentReported(coordinatorId: string, turnId: string) {

@@ -308,7 +308,7 @@ describe("Antigravity stream parser", () => {
     it("initializes with default binary and version", () => {
       const adapter = new AntigravityAdapter();
       expect(adapter.providerId).toBe("antigravity");
-      expect(adapter.adapterVersion).toBe("0.2.4");
+      expect(adapter.adapterVersion).toBe("0.2.5");
       expect(adapter.inspectRuntime("sess-1")).toBeNull();
     });
 

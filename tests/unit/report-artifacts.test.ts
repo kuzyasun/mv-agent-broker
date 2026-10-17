@@ -5,10 +5,10 @@
  * (before blob / before seal / after seal), stale-incarnation fencing,
  * corruption/foreign-binding recovery, oversize rejection and pin lifetime.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { createHarness, settle, start } from "../helpers/harness.ts";
+import { BrokerError, createHarness, settle, start } from "../helpers/harness.ts";
 import { callBridgeTool } from "../../src/bridge/tools.ts";
 import {
   getArtifact,
@@ -629,6 +629,13 @@ describe("report artifacts", () => {
     expect(sanitizeAdapterEvent({ type: "progress", payload: { label: "tool_call:read", extra: "private" } }))
       .toEqual({ type: "progress", payload: { label: "tool_call:read" } });
     expect(sanitizeAdapterEvent({ type: "progress", payload: { label: "This is prose" } })).toBeNull();
+    expect(sanitizeAdapterEvent({ type: "provider_diagnostic", payload: { provider: "zcode", stage: "pat_issue", kind: "http", status: 403,
+      vendor_code: 1308, body: "private body", token: "private token", headers: { Authorization: "private" } } }))
+      .toEqual({ type: "provider_diagnostic", payload: { provider: "zcode", stage: "pat_issue", kind: "http", status: 403, vendor_code: 1308 } });
+    expect(sanitizeAdapterEvent({ type: "provider_diagnostic", payload: { provider: "zcode", stage: "private", kind: "http", status: 403 } })).toBeNull();
+    expect(sanitizeAdapterEvent({ type: "provider_diagnostic", payload: { provider: "zcode", stage: ["pat_issue"], kind: "http", status: 403 } })).toBeNull();
+    expect(sanitizeAdapterEvent({ type: "provider_diagnostic", payload: { provider: "zcode", stage: "pat_issue", kind: ["http"], status: 403 } })).toBeNull();
+    expect(sanitizeAdapterEvent({ type: "provider_diagnostic", payload: { provider: "zcode", stage: "pat_issue", kind: "http", status: 200 } })).toBeNull();
     expect(sanitizeAdapterEvent({ type: "owned_zero_resume", payload: { ownership: null, quiesced: false } }))
       .toEqual({ type: "owned_zero_resume", payload: { ownership: null, quiesced: false } });
 
@@ -654,6 +661,26 @@ describe("report artifacts", () => {
     } finally {
       h.cleanup();
     }
+  });
+
+  it("retains safe provider diagnostics after a failed native exit", async () => {
+    const h = createHarness();
+    const spy = vi.spyOn(h.adapter, 'executeTurn').mockImplementation(async (_req, gate, emit) => {
+      gate.acquireDispatchPermission();
+      emit({type:'provider_diagnostic',payload:{provider:'zcode',stage:'pat_issue',kind:'http',status:403,body:'PRIVATE'}});
+      throw new BrokerError('PROVIDER_EXECUTION_ERROR', 'HTTP 403 at pat_issue.', {executionStarted:true});
+    });
+    try {
+      const s = await h.spawnWorkerSession();
+      const t = h.sendTask(s.session_id, 'provider-diagnostic');
+      await start(h, t);
+      await settle(h);
+      expect(turnStatus(h, t.turn_id).state).toBe('FAILED');
+      const events = h.core.turnEvents(h.seed.coordinatorId, t.turn_id, 0, 200);
+      const diagnostics = events.filter(e => e.type === 'adapter:provider_diagnostic');
+      expect(diagnostics.map(e => JSON.parse(e.payload!))).toEqual([{provider:'zcode',stage:'pat_issue',kind:'http',status:403}]);
+      expect(JSON.stringify(events)).not.toContain('PRIVATE');
+    } finally { spy.mockRestore(); h.cleanup(); }
   });
 
   it("pins retained on UNKNOWN; no reasoning marker in persisted events", async () => {

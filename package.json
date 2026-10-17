@@ -1,6 +1,6 @@
 {
   "name": "@gemslibe/agent-broker",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Local deterministic execution/session layer with MCP interface for multi-vendor coding agents",
   "license": "MIT",
   "type": "module",

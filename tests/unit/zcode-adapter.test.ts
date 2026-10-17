@@ -7,6 +7,7 @@ import { ZcodeAdapter } from "../../src/providers/zcode/zcodeAdapter.ts";
 import { createZcodePersonalConfig, ZCODE_ACCOUNT_PROVIDER, ZCODE_START_PLAN_PROVIDER } from "../../src/providers/zcode/nativeConfig.ts";
 import { parseZcodeResult } from "../../src/providers/zcode/resultParser.ts";
 import type { AdapterEvent, TurnExecutionRequest } from "../../src/runtime/adapter.ts";
+import { createHarness, settle, start } from "../helpers/harness.ts";
 
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -39,11 +40,48 @@ const inspection = { args, personal, config, builtin: process.env.ZCODE_BUILTIN_
   cwd: process.cwd(), leaked: process.env.BROKER_TEST_SECRET !== undefined,
   ...pathProbe };
 if (prompt === 'malformed') { console.log('plain text'); process.exit(0); }
-const result = { sessionId: prompt === 'mismatch' ? 'sess_wrong' : resume || 'sess_native',
+const result = { type: 'result', turnId: 'turn_native', sessionId: prompt === 'mismatch' ? 'sess_wrong' : resume || 'sess_native',
   response: JSON.stringify(inspection), projection: { status: prompt === 'busy' ? 'running' : 'idle' } };
 if (prompt === 'missing-id') delete result.sessionId;
-process.stdout.write(JSON.stringify(result, null, 2) + '\\n');
+if (prompt.startsWith('stream')) {
+  const emit = (type, payload, extra = {}) => console.log(JSON.stringify({type, sessionId: result.sessionId, turnId: result.turnId, payload, ...extra}));
+  console.log(JSON.stringify({type:'result', sessionId:result.sessionId, turnId:'turn_old', response:'OLD_RESPONSE', projection:{status:'idle'}, error:{code:'1308'}}));
+  console.log(JSON.stringify({sessionId:result.sessionId, turnId:'turn_old', error:{code:'1308'}}));
+  emit('turn.started', {prompt: 'PRIVATE_PROMPT'}, {deliveryKind:'replay', turnId:'turn_old'});
+  emit('turn.started', {prompt: 'PRIVATE_PROMPT'});
+  emit('turn.failed', {error:{code:'1308'}}, {turnId:'turn_old'});
+  emit('turn.failed', {error:{code:'1308'}}, {sessionId:'sess_other'});
+  emit('turn.failed', {error:{code:'1308'}}, {deliveryKind:'replay'});
+  emit('session.updated', {type:'model_request_failed', error:{code:'1308'}}, {error:{code:'1308'}});
+  emit('session.updated', {type:'model_request_retry_scheduled'});
+  emit('session.updated', {type:'model_request_started'});
+  emit('tool.updated', {kind:'started', input:'PRIVATE_TOOL_INPUT'});
+  emit('model.streaming', {kind:'reasoning_delta', text:'PRIVATE_REASONING'});
+  emit('model.streaming', {kind:'text_delta', text:'PRIVATE_DELTA'});
+  emit('model.streaming', {kind:'text_delta', text:'PRIVATE_DELTA'});
+  emit('tool.updated', {kind:'result', output:'PRIVATE_TOOL_OUTPUT'});
+  if (prompt === 'stream-quota') { emit('turn.failed', {error:{code:'1308'}}); setTimeout(()=>{},30000); }
+  else if (prompt === 'stream-wrong-turn') { console.log(JSON.stringify({...result,turnId:'turn_other',error:{code:'1308'}})); }
+  else if (prompt === 'stream-wrong-session') { console.log(JSON.stringify({...result,sessionId:'sess_other',error:{code:'1308'}})); }
+  else if (prompt === 'stream-missing-final') { /* Only the earlier foreign result remains. */ }
+  else {
+    const timer=setInterval(()=>{
+      if (fs.existsSync(${JSON.stringify(path.join(root, "release"))})) {clearInterval(timer);console.log(JSON.stringify(result));}
+    },20);
+  }
+} else {
+  if (prompt !== 'unbound-result') console.log(JSON.stringify({type:'turn.started',sessionId:result.sessionId,turnId:result.turnId,payload:{}}));
+  process.stdout.write(JSON.stringify(result) + '\\n');
+}
 if (prompt === 'nonzero') process.exitCode = 7;
+if (prompt === 'diagnostic-log') {
+  fs.mkdirSync(process.env.ZCODE_LOG_DIR, { recursive: true });
+  fs.writeFileSync(require('path').join(process.env.ZCODE_LOG_DIR, 'zcode-test.jsonl'),
+    JSON.stringify({ level: 'error', message: 'Model request failed', context: { error: { message: 'project_token_login_failed' } } }) + '\\n');
+  fs.writeFileSync(${JSON.stringify(path.join(root, "diagnostic-path.json"))}, JSON.stringify({ logDir: process.env.ZCODE_LOG_DIR, personal }));
+  process.exitCode = 1;
+}
+if (prompt === 'diagnostic-stderr') { console.error('Error: project_token_login_failed'); process.exitCode = 1; }
 if (prompt === 'sensitive-stderr') { console.error('Set-Cookie: PRIVATE_SENTINEL; Authorization: Bearer PRIVATE_SENTINEL'); process.exitCode = 7; }
 if (prompt === 'hang') setTimeout(() => {}, 30000);
 `);
@@ -78,7 +116,7 @@ describe("ZCode adapter", () => {
     const result = await f.adapter.executeTurn(request({ workspace_path: f.root, task_envelope: 'literal "quotes" & $()\nnew line' }), g, (event) => events.push(event));
     const inspection = JSON.parse(result.agent_reported!.summary);
     expect(g.count()).toBe(1);
-    expect(inspection.args).toContain("--json");
+    expect(inspection.args[inspection.args.indexOf('--output-format') + 1]).toBe("stream-json");
     expect(inspection.args[inspection.args.indexOf('--prompt') + 1]).toBe('literal "quotes" & $()\nnew line');
     expect(inspection.cwd).toBe(f.root);
     expect(inspection.leaked).toBe(false);
@@ -137,14 +175,70 @@ describe("ZCode adapter", () => {
     expect(result.native_conversation_ref).toBe("sess_resume");
     expect(inspection.config.config.defaultModelSelection.options.reasoningLevel).toBe("high");
   });
+  it("persists RUNNING and safe native progress before completion, including after resume", async () => {
+    const f = fixture(); const h = createHarness();
+    let progressSeen = false;
+    let finished = false;
+    // Exercise the real ZCode process adapter through the core event sanitizer.
+    vi.spyOn(h.adapter, 'executeTurn').mockImplementation(async (req, g, emit) => {
+      try {
+        return await f.adapter.executeTurn({ ...req, provider: 'zcode', requested_model: 'GLM-5.3-Flash', requested_effort: 'high',
+          task_envelope: 'stream', workspace_path: f.root, native_conversation_ref: 'sess_resume',
+          deadline_at: Date.now() + 60000, clock: { now: () => Date.now() } }, g, event => {
+          emit(event);
+          if (event.payload?.label === 'tool_call:completed') progressSeen = true;
+        });
+      } finally { finished = true; }
+    });
+    try {
+      const s = await h.spawnWorkerSession();
+      const t = h.sendTask(s.session_id, 'stream-progress');
+      await start(h, t);
+      await vi.waitFor(() => expect(progressSeen).toBe(true), {timeout:6000,interval:20});
+      expect(finished).toBe(false);
+      expect(h.core.turnStatus(h.seed.coordinatorId, t.turn_id).state).toBe('RUNNING');
+      const events = h.core.turnEvents(h.seed.coordinatorId, t.turn_id, 0, 200);
+      const refs = events.filter(e => e.type === 'adapter:native_ref_obtained');
+      expect(refs.map(e => JSON.parse(e.payload!))).toEqual([{ref:'sess_resume'}]);
+      const labels = events.filter(e => e.type === 'adapter:progress').map(e => JSON.parse(e.payload!).label);
+      expect(labels).toEqual(['status:running', 'status:model_request_failed', 'status:model_request_retry_scheduled',
+        'status:model_request_started', 'tool_call:started', 'status:text_delta', 'tool_call:completed']);
+      expect(JSON.stringify(events)).not.toContain('PRIVATE_');
+      writeFileSync(path.join(f.root, 'release'), 'done');
+      await settle(h);
+      expect(h.core.turnStatus(h.seed.coordinatorId, t.turn_id).state).toBe('SUCCEEDED');
+    } finally {
+      writeFileSync(path.join(f.root, 'release'), 'done');
+      await settle(h);
+      h.cleanup();
+    }
+  }, 15000);
+  it.each(['stream-wrong-turn', 'stream-wrong-session', 'stream-missing-final'])("rejects %s without attributing an old result or quota error to this turn", async task_envelope => {
+    await expect(fixture().adapter.executeTurn(request({task_envelope}), gate(), () => {}))
+      .rejects.toMatchObject({code:'PROVIDER_PROTOCOL_ERROR'});
+  });
+  it("classifies a terminal quota error from the bound current native turn", async () => {
+    await expect(fixture().adapter.executeTurn(request({task_envelope:'stream-quota'}), gate(), () => {}))
+      .rejects.toMatchObject({code:'QUOTA_EXHAUSTED',details:{vendor_code:1308}});
+  });
   it("fails explicit resume if the CLI reports a different session, without emitting that ref", async () => {
     const f = fixture(); const events: AdapterEvent[] = [];
     await expect(f.adapter.executeTurn(request({ native_conversation_ref: "sess_expected", task_envelope: "mismatch" }), gate(), (event) => events.push(event)))
       .rejects.toMatchObject({ code: "SESSION_NOT_RESUMABLE", executionStarted: true });
     expect(events.some((event) => event.type === "native_ref_obtained")).toBe(false);
   });
-  it.each(["malformed", "missing-id", "busy", "nonzero"])("rejects %s instead of claiming completion", async (prompt) => {
+  it.each(["malformed", "missing-id", "busy", "nonzero", "unbound-result"])("rejects %s instead of claiming completion", async (prompt) => {
     await expect(fixture().adapter.executeTurn(request({ task_envelope: prompt }), gate(), () => {})).rejects.toMatchObject({ code: "PROVIDER_PROTOCOL_ERROR", executionStarted: true });
+  });
+  it.each(["diagnostic-log", "diagnostic-stderr"])("retains the native failure cause from %s after temporary cleanup", async prompt => {
+    const f = fixture();
+    await expect(f.adapter.executeTurn(request({ task_envelope: prompt }), gate(), () => {}))
+      .rejects.toMatchObject({ code: "PROVIDER_PROTOCOL_ERROR", executionStarted: true, message: expect.stringContaining("project_token_login_failed") });
+    if (prompt === "diagnostic-log") {
+      const paths = JSON.parse(readFileSync(path.join(f.root, "diagnostic-path.json"), "utf8"));
+      expect(existsSync(paths.logDir)).toBe(false);
+      expect(existsSync(paths.personal)).toBe(false);
+    }
   });
   it.each([
     { requested_model: "unknown" }, { requested_effort: "medium" },
@@ -182,12 +276,14 @@ describe("ZCode adapter", () => {
     expect(g.count()).toBe(0);
     expect(() => createZcodePersonalConfig(f.builtin, "account:other/GLM-5.3-Flash", "max")).toThrow(/Unsupported/);
   });
-  it("wires built-in config override through bootstrap and observes the installed catalog", async () => {
+  it("wires built-in config override and Desktop auth through bootstrap", async () => {
     const { daemonEnvFromProcess, buildAdapters } = await import("../../src/daemon/bootstrap.ts");
     const f = fixture();
     const env = daemonEnvFromProcess({ AB_ZCODE_BUNDLE: f.bundle, AB_ZCODE_NODE: process.execPath, AB_ZCODE_BUILTIN_CONFIG: f.builtin });
     expect(env.zcodeBuiltinProviderConfigPath).toBe(f.builtin);
-    const observation = buildAdapters(env).get("zcode")!.preflight({ model: `${ZCODE_ACCOUNT_PROVIDER}/GLM-5.3-Flash`, effort: "low" }) as Exclude<ReturnType<ZcodeAdapter["preflight"]>, void>;
+    expect(() => buildAdapters(env).get("zcode")!.preflight({ model: `${ZCODE_ACCOUNT_PROVIDER}/GLM-5.3-Flash`, effort: "low" }))
+      .toThrow(/revalidation/);
+    const observation = f.adapter.preflight({ model: `${ZCODE_ACCOUNT_PROVIDER}/GLM-5.3-Flash`, effort: "low" }) as Exclude<ReturnType<ZcodeAdapter["preflight"]>, void>;
     expect(observation.provider).toBe("zcode");
     expect(observation.source).toBe("config_catalog");
     expect(observation.model_catalog).toEqual([`${ZCODE_ACCOUNT_PROVIDER}/GLM-5.3`, `${ZCODE_ACCOUNT_PROVIDER}/GLM-5.3-Flash`]);

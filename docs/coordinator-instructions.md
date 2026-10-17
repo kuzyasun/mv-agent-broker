@@ -21,6 +21,20 @@ the results. The broker does not choose another provider or model for you.
 5. Read bounded `agent_turn_events` with the last consumed numeric cursor and
    `wait_ms: 10000` or `20000`. Advance the cursor from returned rows. Once the
    turn is terminal, read `agent_turn_result` and any needed report artifact.
+   Every event/status reply includes a fresh `heartbeat`, even with no events.
+   It reports the current state, `observed_at`, deadline, local `supervised`
+   flag and `last_provider_event_at` (null until actual adapter activity).
+   Follow `heartbeat.next_action`: `wait` means repeat the bounded wait,
+   `read_result` means terminal, and `inspect` means check status/diagnostics
+   (unknown outcome, missing active supervisor or elapsed deadline).
+   A broker heartbeat proves the broker answered; `supervised: true` means its
+   executor still awaits this turn. Neither proves model/tool progress. A
+   final-only provider can remain supervised in `STARTING` until it emits
+   native evidence. Heartbeats do not change state or add durable events.
+   An empty bounded wait alone does not establish a hung turn. Keep waiting
+   within the task deadline unless there is a concrete reason to cancel.
+   ZCode reports native start, model attempts and tool activity as fixed labels;
+   a model-attempt failure followed by retry is not a terminal turn failure.
 6. Inspect actual changes and relevant checks. `SUCCEEDED` means the native
    execution completed; `quality_status: unreviewed` leaves acceptance to you.
 

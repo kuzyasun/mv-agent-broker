@@ -296,6 +296,11 @@ export class TurnExecutor {
     }
   }
 
+  /** Local supervision is not evidence of native/model progress. */
+  isSupervising(turnId: string): boolean {
+    return this.running.has(turnId);
+  }
+
   /** Wait for one specific turn to settle (tests). */
   async waitTurn(turnId: string): Promise<void> {
     while (this.running.has(turnId)) {

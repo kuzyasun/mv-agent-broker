@@ -14,8 +14,8 @@ bridge/daemon processes ([evidence](native-smoke/2026-09-30-codex/report.md)).
 Setup, auth ownership, model/effort rules and limitations for every provider:
 [provider operations guide](providers.md).
 
-Current managed Windows transport versions are Cursor 0.2.9, ZCode 0.2.6,
-Antigravity 0.2.4 and Claude/Codex 0.2.2. Native smoke rows below retain their original
+Current managed Windows transport versions are Cursor 0.2.9, ZCode 0.2.10,
+Antigravity 0.2.5 and Claude/Codex 0.2.2. Native smoke rows below retain their original
 tested adapter versions; they do not validate a new version-bound profile.
 The [Windows supervision checkpoint](native-smoke/2026-10-01-windows-job/report.md)
 uses offline owned processes and makes no full native support claim.
@@ -111,11 +111,12 @@ The [0.2.3 checkpoint](native-smoke/2026-10-01-cursor-profile/report.md) records
 offline config/path/history checks. The earlier broad-read private-HOME probe
 had contaminated marker recall and remains rejected evidence.
 
-## zcode (adapter 0.2.1; model/resume smoke on 0.2.0, `src/providers/zcode/`) — standalone JSON (ADR-0002 amendment)
+## zcode (adapter 0.2.10; original model/resume smoke on 0.2.0, `src/providers/zcode/`) — standalone NDJSON (ADR-0002 amendment)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
 | adapter headless (`--prompt --json`, explicit config paths) | native | smoke_tested | Windows, CLI 0.16.9, native login; two Flash adapter turns in plan mode, MCP/memory off; yolo/worker writes/reviewer enforcement unverified ([evidence](native-smoke/2026-09-30-zcode-bootstrap/report.md)) |
+| incremental headless (`--prompt --output-format stream-json`) | native | smoke_tested | 2026-10-16, CLI 0.16.9, adapter 0.2.10, GLM-5.3/high read-only reviewer through MCP: early RUNNING, two file tool calls, successful final and native resume; three completed model requests without retries/errors, clean isolated worktree. Offline process/core tests cover stale attribution and privacy. This is bounded transport qualification, not a full reviewer profile. |
 | native conversation identity | native | smoke_tested | JSON contains real sess_ ID; adapter emits native_ref_obtained and returns it |
 | resume (`--resume <sess_...>`) | native | smoke_tested | adapter wired; first process exits before second; same ID and marker recalled without marker in follow-up; mismatched ID rejected; --continue not exercised |
 | model selection | native | smoke_tested | private defaultModelSelection; logs confirm Flash twice; GLM-5.3/Flash on Z.AI Individual; other families rejected; low/high/max accepted, null selects low; reasoning semantics unverified |
@@ -135,7 +136,7 @@ public MCP; [integrated acceptance](native-smoke/2026-10-01-provider-preflight/r
 includes independent Cursor review and coordinator repairs. This establishes
 that development scenario, not a full native worker security profile.
 
-## antigravity (adapter 0.2.4; native smoke on 0.1.0, `src/providers/antigravity/`)
+## antigravity (adapter 0.2.5; native smoke on 0.1.0, `src/providers/antigravity/`)
 
 | Capability | support | verification | notes |
 |---|---|---|---|
@@ -175,7 +176,7 @@ formats and live quota telemetry remain unverified.
 ## Readiness observations and durable binding
 
 See the [native readiness checkpoint](native-smoke/2026-10-01-native-readiness/report.md).
-Current contracts are Cursor 0.2.9, Antigravity 0.2.4 and ZCode 0.2.6.
+Current contracts are Cursor 0.2.9, Antigravity 0.2.5 and ZCode 0.2.10.
 Cursor reports observed version/catalog and a recognized CLI authentication marker;
 Agy reports its model catalog; ZCode reports its installed PROGRAM model catalog.
 Unavailable CLI versions or authentication stay null. Runtime/config fingerprints

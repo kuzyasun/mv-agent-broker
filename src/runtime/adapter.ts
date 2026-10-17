@@ -89,7 +89,7 @@ export function boundAgentReport(
  */
 export function isAllowedProgressLabel(label: unknown): label is string {
   return typeof label === "string" &&
-    /^(?:resumed|json-run-complete|status:(?:assistant_text|text_delta|result|message|running)|tool_call(?::(?:started|completed|read|Read|grep|glob|ls|shell|mcp|edit|write|delete|task|web_search|web_fetch|unknown))?)$/.test(label);
+    /^(?:resumed|json-run-complete|status:(?:assistant_text|text_delta|result|message|running|model_request_started|model_request_completed|model_request_failed|model_request_retry_scheduled)|tool_call(?::(?:started|completed|read|Read|grep|glob|ls|shell|mcp|edit|write|delete|task|web_search|web_fetch|unknown))?)$/.test(label);
 }
 
 /**
@@ -130,6 +130,19 @@ export function sanitizeAdapterEvent(
     case "progress": {
       if (!isAllowedProgressLabel(payload.label)) return null;
       return { type, payload: { label: payload.label } };
+    }
+    case "provider_diagnostic": {
+      // Explicit metadata only; never pass provider messages, bodies or IDs.
+      if (payload.provider !== "zcode" ||
+        typeof payload.stage !== "string" || !["customer_info", "key_list", "key_create", "pat_issue"].includes(payload.stage) ||
+        typeof payload.kind !== "string" || !["http", "timeout", "network_error", "request_error", "invalid_json", "provider_error"].includes(payload.kind)) return null;
+      const out: Record<string, unknown> = { provider: payload.provider, stage: payload.stage, kind: payload.kind };
+      if (typeof payload.status === "number" && Number.isInteger(payload.status) && payload.status >= 100 && payload.status <= 599) out.status = payload.status;
+      if (typeof payload.vendor_code === "number" && Number.isSafeInteger(payload.vendor_code) && payload.vendor_code >= 0) out.vendor_code = payload.vendor_code;
+      if ((payload.kind === "http" || payload.kind === "provider_error") && out.status === undefined) return null;
+      if (payload.kind === "http" && typeof payload.status === "number" && payload.status >= 200 && payload.status <= 299) return null;
+      if (payload.kind === "provider_error" && out.vendor_code === undefined) return null;
+      return { type, payload: out };
     }
     case "native_ref_obtained": {
       const ref = boundedString(payload.ref, 512);

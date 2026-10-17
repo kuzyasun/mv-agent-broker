@@ -185,7 +185,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_turn_status",
-      description: "Check turn state, deadline and execution_started after a send; inspect the known turn before any recovery or retry (§10.1).",
+      description: "Check turn state, deadline, execution_started and a fresh broker heartbeat with next_action after a send; inspect the known turn before any recovery or retry (§10.1).",
       inputSchema: { type: "object", properties: { turn_id: str }, required: ["turn_id"], additionalProperties: false },
     },
     {
@@ -195,7 +195,7 @@ export function bridgeToolDefs(): McpToolDef[] {
     },
     {
       name: "agent_turn_events",
-      description: "Read bounded event deltas after the last consumed numeric cursor; use wait_ms for one bounded wait, advance the cursor from returned rows, and repeat until terminal before reading the result (§10.5).",
+      description: "Read event deltas with wait_ms: 20000 and the last consumed numeric cursor. Every reply includes a fresh broker heartbeat, even with no events. Follow heartbeat.next_action: wait, read_result, or inspect. A supervised STARTING/RUNNING turn can be silent until its final result; do not cancel solely because a bounded wait is empty. Heartbeat confirms broker supervision, not model progress. Advance the cursor from returned rows (§10.5).",
       inputSchema: {
         type: "object",
         properties: { turn_id: str, after_cursor: int(0, Number.MAX_SAFE_INTEGER), limit: int(1, 200), wait_ms: int(0, 20000) },
@@ -476,7 +476,8 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
     }
     case "agent_turn_status": {
       rejectUnknownKeys(rawArgs, ["turn_id"]);
-      return turnDto(core.turnStatus(ctx.coordinatorId, requireString(rawArgs, "turn_id")));
+      const turnId = requireString(rawArgs, "turn_id");
+      return { ...turnDto(core.turnStatus(ctx.coordinatorId, turnId)), heartbeat: core.turnHeartbeat(ctx.coordinatorId, turnId) };
     }
     case "agent_turn_result": {
       rejectUnknownKeys(rawArgs, ["turn_id"]);
@@ -488,9 +489,10 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
       const limit = optionalInt(rawArgs, "limit", 1, 200) ?? 50;
       const after = optionalInt(rawArgs, "after_cursor", 0, Number.MAX_SAFE_INTEGER) ?? 0;
       const waitMs = optionalInt(rawArgs, "wait_ms", 0, 20_000) ?? 0;
+      const turnId = requireString(rawArgs, "turn_id");
       const rows = await core.waitForTurnEvents(
         ctx.coordinatorId,
-        requireString(rawArgs, "turn_id"),
+        turnId,
         after,
         limit,
         waitMs,
@@ -504,6 +506,7 @@ export async function callBridgeTool(ctx: BridgeContext, name: string, rawArgs: 
           created_at: e.created_at,
         })),
         next_cursor: rows.length === limit ? String(rows[rows.length - 1]!.seq) : null,
+        heartbeat: core.turnHeartbeat(ctx.coordinatorId, turnId),
       };
     }
     case "agent_artifact_read": {

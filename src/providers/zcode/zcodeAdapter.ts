@@ -1,4 +1,4 @@
-/** ZCode standalone --json adapter, based on the native 0.16.9 smoke. */
+/** ZCode standalone stream-json adapter, based on the native 0.16.9 contract. */
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -15,11 +15,14 @@ import {
 } from "../common/readiness.ts";
 import { BrokerError } from "../../shared/errors.ts";
 import { createZcodePersonalConfig, readZcodeInstalledCatalog, resolveZcodeBuiltinPath } from "./nativeConfig.ts";
+import { zcodeFailureDiagnostic } from "./failureDiagnostic.ts";
+import { ZCODE_DESKTOP_AUTH_REJECTED, ZCODE_DESKTOP_AUTH_REQUEST, ZCODE_DESKTOP_BUNDLE_SHA256, ZCODE_DESKTOP_INCOMPATIBLE } from "./desktopAuth.ts";
+import { parseZcodeProjectAccessDiagnostic, zcodeProjectAccessError, type ZcodeProjectAccessDiagnostic } from "./projectAccessDiagnostic.ts";
+import { parseZcodeStreamEvent } from "./streamEvents.ts";
 import {
   parseZcodeResult,
   classifyZcodeError,
   classifyZcodeStderrLine,
-  classifyZcodeText,
   type ZcodeClassifiedError,
 } from "./resultParser.ts";
 
@@ -40,11 +43,13 @@ export interface ZcodeAdapterOptions {
   builtinProviderConfigPath?: string;
   /** Existing permission behavior; reviewer enforcement is not established. */
   mode?: string;
+  /** Desktop saves a business token; standalone login saves raw OAuth instead. */
+  authSource?: "desktop" | "cli";
 }
 
 export class ZcodeAdapter implements ProviderAdapter {
   readonly providerId = "zcode";
-  readonly adapterVersion = "0.2.6";
+  readonly adapterVersion = "0.2.10";
   readonly transportEnvelopeLimit = { maxChars: ZCODE_PROMPT_ARG_MAX };
   private readonly opts: ZcodeAdapterOptions;
   private readonly readinessCache = new ReadinessObservationCache();
@@ -70,6 +75,9 @@ export class ZcodeAdapter implements ProviderAdapter {
       throw new BrokerError("PROVIDER_INCOMPATIBLE", "ZCode bundle path does not exist.", { executionStarted: false });
     }
     const builtinPath = resolveZcodeBuiltinPath(this.opts.bundlePath, this.opts.builtinProviderConfigPath);
+    if (this.opts.authSource === "desktop" && hashFileBounded(this.opts.bundlePath) !== ZCODE_DESKTOP_BUNDLE_SHA256) {
+      throw new BrokerError("PROVIDER_INCOMPATIBLE", ZCODE_DESKTOP_INCOMPATIBLE, { executionStarted: false });
+    }
     if (typeof config.model !== "string") return;
     const model = config.model.trim();
     if (!model) {
@@ -136,16 +144,26 @@ export class ZcodeAdapter implements ProviderAdapter {
     let tmpDir: string | null = null;
     let poll: NodeJS.Timeout | null = null;
     let text = "";
+    let invalidStream = false;
+    let nativeTurnId: string | null = null;
+    let nativeSessionId: string | null = null;
+    let resultMatchesTurn = false;
+    let lastTextProgressAt = -Infinity;
     let outputTooLarge = false;
-    let emittedRef = false;
     let executionUnknown = false;
     let observedEarlyError: ZcodeClassifiedError | null = null;
+    let desktopAuthRejected = false;
+    let projectAccessDiagnostic: ZcodeProjectAccessDiagnostic | null = null;
     const checkCancel = () => { if (gate.cancellationRequested() !== null) controller.abort(); };
     try {
       tmpDir = mkdtempSync(path.join(os.tmpdir(), "agent-broker-zcode-"));
       const personal = path.join(tmpDir, "provider_config.json");
       writeFileSync(personal, JSON.stringify(config), { encoding: "utf8", mode: 0o600 });
-      const args = [this.opts.bundlePath, "--prompt", req.task_envelope, "--json", "--mode", this.opts.mode ?? "yolo"];
+      const args = [this.opts.bundlePath, "--prompt", req.task_envelope, "--output-format", "stream-json", "--mode", this.opts.mode ?? "yolo"];
+      if (this.opts.authSource === "desktop") {
+        const extension = import.meta.url.endsWith(".ts") ? "ts" : "js";
+        args.unshift("--import", new URL(`./desktopAuthPreload.${extension}`, import.meta.url).href);
+      }
       if (req.workspace_path) args.push("--cwd", req.workspace_path);
       if (req.native_conversation_ref !== null) args.push("--resume", req.native_conversation_ref);
       // Single dispatch gate immediately before handing the task to the CLI.
@@ -153,9 +171,9 @@ export class ZcodeAdapter implements ProviderAdapter {
       checkCancel();
       if (controller.signal.aborted) throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "ZCode cancelled before launch.", { executionStarted: false });
       poll = setInterval(checkCancel, 100);
-      // --json may remain completely silent until the final result. Missing
-      // stdout after two minutes is not startup failure for a coding turn.
-      // The daemon's hard deadline owns cancellation; this timer is a fallback
+      // Stream native lifecycle/tool metadata while the declared final remains
+      // a separate result line. The daemon's hard deadline owns cancellation;
+      // this timer is a fallback
       // for adapter callers without a live deadline supervisor.
       // Leave room for the daemon's maximum 60s deadline scan interval.
       const outputWaitMs = Math.max(1000, req.deadline_at - req.clock.now()) + 65_000;
@@ -169,31 +187,52 @@ export class ZcodeAdapter implements ProviderAdapter {
       }, {
         onStdoutLine: (line) => {
           if (outputTooLarge) return;
-          text += line + "\n";
-          if (text.length > ZCODE_OUTPUT_MAX) { outputTooLarge = true; controller.abort(); return; }
-          if (!observedEarlyError) {
-            const trimmed = text.trim();
-            if (trimmed.startsWith("{")) {
-              try {
-                const obj = JSON.parse(trimmed);
-                const classified = classifyZcodeError(obj);
-                if (classified) {
-                  observedEarlyError = classified;
-                  controller.abort();
-                  return;
-                }
-              } catch {
-                // not single-line JSON
-              }
-            }
+          if (line.length > ZCODE_OUTPUT_MAX) { outputTooLarge = true; controller.abort(); return; }
+          let obj: Record<string, unknown>;
+          try { obj = JSON.parse(line); } catch { invalidStream = true; return; }
+          if (!obj || typeof obj !== "object" || Array.isArray(obj)) { invalidStream = true; return; }
+          if (obj.deliveryKind === "replay") return;
+          const stream = parseZcodeStreamEvent(obj);
+          if (stream?.started && nativeTurnId === null && (req.native_conversation_ref === null || stream.sessionId === req.native_conversation_ref)) {
+            nativeTurnId = stream.turnId;
+            nativeSessionId = stream.sessionId;
+            onEvent({ type: "native_ref_obtained", payload: { ref: stream.sessionId } });
           }
-          const parsed = parseZcodeResult(text);
-          if (parsed && !emittedRef && (req.native_conversation_ref === null || parsed.sessionId === req.native_conversation_ref)) {
-            emittedRef = true;
-            onEvent({ type: "native_ref_obtained", payload: { ref: parsed.sessionId } });
+          const current = stream && stream.turnId === nativeTurnId && stream.sessionId === nativeSessionId;
+          if (current && stream.label && (!stream.textDelta || req.clock.now() - lastTextProgressAt >= 1000)) {
+            onEvent({ type: "progress", payload: { label: stream.label } });
+            if (stream.textDelta) lastTextProgressAt = req.clock.now();
+          }
+          const parsed = obj.type === "result" || obj.type === undefined ? parseZcodeResult(line) : null;
+          const sessionMatches = (nativeSessionId === null || obj.sessionId === nativeSessionId) &&
+            (req.native_conversation_ref === null || obj.sessionId === req.native_conversation_ref);
+          const turnMatches = nativeTurnId === null || obj.turnId === nativeTurnId;
+          const payload = obj.payload && typeof obj.payload === "object" ? obj.payload as Record<string, unknown> : {};
+          // Model-attempt failures can recover. Only the current turn failure,
+          // its final result, or an unbound standalone CLI error is terminal.
+          const standaloneError = obj.type === undefined && obj.sessionId === undefined && obj.turnId === undefined;
+          const boundError = nativeTurnId !== null && sessionMatches && turnMatches && (obj.type === undefined || obj.type === "result");
+          const classified = current && stream.failed ? classifyZcodeError({ error: payload.error ?? payload })
+            : boundError || standaloneError ? classifyZcodeError(obj) : null;
+          if (!observedEarlyError && classified) { observedEarlyError = classified; controller.abort(); return; }
+          if (parsed) {
+            // Retain only the declared final; discard streamed text, tool I/O
+            // and reasoning instead of accumulating them in the broker.
+            if (nativeSessionId && (!sessionMatches || !turnMatches)) invalidStream = true;
+            resultMatchesTurn = nativeTurnId !== null && sessionMatches && turnMatches;
+            text = line;
           }
         },
         onStderrLine: (line) => {
+          if (this.opts.authSource === "desktop") {
+            if (line === ZCODE_DESKTOP_AUTH_REQUEST) { desktopAuthRejected = false; projectAccessDiagnostic = null; }
+            if (line === ZCODE_DESKTOP_AUTH_REJECTED) desktopAuthRejected = true;
+            const diagnostic = parseZcodeProjectAccessDiagnostic(line);
+            if (diagnostic) {
+              projectAccessDiagnostic = diagnostic;
+              onEvent({ type: "provider_diagnostic", payload: { provider: "zcode", ...diagnostic } });
+            }
+          }
           if (!observedEarlyError) {
             const classified = classifyZcodeStderrLine(line);
             if (classified) {
@@ -222,10 +261,7 @@ export class ZcodeAdapter implements ProviderAdapter {
       }
 
       // Check classified quota / rate limit errors
-      let classifiedError: ZcodeClassifiedError | null = observedEarlyError;
-      if (!classifiedError) {
-        classifiedError = classifyZcodeText(text);
-      }
+      const classifiedError = observedEarlyError as ZcodeClassifiedError | null;
 
       if (classifiedError) {
         const details: Record<string, unknown> = {};
@@ -242,16 +278,23 @@ export class ZcodeAdapter implements ProviderAdapter {
       }
 
       if (result.killed || result.exitCode !== 0) {
+        if (!result.killed && projectAccessDiagnostic) throw zcodeProjectAccessError(projectAccessDiagnostic);
+        if (!result.killed && desktopAuthRejected) {
+          throw new BrokerError("AUTH_REQUIRED", "ZCode rejected the Desktop credentials (HTTP 401). Sign in to ZCode Desktop again, then explicitly retry the task.", {
+            executionStarted: true, details: { status_code: 401 },
+          });
+        }
+        const diagnostic = zcodeFailureDiagnostic(result.stderrTail, path.join(tmpDir, "log"));
         const message = result.killed ? "ZCode execution interrupted."
-          : `ZCode exited with code ${result.exitCode}; native stderr withheld.`;
+          : `ZCode exited with code ${result.exitCode}${diagnostic ? `: ${diagnostic}` : "; no native diagnostic available."}`;
         throw new BrokerError("PROVIDER_PROTOCOL_ERROR", message, { executionStarted: true });
       }
       const parsed = parseZcodeResult(text);
-      if (!parsed || (parsed.projection && parsed.projection.status !== "idle")) {
-        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "ZCode exited without a valid completed JSON result.", { executionStarted: true });
-      }
-      if (req.native_conversation_ref !== null && parsed.sessionId !== req.native_conversation_ref) {
+      if (parsed && req.native_conversation_ref !== null && parsed.sessionId !== req.native_conversation_ref) {
         throw new BrokerError("SESSION_NOT_RESUMABLE", "ZCode returned a different native session during explicit resume.", { executionStarted: true });
+      }
+      if (invalidStream || !resultMatchesTurn || !parsed || (parsed.projection && parsed.projection.status !== "idle")) {
+        throw new BrokerError("PROVIDER_PROTOCOL_ERROR", "ZCode exited without a valid completed JSON result.", { executionStarted: true });
       }
       onEvent({ type: "progress", payload: { label: "json-run-complete" } });
       const provenance = parsed.projection ? "partial_projection" : undefined;

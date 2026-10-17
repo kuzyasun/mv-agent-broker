@@ -56,11 +56,13 @@ const resume = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : 
 const personal = process.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE;
 const config = JSON.parse(fs.readFileSync(personal, 'utf8'));
 const result = {
+  type: 'result', turnId: 'turn_native',
   sessionId: resume || 'sess_native',
   response: JSON.stringify({ ok: true, promptLength: prompt.length }),
   projection: { status: 'idle' }
 };
-process.stdout.write(JSON.stringify(result, null, 2) + '\\n');
+console.log(JSON.stringify({type:'turn.started',sessionId:result.sessionId,turnId:result.turnId,payload:{}}));
+process.stdout.write(JSON.stringify(result) + '\\n');
 `,
   );
 

@@ -6,7 +6,7 @@ not every feature a vendor application might offer. The per-capability
 [verification matrix](provider-capabilities.md) and linked native evidence
 distinguish implementation, local tests and actual provider execution.
 
-Current transport versions are Cursor 0.2.9, ZCode 0.2.6, Antigravity 0.2.4
+Current transport versions are Cursor 0.2.9, ZCode 0.2.10, Antigravity 0.2.5
 and Claude/Codex 0.2.2. Historical smoke versions are identified separately
 below. [Native policy observations](native-policy-controls.md) explain why
 CLI flags, readiness and individual marker tests do not prove a complete
@@ -28,7 +28,7 @@ interpolation; quote paths when setting environment variables in PowerShell.
 | `codex` | `AB_CODEX_BIN` | `exec --json`, stdin; `--model`, native resume | CLI 0.157.0; adapter 0.2.0 Luna/low MCP model/resume passed |
 | `claude-code` | `AB_CLAUDE_BIN` | `--print --output-format stream-json --verbose`, stdin; `--model` | CLI 2.1.285; adapter 0.2.0 Haiku model/resume passed |
 | `cursor` | `AB_CURSOR_BIN` | `--print --output-format stream-json --trust`, stdin; `--model` | CLI 2026.09.28-64d2043; adapter 0.2.0 model/resume passed |
-| `zcode` | `AB_ZCODE_BUNDLE` | Node + desktop `zcode.cjs`, argv; private model config and `--json` | CLI 0.16.9; standalone and adapter model/resume passed |
+| `zcode` | `AB_ZCODE_BUNDLE` | Node + desktop `zcode.cjs`, argv; private model config and `--output-format stream-json` | CLI 0.16.9; original JSON model/resume passed; stream progress checked separately |
 | `antigravity` | `AB_ANTIGRAVITY_BIN` | `agy`, argv/temp prompt file; `--model`, stream JSON | agy 1.2.1; short adapter model/resume passed |
 
 Source of registration/pins: [bootstrap](../src/daemon/bootstrap.ts).
@@ -84,11 +84,12 @@ dispatch; create a new broker session rather than guessing the missing text.
 
 Implementation: [adapter](../src/providers/zcode/zcodeAdapter.ts),
 [launch config](../src/providers/zcode/nativeConfig.ts),
-[JSON parser](../src/providers/zcode/resultParser.ts). Adapter version: `0.2.6`.
+[JSON parser](../src/providers/zcode/resultParser.ts),
+[stream projection](../src/providers/zcode/streamEvents.ts). Adapter version: `0.2.10`.
 
 ### Working installation and authentication
 
-The tested installation is Desktop 3.14.4 with bundled CLI 0.16.9. The
+The tested installation is Desktop 3.15.3 with bundled CLI 0.16.9. The
 bundle is a real standalone CLI runnable with Node; no separate distribution
 was needed for the verified route. The tested Windows path is:
 
@@ -105,21 +106,68 @@ config at `resources/config/provider/zcode-builtin.json`, then checks
 $env:AB_ZCODE_BUILTIN_CONFIG = 'C:\path\to\provider\zcode-builtin.json'
 ```
 
-CLI credentials live in the native `~/.zcode/v2/credentials.json` store.
-Desktop had valid OAuth/account metadata, but standalone needed its own
-account identity registration. The operator completed the native login:
+Sign in through **ZCode Desktop**. Desktop and CLI share the encrypted native
+`~/.zcode/v2/credentials.json` store, but Desktop saves an already exchanged
+business token where standalone browser login saves raw OAuth. The daemon
+selects `authSource: "desktop"`: a Node preload adapts the verified CLI's
+redundant exchange in memory, preserving native token expiry checks, project
+discovery, PAT issuance and server authorization. It works independently of
+native HTTP transport. Installed vendor files and credentials are not edited.
+The broker process does not decrypt or copy the credential store.
+
+This private bridge is pinned to bundle SHA-256
+`31965ce1d5d4a808ef156784f67996de42ccab335591d2386a61ea8f6f506a54`.
+Another bundle fails with `PROVIDER_INCOMPATIBLE` before task dispatch until
+the contract is revalidated. The child verifies the same hash before loading.
+Do not run standalone browser login while using Desktop authentication: it
+replaces the shared token with raw OAuth. The manual native login launcher
+remains a separate diagnostic tool; direct adapter callers can explicitly
+select `authSource: "cli"` for that native contract.
+
+The observed Desktop business JWT has no `exp` claim. This does not guarantee
+an unlimited lifetime; the server may expire or revoke it. There is no token
+refresh service or automatic task replay. A failed turn with an actual Z.AI
+business-auth HTTP 401 becomes `AUTH_REQUIRED`, asking the operator to sign in
+to Desktop again and explicitly retry. A recovered 401 does not fail a completed
+turn or contaminate a later native auth attempt. HTTP 403, network failures and
+quota errors are not called expired credentials. An already expired JWT can
+fail locally without an HTTP 401; its native diagnostic is retained.
+
+The adapter also preserves fixed project-access diagnostic metadata before
+the native CLI collapses it to `project_token_request_failed`: the stage
+(`customer_info`, `key_list`, `key_create`, `pat_issue`), HTTP status, safe
+transport category, and an explicit numeric provider error code when present.
+No organization/project/key IDs, response bodies or headers are retained.
+These bounded records appear as `adapter:provider_diagnostic` events, using a
+dedicated core schema (0.2.9's progress label was discarded by the sanitizer).
+On a failed native exit, HTTP 429 maps to `RATE_LIMITED`, HTTP 5xx
+to `PROVIDER_UNAVAILABLE`, transport timeout/network errors to
+`PROVIDER_NETWORK_ERROR`, and other HTTP rejections to
+`PROVIDER_EXECUTION_ERROR`. Explicit quota codes keep their existing mapping.
+A new native auth request clears the previous attempt's terminal attribution;
+successful native completion remains successful. No automatic retry is added.
+
+Never send tokens or authorization codes to the broker. `ZCODE_DATA_BASE_DIR`
+and `ZCODE_CREDENTIAL_SECRET`, when configured, are passed to the native child.
+
+For native Coding Plan API-key authentication, run this in an interactive
+console:
 
 ```powershell
-node tests/native-smoke/zcode-native-login.mjs
+node tests/native-smoke/zcode-native-login.mjs --api-key
 ```
 
-The launcher uses the installed bundle's `login --no-browser`, prints an
-authorization URL and leaves credential handling to ZCode. It redirects
-model defaults to `.state/zcode-native-login/provider_config.json`. Do not
-repeat login if readiness/execution already works. Never send tokens or
-authorization codes to the broker. `ZCODE_DATA_BASE_DIR` and
-`ZCODE_CREDENTIAL_SECRET`, when configured, are passed to the native CLI;
-the adapter does not decrypt or copy the credential store.
+Paste the key at the hidden prompt and press Enter. The command prints
+`API key saved for Z.AI Individual Coding Plan` on success and exits; Ctrl+C
+cancels. Do not include the key in a shell command or send it in chat.
+The Desktop bundle lacks its optional TUI package, so this helper provides a
+minimal console for the native local login handler. This private interface is
+pinned to the verified Desktop CLI 0.16.9 bundle hash and refuses other bundles
+before asking for a key. ZCode owns encryption and persistence. This uses its
+native `manual` authentication source for the same Individual Coding Plan
+provider; broker routes, model and effort stay explicitly selected by the
+broker. Setup itself sends no model prompt. Verify the chosen key with a
+separately authorized bounded broker task before treating it as working.
 
 ### Models, launch config and resume
 
@@ -171,18 +219,27 @@ and `ZCODE_LOG_DIR` to the child only. Private config/logs are cleaned up
 after process termination; native sessions stay in ZCode's own storage.
 The vendor provider config and credential files are not edited by the adapter.
 
+On a nonzero native exit, adapter 0.2.7 keeps a short sanitized error detail in
+the existing turn failure message before cleanup. It prefers the latest error
+record from up to three JSONL logs (at most 64 KiB per file), with stderr as a
+fallback. Headers, cookies and labeled credentials are redacted; the retained
+detail is bounded to 512 characters plus a truncation marker. The broker's
+`turn_terminal` event preserves this cause after the temporary directory is
+removed, and the operator's turn error details display it. No separate log
+store, database schema or configuration is needed.
+
 Launch shape:
 
 ```text
-node zcode.cjs --prompt <envelope> --json --mode yolo --cwd <workspace>
-node zcode.cjs --prompt <follow-up> --json --mode yolo --cwd <workspace> --resume <sess_ID>
+node --import <broker-desktop-auth-preload> zcode.cjs --prompt <envelope> --output-format stream-json --mode yolo --cwd <workspace>
+node --import <broker-desktop-auth-preload> zcode.cjs --prompt <follow-up> --output-format stream-json --mode yolo --cwd <workspace> --resume <sess_ID>
 ```
 
 Default permission mode remains `yolo`. `ZcodeAdapterOptions.mode` can select
 `plan` for a diagnostic run; this does not establish reviewer enforcement.
 Native JSON includes `sessionId`, `response`, usage and projection metadata.
-The adapter captures the real `sess_...` ID as soon as the complete JSON
-object is available. A different ID on explicit resume, malformed output,
+The adapter captures the real `sess_...` ID from native `turn.started`, before
+the final result. A different ID on explicit resume, malformed output,
 nonzero exit, cancellation or a non-idle projection fails the turn; no ID is
 invented and no fresh-session retry occurs. `--continue` is intentionally not
 used because it selects a latest session rather than the broker's exact ID.
@@ -215,8 +272,15 @@ live ZCode quota smoke. See the
 Prompts remain argv-based and capped at 6,000 JavaScript characters. There is
 no large-prompt file workaround in this adapter. Output timers use the remaining
 hard-deadline budget, rather than treating two minutes of silence as startup
-failure. The daemon owns hard-deadline cancellation. JSON is delivered at the end,
-so there is no streamed text progress or early session-ID event in this route.
+failure. The daemon owns hard-deadline cancellation. Adapter 0.2.10 uses
+`--output-format stream-json`: native `turn.started` supplies the session ID and
+changes the broker state to `RUNNING` before completion. Model-request lifecycle
+and tool start/completion events become fixed progress labels; text activity is
+throttled to one label per second. Prompt, tool I/O, text deltas and reasoning
+are discarded. Only the separate final `result` supplies the retained response.
+Replay and foreign-turn failures cannot fail the current turn; a retried model
+request failure is progress, not a terminal turn failure. Process ownership
+receipts alone still do not prove native execution progress.
 Native usage counters are retained by smoke tooling, not exposed as broker
 billing/quota accounting.
 
@@ -282,6 +346,14 @@ normally. The retained report records `recovered_current_turn` provenance.
 Cancellation, unknown execution and output overflow cannot use this correction.
 Missing, changed, or ambiguous native evidence leaves the turn failed with
 `PROVIDER_RESULT_AMBIGUOUS` and its response retained; no quota pause is inferred.
+Adapter 0.2.5 matches the final stream response by its native step index rather
+than arrival order. Native polling can skip an ACTIVE background step without
+later emitting DONE, so intermediate stream steps need not all show DONE; the
+current native segment must still be entirely completed and error-free. The
+current user and final response must show DONE in the stream with matching
+indices, text must match, and explicit stream errors still prevent recovery.
+An ambiguous failure names its missing completion checks in the retained
+failure message, using fixed metadata only.
 
 Only explicit current-turn errors are classified:
 

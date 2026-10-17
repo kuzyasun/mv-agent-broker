@@ -65,9 +65,11 @@ const fs = require('fs');
 const args = process.argv.slice(2);
 const prompt = args[args.indexOf('--prompt') + 1];
 const resume = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : null;
+if (prompt.startsWith('stdout-')) console.log(JSON.stringify({type:'turn.started',sessionId:'sess_native',turnId:'turn_native',payload:{}}));
 
 if (prompt === 'stdout-projection-quota-1308') {
   const result = {
+    type: 'result', turnId: 'turn_native',
     sessionId: 'sess_native',
     projection: {
       status: 'running',
@@ -84,6 +86,7 @@ if (prompt === 'stdout-projection-quota-1308') {
 
 if (prompt === 'stdout-top-error-1308') {
   const result = {
+    type: 'result', turnId: 'turn_native',
     sessionId: 'sess_native',
     error: {
       code: 'model_rate_limited',
@@ -97,6 +100,7 @@ if (prompt === 'stdout-top-error-1308') {
 
 if (prompt === 'stdout-projection-rate-limit') {
   const result = {
+    type: 'result', turnId: 'turn_native',
     sessionId: 'sess_native',
     projection: {
       status: 'running',
@@ -159,7 +163,9 @@ if (prompt === 'large-error-bounded') {
 }
 
 if (prompt === 'prose-with-429-1308') {
+  console.log(JSON.stringify({type:'turn.started',sessionId:'sess_native',turnId:'turn_native',payload:{}}));
   const result = {
+    type: 'result', turnId: 'turn_native',
     sessionId: 'sess_native',
     response: 'I investigated error 429 and resolved issue 1308 in the repository.',
     projection: { status: 'idle' }
@@ -169,8 +175,10 @@ if (prompt === 'prose-with-429-1308') {
 }
 
 if (prompt === 'tool-stderr-429') {
+  console.log(JSON.stringify({type:'turn.started',sessionId:'sess_native',turnId:'turn_native',payload:{}}));
   process.stderr.write('curl: (22) The requested URL returned error: 429 Too Many Requests\\n');
   const result = {
+    type: 'result', turnId: 'turn_native',
     sessionId: 'sess_native',
     response: 'Tool executed and handled retry.',
     projection: { status: 'idle' }
@@ -561,7 +569,7 @@ describe("ZCode adapter quota execution with fake Node CLI", () => {
         executionStarted: true,
       });
       expect((err as Error).message).toContain("code 7");
-      expect((err as Error).message).toContain("native stderr withheld");
+      expect((err as Error).message).toContain("Found 1308 matching records in database query.");
     }
   });
 
@@ -713,14 +721,14 @@ describe("ZCode quota attribution boundaries", () => {
   });
   it("accepts successful resume with a historical lastError", async () => {
     const f=fixture();
-    writeFileSync(f.bundle,'process.stdout.write(JSON.stringify({sessionId:"sess_native",response:"recovered",projection:{status:"idle",lastError:{code:"1308"}}})+"\\n")');
+    writeFileSync(f.bundle,'console.log(JSON.stringify({type:"turn.started",sessionId:"sess_native",turnId:"turn_current",payload:{}}));console.log(JSON.stringify({type:"result",turnId:"turn_current",sessionId:"sess_native",response:"recovered",projection:{status:"idle",lastError:{code:"1308"}}}));');
     const result=await f.adapter.executeTurn(request({workspace_path:f.root,native_conversation_ref:'sess_native'}),gate(),()=>{});
     expect(result.native_outcome).toBe('completed');
     expect(result.agent_reported?.summary).toBe('recovered');
   });
-  it("recognizes pretty printed structured errors during execution", async () => {
+  it("recognizes a structured NDJSON error split across process writes", async () => {
     const f=fixture();
-    writeFileSync(f.bundle,'process.stdout.write(JSON.stringify({error:{code:"1308"}},null,2)+"\\n");setTimeout(()=>{},8000)');
+    writeFileSync(f.bundle,'const line=JSON.stringify({error:{code:"1308"}})+"\\n";process.stdout.write(line.slice(0,8));setTimeout(()=>process.stdout.write(line.slice(8)),20);setTimeout(()=>{},8000)');
     const start=Date.now();
     await expect(f.adapter.executeTurn(request({workspace_path:f.root}),gate(),()=>{})).rejects.toMatchObject({code:'QUOTA_EXHAUSTED'});
     expect(Date.now()-start).toBeLessThan(7000);
@@ -752,7 +760,7 @@ describe("Explicit errors override historical idle projections", () => {
   });
   it("surfaces an explicit top-level failure accompanying idle on the CLI", async () => {
     const f=fixture();
-    writeFileSync(f.bundle,'process.stdout.write(JSON.stringify({sessionId:"sess_native",response:"",error:{code:"1308"},projection:{status:"idle"}})+"\\n");process.exitCode=1;');
+    writeFileSync(f.bundle,'console.log(JSON.stringify({type:"turn.started",sessionId:"sess_native",turnId:"turn_current",payload:{}}));console.log(JSON.stringify({type:"result",turnId:"turn_current",sessionId:"sess_native",response:"",error:{code:"1308"},projection:{status:"idle"}}));process.exitCode=1;');
     await expect(f.adapter.executeTurn(request({workspace_path:f.root}),gate(),()=>{})).rejects.toMatchObject({code:"QUOTA_EXHAUSTED",details:{vendor_code:1308}});
   });
 });

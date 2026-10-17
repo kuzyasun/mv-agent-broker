@@ -726,6 +726,14 @@ export function listEventsByTurn(db: RegistryDb, turnId: string, afterSeq: numbe
   return rows.map(mapEventRow);
 }
 
+/** Native adapter activity, excluding broker process-ownership receipts. */
+export function lastProviderEventAt(db: RegistryDb, turnId: string): number | null {
+  const row = db.raw.prepare(`SELECT created_at FROM events
+    WHERE turn_id = ? AND type GLOB 'adapter:*' AND type NOT GLOB 'adapter:owned_*'
+    ORDER BY seq DESC LIMIT 1`).get(turnId) as { created_at: number } | undefined;
+  return row ? Number(row.created_at) : null;
+}
+
 /** Persisted contract/result payloads in the existing journal; no schema migration. */
 export function getTurnEventPayload(db: RegistryDb, turnId: string, type: string): Record<string, unknown> | null {
   const row = db.raw.prepare("SELECT payload FROM events WHERE turn_id = ? AND type = ? ORDER BY seq DESC LIMIT 1")

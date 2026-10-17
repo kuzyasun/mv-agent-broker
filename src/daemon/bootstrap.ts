@@ -105,7 +105,7 @@ export function buildAdapters(env: DaemonEnv): Map<string, ProviderAdapter> {
     }));
   }
   if (env.zcodeBundlePath) {
-    adapters.set("zcode", new ZcodeAdapter({ bundlePath: env.zcodeBundlePath, nodeBinary: env.zcodeNodeBinary, builtinProviderConfigPath: env.zcodeBuiltinProviderConfigPath }));
+    adapters.set("zcode", new ZcodeAdapter({ bundlePath: env.zcodeBundlePath, nodeBinary: env.zcodeNodeBinary, builtinProviderConfigPath: env.zcodeBuiltinProviderConfigPath, authSource: "desktop" }));
   }
   if (env.antigravityBinary) {
     adapters.set("antigravity", new AntigravityAdapter({ binary: env.antigravityBinary }));

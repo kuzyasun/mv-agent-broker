@@ -23,7 +23,7 @@ Build it from this repository:
 ```powershell
 npm ci
 npm run release:pack
-npm install --global .\releases\gemslibe-agent-broker-0.3.0.tgz
+npm install --global .\releases\gemslibe-agent-broker-0.3.1.tgz
 agent-broker --version
 ```
 
@@ -232,7 +232,7 @@ Wait until all project tasks finish, stop the daemon, and close its UI terminal:
 
 ```powershell
 agent-broker stop --config $config
-npm install --global C:\path\to\gemslibe-agent-broker-0.3.0.tgz
+npm install --global C:\path\to\gemslibe-agent-broker-0.3.1.tgz
 agent-broker start --config $config
 agent-broker ui --config $config
 ```

@@ -118,6 +118,10 @@ describe("Antigravity current-turn attribution", () => {
     expect(result.failure?.code).toBe("PROVIDER_RESULT_AMBIGUOUS");
     expect(result.failure?.retry_after_ms).toBeUndefined();
     expect(result.agent_reported).toBeDefined();
+    expect(result.failure?.message).toContain("Missing completion evidence:");
+    if (mode === "stream-active") expect(result.failure?.message).toContain("stream_final_done");
+    if (mode === "native-active") expect(result.failure?.message).toContain("native_segment_completed");
+    if (mode === "different-response") expect(result.failure?.message).toContain("final_response_matches");
   });
 
   it("uses the last stream state per step, permitting ACTIVE followed by DONE", async () => {
@@ -136,6 +140,28 @@ describe("Antigravity current-turn attribution", () => {
     expect((await f.adapter.executeTurn(request(), gate, () => {})).native_outcome).toBe("completed");
   });
 
+  it.each(["late-tool-done", "background-tool-active"])("recovers a completed native turn with %s stream updates", async mode => {
+    const f = fixture();
+    vi.mocked(runHeadlessCli).mockImplementationOnce(async (_spec, events) => {
+      f.append("current response");
+      const db = new DatabaseSync(f.file);
+      db.exec("UPDATE steps SET idx=5 WHERE idx=4");
+      db.prepare("INSERT INTO steps VALUES(4,132,3,?)").run(Buffer.alloc(0));
+      db.close();
+      for (const step_update of [
+        {step_index:3,state:"DONE",step_type:"user_input"},
+        {step_index:4,state:"ACTIVE",step_type:"tool"},
+        {step_index:5,state:"DONE",step_type:"agent_response",text_delta:"current response"},
+        ...(mode === "late-tool-done" ? [{step_index:4,state:"DONE",step_type:"tool"}] : []),
+      ]) events.onStdoutLine(JSON.stringify({event:"step_update",step_update:{...step_update,conversation_id:conversationId}}));
+      events.onStdoutLine(JSON.stringify({event:"result",result:{conversation_id:conversationId,status:"ERROR",error:interruption,response:"current response"}}));
+      return cleanExit;
+    });
+    const result = await f.adapter.executeTurn(request(),gate,()=>{});
+    expect(result).toMatchObject({native_outcome:"completed",agent_reported:{summary:"current response",provenance:"recovered_current_turn"}});
+    expect(result.failure).toBeUndefined();
+  });
+
   it("does not use an unverified native step status as completion evidence", async () => {
     const f = fixture();
     vi.mocked(runHeadlessCli).mockImplementationOnce(async (_spec, events) => {
@@ -144,6 +170,23 @@ describe("Antigravity current-turn attribution", () => {
       stream(events, "ERROR", interruption, "current response"); return cleanExit;
     });
     expect((await f.adapter.executeTurn(request(), gate, () => {})).failure?.code).toBe("PROVIDER_RESULT_AMBIGUOUS");
+  });
+
+  it.each(["ERROR", "FAILED"])("does not recover an explicit current stream %s despite a completed native projection", async state => {
+    const f = fixture();
+    vi.mocked(runHeadlessCli).mockImplementationOnce(async (_spec, events) => {
+      f.append("current response");
+      const db = new DatabaseSync(f.file);
+      db.exec("UPDATE steps SET idx=5 WHERE idx=4");
+      db.prepare("INSERT INTO steps VALUES(4,132,3,?)").run(Buffer.alloc(0));
+      db.close();
+      events.onStdoutLine(JSON.stringify({event:"step_update",step_update:{conversation_id:conversationId,step_index:3,state:"DONE",step_type:"user_input"}}));
+      events.onStdoutLine(JSON.stringify({event:"step_update",step_update:{conversation_id:conversationId,step_index:4,state,step_type:"tool"}}));
+      stream(events,"ERROR",interruption,"current response",5);
+      return cleanExit;
+    });
+    const result = await f.adapter.executeTurn(request(),gate,()=>{});
+    expect(result.failure).toMatchObject({code:"PROVIDER_RESULT_AMBIGUOUS",message:expect.stringContaining("stream_error_free")});
   });
 
   it.each(["FAILED", "ERROR"])("preserves a genuinely failed new-turn response for status %s", async status => {

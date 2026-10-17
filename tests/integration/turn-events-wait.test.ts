@@ -1,9 +1,10 @@
 import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendEvent } from "../../src/storage/repo.ts";
 import { callBridgeTool } from "../../src/bridge/tools.ts";
 import { runStdioBridge, type McpToolContext } from "../../src/bridge/server.ts";
-import { createHarness, type Harness } from "../helpers/harness.ts";
+import { createHarness, settle, start, type Harness } from "../helpers/harness.ts";
+import type { AdapterEvent } from "../../src/runtime/adapter.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,6 +14,7 @@ import { DaemonRpcClient } from "../../src/bridge/rpcClient.ts";
 let harnesses: Harness[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const harness of harnesses.splice(0)) harness.cleanup();
 });
 
@@ -33,6 +35,85 @@ function event(harness: Harness, turnId: string, type: string, payload: Record<s
 }
 
 describe("bounded agent_turn_events wait", () => {
+  it("heartbeats a silent final-only provider without inventing RUNNING or durable progress", async () => {
+    const h = createHarness(); harnesses.push(h);
+    const { turnId } = await pendingTurn(h);
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    vi.spyOn(h.adapter, 'executeTurn').mockImplementation(async (_req, gate) => {
+      gate.acquireDispatchPermission();
+      await pending;
+      return { native_outcome:'completed', native_conversation_ref:'mock-final-only', agent_reported:{summary:'final-only result',format_status:'text_only'} };
+    });
+    const ctx = { coordinatorId:h.seed.coordinatorId, core:h.core };
+    try {
+      await start(h, {turn_id:turnId});
+      const before = h.core.turnEvents(h.seed.coordinatorId,turnId,0,200);
+      const after = before.at(-1)!.seq;
+      h.clock.advance(20_000);
+      const first = await callBridgeTool(ctx,'agent_turn_events',{turn_id:turnId,after_cursor:after,wait_ms:30});
+      expect(first).toEqual({events:[],next_cursor:null,heartbeat:{source:'broker',observed_at:h.clock.now(),state:'STARTING',
+        execution_started:true,supervised:true,last_provider_event_at:null,deadline_at:h.core.turnStatus(h.seed.coordinatorId,turnId).deadline_at,next_action:'wait'}});
+      h.clock.advance(20_000);
+      const second = await callBridgeTool(ctx,'agent_turn_events',{turn_id:turnId,after_cursor:after}) as {heartbeat:{observed_at:number}};
+      expect(second.heartbeat.observed_at).toBe(h.clock.now());
+      expect(second.heartbeat.observed_at).toBeGreaterThan((first as typeof second).heartbeat.observed_at);
+      expect(h.core.turnEvents(h.seed.coordinatorId,turnId,0,200)).toEqual(before);
+      expect(await callBridgeTool(ctx,'agent_turn_status',{turn_id:turnId})).toMatchObject({state:'STARTING',heartbeat:second.heartbeat});
+      finish(); await settle(h);
+      const last = h.core.turnEvents(h.seed.coordinatorId,turnId,0,200).at(-1)!.seq;
+      expect(await callBridgeTool(ctx,'agent_turn_events',{turn_id:turnId,after_cursor:last,wait_ms:20_000}))
+        .toMatchObject({events:[],heartbeat:{state:'SUCCEEDED',supervised:false,next_action:'read_result'}});
+    } finally { finish(); await settle(h); }
+  });
+
+  it("keeps a real provider activity timestamp while ownership receipts and polls remain silent", async () => {
+    const h = createHarness(); harnesses.push(h);
+    const {turnId} = await pendingTurn(h);
+    let finish!: () => void;
+    let emit!: (event:AdapterEvent) => void;
+    const pending = new Promise<void>(resolve => {finish=resolve;});
+    vi.spyOn(h.adapter,'executeTurn').mockImplementation(async (_req,gate,onEvent) => {
+      gate.acquireDispatchPermission(); emit=onEvent; await pending;
+      return {native_outcome:'completed',native_conversation_ref:'mock-progress'};
+    });
+    const ctx = {coordinatorId:h.seed.coordinatorId,core:h.core};
+    try {
+      await start(h,{turn_id:turnId});
+      h.clock.advance(1000);
+      emit({type:'progress',payload:{label:'status:running'}});
+      const nativeAt = h.clock.now();
+      h.clock.advance(5000);
+      event(h,turnId,'adapter:owned_resumed');
+      const after = h.core.turnEvents(h.seed.coordinatorId,turnId,0,200).at(-1)!.seq;
+      expect(await callBridgeTool(ctx,'agent_turn_events',{turn_id:turnId,after_cursor:after,wait_ms:20}))
+        .toMatchObject({events:[],heartbeat:{state:'RUNNING',supervised:true,last_provider_event_at:nativeAt,next_action:'wait'}});
+    } finally {finish();await settle(h);}
+  });
+
+  it.each(['UNKNOWN','STARTING','RUNNING'])("advises inspection rather than ongoing progress for an unsupervised %s turn", async state => {
+    const h=createHarness();harnesses.push(h);
+    const {turnId}=await pendingTurn(h);
+    h.db.raw.prepare('UPDATE turns SET state=? WHERE turn_id=?').run(state,turnId);
+    expect(await callBridgeTool({coordinatorId:h.seed.coordinatorId,core:h.core},'agent_turn_events',{turn_id:turnId}))
+      .toMatchObject({heartbeat:{state,supervised:false,next_action:'inspect'}});
+  });
+
+  it("reports the current heartbeat without advancing a paginated durable cursor", async () => {
+    const h=createHarness();harnesses.push(h);
+    const {turnId}=await pendingTurn(h);
+    const first=event(h,turnId,'adapter:progress',{label:'status:running'});
+    h.clock.advance(1000);
+    event(h,turnId,'adapter:progress',{label:'tool_call:started'});
+    const page=await callBridgeTool({coordinatorId:h.seed.coordinatorId,core:h.core},'agent_turn_events',{turn_id:turnId,after_cursor:first-1,limit:1});
+    expect(page).toMatchObject({events:[{cursor:first}],next_cursor:String(first),heartbeat:{last_provider_event_at:h.clock.now(),state:'ACCEPTED',supervised:false,next_action:'wait'}});
+    h.clock.set(h.core.turnStatus(h.seed.coordinatorId,turnId).deadline_at);
+    expect(await callBridgeTool({coordinatorId:h.seed.coordinatorId,core:h.core},'agent_turn_status',{turn_id:turnId}))
+      .toMatchObject({heartbeat:{next_action:'inspect'}});
+    await expect(callBridgeTool({coordinatorId:h.seed.outsiderId,core:h.core},'agent_turn_status',{turn_id:turnId}))
+      .rejects.toMatchObject({code:'UNAUTHORIZED'});
+  });
+
   it("validates wait_ms and returns existing events immediately", async () => {
     const harness = createHarness();
     harnesses.push(harness);

@@ -103,7 +103,7 @@ function agyProvenance(response: string | null, text: string): string | undefine
 
 export class AntigravityAdapter implements ProviderAdapter {
   readonly providerId = "antigravity";
-  readonly adapterVersion = "0.2.4";
+  readonly adapterVersion = "0.2.5";
 
   private readonly binary: string;
   private readonly defaultModel?: string;
@@ -399,28 +399,39 @@ export class AntigravityAdapter implements ProviderAdapter {
           return failed(classifyAntigravityFailure(currentError), evidence.response ?? rawText);
         }
         const historical = !!summary.error && !!checkpoint?.errors.includes(summary.error);
-        if (historical && evidence && evidence.errors.length === 0 && evidence.completedResponse &&
-            evidence.response?.trim() && evidence.response === summary.response && cliResult.exitCode === 0 &&
-            (process.platform !== "win32" || cliResult.quiesced === true) &&
-            !eventsCapped && summary.currentUserStepIndex === evidence.userIndex) {
-          const last = summary.steps?.at(-1);
-          const latestSteps = new Map(summary.steps?.map(step => [step.index, step]));
-          const user = latestSteps.get(evidence.userIndex);
-          if (user?.stepType === "user_input" && user.state === "DONE" &&
-              [...latestSteps.values()].every(step => step.state === "DONE") &&
-              last?.stepType === "agent_response" && last.state === "DONE" && last.index === evidence.lastIndex &&
-              !summary.steps?.some(step => step.stepType === "error" || step.state === "ERROR" || step.state === "FAILED")) {
-            return {
-              native_outcome: "completed", native_conversation_ref: nativeRef,
-              agent_reported: report(evidence.response, "recovered_current_turn", ["Ignored a native error recorded before the current turn."]),
-            };
-          }
+        const latestSteps = new Map(summary.steps?.map(step => [step.index, step]));
+        const user = evidence ? latestSteps.get(evidence.userIndex) : undefined;
+        // A late tool update need not be the final response. Native polling can
+        // also skip ACTIVE background steps without emitting their later DONE;
+        // the error-free native segment must still prove every step completed.
+        const final = evidence ? latestSteps.get(evidence.lastIndex) : undefined;
+        const completionChecks = {
+          historical_error_known: historical,
+          native_segment_available: evidence !== null,
+          native_segment_completed: evidence?.completedResponse === true,
+          native_segment_error_free: evidence?.errors.length === 0,
+          final_response_matches: !!evidence?.response?.trim() && evidence.response === summary.response,
+          process_exit_zero: cliResult.exitCode === 0,
+          owned_quiescence: process.platform !== "win32" || cliResult.quiesced === true,
+          stream_not_truncated: !eventsCapped,
+          stream_user_matches: !!evidence && summary.currentUserStepIndex === evidence.userIndex,
+          stream_user_done: user?.stepType === "user_input" && user.state === "DONE",
+          stream_final_done: final?.stepType === "agent_response" && final.state === "DONE",
+          stream_error_free: !summary.steps?.some(step => step.stepType === "error" || step.state === "ERROR" || step.state === "FAILED"),
+        };
+        const missing = Object.entries(completionChecks).filter(([, passed]) => !passed).map(([name]) => name);
+        if (missing.length === 0 && evidence?.response) {
+          return {
+            native_outcome: "completed", native_conversation_ref: nativeRef,
+            agent_reported: report(evidence.response, "recovered_current_turn", ["Ignored a native error recorded before the current turn."]),
+          };
         }
         // No source binding means no inferred quota/current failure. Retain the
         // answer for review without pretending this ambiguous result succeeded.
-        return failed({ code: "PROVIDER_RESULT_AMBIGUOUS", message: historical
+        const explanation = historical
           ? "Antigravity repeated an historical error; current-turn completion could not be established."
-          : "Antigravity's resumed result error could not be attributed to the current turn." }, evidence?.response ?? rawText);
+          : "Antigravity's resumed result error could not be attributed to the current turn.";
+        return failed({ code: "PROVIDER_RESULT_AMBIGUOUS", message: `${explanation} Missing completion evidence: ${missing.join(", ")}.` }, evidence?.response ?? rawText);
       }
 
       // !summary.sawResult:

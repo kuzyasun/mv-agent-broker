@@ -6,6 +6,7 @@ import {
   displayPreferences,
   loadTurnErrorAction,
   refreshStatus,
+  savedConfig,
   selectedTurnError,
   statusData,
   statusLoading,
@@ -30,6 +31,7 @@ export function OverviewSection(): JSX.Element {
   }, []);
 
   const activeTurns = status?.active_turns ?? [];
+  const projects = savedConfig.value?.projects ?? [];
   const errorTurns = status?.error_turns ?? [];
   const quotaPauses = status?.quota_pauses ?? [];
 
@@ -170,10 +172,12 @@ export function OverviewSection(): JSX.Element {
             <div className="divide-y divide-[#e5e7eb]">
               {activeTurns.map((turn) => {
                 const startedTime = turn.started_at ?? turn.accepted_at ?? turn.timestamp;
+                const projectName = projects.find((project) => project.project_id === turn.project_id)?.display_name ?? turn.project_id ?? "Unknown project";
                 return (
                   <div key={turn.turn_id} className="p-3 flex items-center justify-between gap-3 text-xs">
                     <div className="space-y-0.5">
                       <div className="font-mono font-semibold text-[#141b2b]">{turn.turn_id}</div>
+                      <div className="font-medium text-[#141b2b]">Project: {projectName}</div>
                       <div className="text-[11px] text-[#434655]">
                         Started: {formatTimestamp(startedTime, prefs)}
                         {turn.model && ` | Model: ${turn.model}`}

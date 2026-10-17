@@ -115,9 +115,9 @@ function gate() {
 }
 
 describe("Antigravity adapter", () => {
-  it("exposes adapter version 0.2.4", () => {
+  it("exposes adapter version 0.2.5", () => {
     const adapter = new AntigravityAdapter();
-    expect(adapter.adapterVersion).toBe("0.2.4");
+    expect(adapter.adapterVersion).toBe("0.2.5");
   });
 
   describe("effort mapping in argv", () => {
